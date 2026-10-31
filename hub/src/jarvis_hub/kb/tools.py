@@ -87,8 +87,8 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
                  "List open TODO/LATER/NOW tasks from Logseq with SCHEDULED/DEADLINE dates.",
                  _obj({"include_done": {"type": "boolean"}}, []), Risk.READ, kb_tasks))
     reg.add(Tool("kb_remember", "builtin",
-                 "Store a durable fact or preference the user told you, in your own jarvis/ "
-                 "namespace. Use when the user says to remember something.",
+                 "Store a NEW fact or preference in your own jarvis/ memory. Only call this when the "
+                 "user explicitly asks you to remember something; never to record what you just looked up.",
                  _obj({"fact": {"type": "string"},
                        "topic": {"type": "string", "description": "short page name, e.g. preferences"}},
                       ["fact"]), Risk.WRITE, kb_remember, self_scoped=True))

@@ -21,7 +21,7 @@ nothing is exposed to the internet.
 | Phase | What | State |
 |---|---|---|
 | 1 | Repo, compose, env, scripts | done |
-| 2 | Hub agent + Ollama + HA MCP + approvals + audit | done; HA side needs your setup ([docs/ha-setup.md](docs/ha-setup.md)) |
+| 2 | Hub agent + Ollama + HA MCP + approvals + audit | done and tested; HA link needs your setup ([docs/ha-setup.md](docs/ha-setup.md)) |
 | 3 | Logseq file graph: search, jarvis/ memory, journal, Qdrant sync, daily summary, tasks | done (sample graph) |
 | 4 | Wyoming STT/TTS, hub as HA agent, VoiceStudio cloned voice | hub side done; HA pipeline is your setup; cloned voice needs your clip |
 | 5 | HUD v1: orb, chat, action timeline, approval cards, memory panel | done |

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     mcp_config: str = "../mcp/servers.yaml"
 
     kb_graph_dir: str = "../kb/sample-graph"
+    kb_graph_name: str = ""  # defaults to the folder name
     kb_sync_interval_s: int = 300
     qdrant_url: str = "http://qdrant:6333"
     embed_base_url: str = "http://ollama:11434/v1"

@@ -118,15 +118,16 @@ def _block(page: str, index: int, lines: list[str]) -> Block:
 
 
 class LogseqGraph:
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, name: str = "") -> None:
         self.root = Path(root)
+        self._name = name
         self.pages_dir = self.root / "pages"
         self.journals_dir = self.root / "journals"
         self._lock = threading.Lock()
 
     @property
     def name(self) -> str:
-        return self.root.resolve().name
+        return self._name or self.root.resolve().name
 
     def deep_link(self, page: str) -> str:
         return f"logseq://graph/{quote(self.name)}?page={quote(page)}"

@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     st.llm = LLMClient(s.llm_base_url, s.llm_api_key.get_secret_value(), s.llm_model,
                        s.llm_timeout_s, s.llm_extra())
     embedder = LLMClient(s.embed_base_url, s.llm_api_key.get_secret_value(), s.embed_model)
-    st.kb_graph = LogseqGraph(s.kb_graph_dir)
+    st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
     st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url)
     register_kb_tools(st.tools, st.kb_graph, st.kb_index)
     await st.tools.load_mcp(s.mcp_config)

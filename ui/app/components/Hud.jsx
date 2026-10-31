@@ -9,8 +9,14 @@ const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...in
 function useTypewriter(text, speed = 14) {
   const [shown, setShown] = useState("");
   useEffect(() => {
-    if (!text) return setShown("");
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return setShown(text);
+    if (!text) {
+      setShown("");
+      return;
+    }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setShown(text);
+      return;
+    }
     let i = 0;
     const id = setInterval(() => {
       i += 2;
@@ -83,6 +89,7 @@ export default function Hud() {
         const r = await fetch("/api/events-ticket", { cache: "no-store" });
         if (!r.ok) throw new Error("ticket");
         const { ticket, wsUrl } = await r.json();
+        if (stop) return; // unmounted while fetching the ticket
         ws = new WebSocket(wsUrl);
         ws.onopen = () => ws.send(JSON.stringify({ ticket }));
         ws.onmessage = (e) => {
@@ -92,7 +99,8 @@ export default function Hud() {
           if (ev.type === "tool_call") push({ kind: "call", ts: ev.ts, tool: ev.data.tool, risk: ev.data.risk, args: ev.data.arguments });
           if (ev.type === "tool_result") push({ kind: "result", ts: ev.ts, tool: ev.data.tool, status: ev.data.status, preview: ev.data.preview });
           if (ev.type === "kb_retrieved") push({ kind: "kb", ts: ev.ts, pages: ev.data.pages });
-          if (ev.type === "approval_request") setApprovals((a) => [...a, ev.data]);
+          if (ev.type === "approval_request")
+            setApprovals((a) => (a.some((x) => x.approval_id === ev.data.approval_id) ? a : [...a, ev.data]));
         };
         ws.onclose = () => {
           setLink("offline");
@@ -111,7 +119,9 @@ export default function Hud() {
     };
   }, []);
 
-  useEffect(() => chatEnd.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const send = async (text) => {
     if (!text.trim()) return;
