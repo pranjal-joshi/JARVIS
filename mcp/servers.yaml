@@ -1,0 +1,40 @@
+# MCP servers the hub connects to. ${VAR} / ${VAR:-default} expand from the hub's env.
+#
+# `allow` is an explicit allow-list: tool-name glob -> risk (read | write | destructive).
+# First match wins. Tools that match nothing are never shown to the model.
+# MCP tool annotations may raise a tool's risk, never lower it.
+#   read        -> runs without asking
+#   write       -> needs approval from the web UI or phone
+#   destructive -> needs approval from the web UI or phone (never from voice)
+
+servers:
+  homeassistant:
+    # HA's built-in "Model Context Protocol Server" integration (Settings -> Devices & services).
+    # Reached over ha_network, so start the stack with compose.ha.yaml.
+    transport: http
+    url: ${HA_MCP_URL:-http://homeassistant:8123/api/mcp}
+    bearer_token: ${HA_TOKEN}
+    requires_env: [HA_TOKEN]
+    allow:
+      GetLiveContext: read
+      GetDateTime: read
+      Hass*Get*: read
+      HassTurnOn: write
+      HassTurnOff: write
+      HassToggle: write
+      HassLightSet: write
+      HassClimateSetTemperature: write
+      HassMedia*: write
+      HassSetVolume*: write
+      HassFanSetSpeed: write
+      HassVacuum*: write
+      HassListAddItem: write
+      HassShoppingListAddItem: write
+      HassStartTimer: write
+      HassCancel*: write
+      # Locks, covers, alarms and anything else stay hidden until you add them here.
+
+  # Added in Phase 6 (read-only first, then gated write):
+  # filesystem: {transport: stdio, ...}
+  # desktop:    {transport: stdio, ...}
+  # homelab-ssh / docker: {transport: stdio, ...}

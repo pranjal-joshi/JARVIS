@@ -1,0 +1,18 @@
+# Opt-in: attach the hub and Wyoming services to the existing Home Assistant
+# network so HA can reach them by name (hub:8700, whisper:10300, piper:10200,
+# tts-jarvis:10210). Nothing in the ha-docker stack is modified; this only
+# joins its already-existing external network.
+#   docker compose -f compose.yaml -f compose.ha.yaml --profile voice up -d
+services:
+  hub:
+    networks: [jarvis, ha_network]
+  whisper:
+    networks: [jarvis, ha_network]
+  piper:
+    networks: [jarvis, ha_network]
+  tts-jarvis:
+    networks: [jarvis, ha_network]
+
+networks:
+  ha_network:
+    external: true

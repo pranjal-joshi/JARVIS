@@ -1,0 +1,18 @@
+# secrets
+.env
+*.key
+# voice reference audio and anything derived from it: never committed
+voice/reference/*
+!voice/reference/README.md
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# node
+node_modules/
+.next/
+# local data
+data/
+*.db
+*.sqlite*

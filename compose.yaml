@@ -1,0 +1,144 @@
+# JARVIS — portable compose. No absolute host paths; data lives in named volumes.
+#   docker compose up -d                          # core: hub, qdrant, ollama, ui
+#   docker compose --profile voice up -d          # + whisper, piper
+#   docker compose --profile voicestudio up -d    # + VoiceStudio (cloned voice) and its Wyoming bridge
+#   docker compose -f compose.yaml -f compose.ha.yaml ...   # let Home Assistant reach hub + Wyoming
+#   docker compose -f compose.yaml -f compose.gpu.yaml ...  # NVIDIA hosts only
+# Image tags are pinned; scripts/pin-digests.sh locks them to digests after pulling.
+
+x-hardened: &hardened
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+services:
+  hub:
+    <<: *hardened
+    build: ./hub
+    image: jarvis/hub:0.1.0
+    env_file: .env
+    environment:
+      TZ: ${TZ:-UTC}
+      HUB_DB_PATH: /data/jarvis.db
+      MCP_CONFIG: /config/mcp/servers.yaml
+      KB_GRAPH_DIR: /kb
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - hub-data:/data
+      - ./mcp:/config/mcp:ro
+      - ${KB_GRAPH_PATH:-./data/kb-graph}:/kb
+    ports: ["127.0.0.1:8700:8700"]
+    networks: [jarvis]
+    depends_on: [qdrant]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8700/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  qdrant:
+    <<: *hardened
+    image: qdrant/qdrant:v1.20.0-unprivileged
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes: [qdrant-data:/qdrant/storage]
+    ports: ["127.0.0.1:6333:6333"]
+    networks: [jarvis]
+
+  ollama:
+    # Upstream image runs as root; kept on the internal network, bound to loopback.
+    restart: unless-stopped
+    image: ollama/ollama:0.40.13
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      TZ: ${TZ:-UTC}
+      OLLAMA_KEEP_ALIVE: 30m
+    volumes: [ollama-data:/root/.ollama]
+    ports: ["127.0.0.1:11434:11434"]
+    networks: [jarvis]
+
+  ui:
+    <<: *hardened
+    build: ./ui
+    image: jarvis/ui:0.1.0
+    environment:
+      TZ: ${TZ:-UTC}
+      HUB_INTERNAL_URL: http://hub:8700
+      HUB_PUBLIC_WS_URL: ${HUB_PUBLIC_WS_URL:-ws://localhost:8700}
+      HUB_TOKEN_WEB: ${HUB_TOKEN_WEB}
+    read_only: true
+    tmpfs: [/tmp]
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [jarvis]
+    depends_on: [hub]
+
+  # ---------------- voice ----------------
+  # Wyoming services publish no host ports. The hub reaches them over `jarvis`;
+  # Home Assistant reaches them over ha_network once compose.ha.yaml is used.
+  whisper:
+    <<: *hardened
+    profiles: [voice]
+    image: rhasspy/wyoming-whisper:3.8.1
+    command: >-
+      --model ${STT_MODEL:-small-int8} --language ${STT_LANGUAGE:-en}
+      --beam-size 1 --uri tcp://0.0.0.0:10300 --data-dir /data
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes: [whisper-data:/data]
+    networks: [jarvis]
+
+  piper:
+    <<: *hardened
+    profiles: [voice]
+    image: rhasspy/wyoming-piper:2.5.2
+    command: --voice ${PIPER_VOICE:-en_GB-alan-medium} --uri tcp://0.0.0.0:10200 --data-dir /data
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes: [piper-data:/data]
+    networks: [jarvis]
+
+  voicestudio:
+    # debpalash/VoiceStudio: holds the cloned JARVIS voice profile.
+    # Web UI at http://127.0.0.1:3900 for creating the profile (voice/README.md).
+    # First start downloads ~2.4 GB of model weights.
+    restart: unless-stopped
+    profiles: [voicestudio]
+    image: ghcr.io/debpalash/voicestudio:0.5.7
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      TZ: ${TZ:-UTC}
+      OMNIVOICE_API_KEY: ${VOICESTUDIO_API_KEY:?set VOICESTUDIO_API_KEY in .env}
+      OMNIVOICE_ANALYTICS_DISABLED: "1"
+    volumes:
+      - voicestudio-data:/app/omnivoice_data
+      - ./voice/reference:/reference:ro
+    ports: ["127.0.0.1:3900:3900"]
+    networks: [jarvis]
+
+  tts-jarvis:
+    # Wyoming <-> OpenAI /v1/audio/speech bridge in front of VoiceStudio, for HA.
+    <<: *hardened
+    profiles: [voicestudio]
+    image: ghcr.io/roryeckel/wyoming_openai:0.8.0
+    environment:
+      TZ: ${TZ:-UTC}
+      WYOMING_URI: tcp://0.0.0.0:10210
+      TTS_OPENAI_URL: http://voicestudio:3900/v1
+      TTS_OPENAI_KEY: ${VOICESTUDIO_API_KEY}
+      TTS_MODELS: ${VOICESTUDIO_TTS_MODEL:-tts-1}
+      TTS_VOICES: ${VOICESTUDIO_VOICE:-jarvis}
+      TTS_VOICE_LABELS: '{"${VOICESTUDIO_VOICE:-jarvis}": "JARVIS"}'
+    networks: [jarvis]
+    depends_on: [voicestudio]
+
+volumes:
+  hub-data:
+  qdrant-data:
+  ollama-data:
+  whisper-data:
+  piper-data:
+  voicestudio-data:
+
+networks:
+  jarvis:

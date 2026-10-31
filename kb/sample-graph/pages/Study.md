@@ -1,0 +1,2 @@
+- Work desk with the laptop; desk lamp is Zigbee.
+- Focus mode: desk lamp 100% cool white, everything else off. #preferences

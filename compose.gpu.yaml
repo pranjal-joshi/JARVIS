@@ -1,0 +1,16 @@
+# NVIDIA overlay for hosts with a usable GPU (homelab). Needs NVIDIA Container Toolkit.
+# The POC laptop's MX550 (2 GB) is not worth it; everything runs on CPU there.
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+
+services:
+  ollama: *gpu
+  voicestudio: *gpu
+  whisper:
+    <<: *gpu
+    command: >-
+      --model ${STT_MODEL:-large-v3-turbo} --language ${STT_LANGUAGE:-en}
+      --beam-size 1 --device cuda --uri tcp://0.0.0.0:10300 --data-dir /data

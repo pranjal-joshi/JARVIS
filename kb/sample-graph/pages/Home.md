@@ -1,0 +1,3 @@
+- Our flat in [[Pune]], 2BHK. Main rooms: [[Living Room]], [[Bedroom]], [[Study]].
+- Smart home runs on [[Home Assistant]] with [[Zigbee]] devices and a [[Broadlink]] IR blaster.
+- Wi-Fi is on the 192.168.0.x network.

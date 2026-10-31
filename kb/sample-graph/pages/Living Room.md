@@ -1,0 +1,3 @@
+- Ceiling light and a floor lamp; the floor lamp is on a [[Zigbee]] smart plug.
+- TV and AC are controlled over IR via [[Broadlink]].
+- Movie night preference: lights at 20%, warm white. #preferences
