@@ -3,6 +3,7 @@
 // Terminal-style view of what JARVIS runs: every tool call is shown as a command line,
 // followed by its output preview and an exit status. Built only from hub events.
 import { useEffect, useRef } from "react";
+import { headProps } from "../lib/panel";
 
 const quote = (v) => {
   const s = typeof v === "string" ? v : JSON.stringify(v);
@@ -19,7 +20,7 @@ const STATUS = {
   timeout: { code: 124, cls: "err", note: "approval timed out" },
 };
 
-export default function SystemConsole({ lines, active }) {
+export default function SystemConsole({ lines, active, focused, pinned, onToggle }) {
   const body = useRef(null);
 
   // keep the newest line in view without scrolling the page
@@ -29,10 +30,10 @@ export default function SystemConsole({ lines, active }) {
   }, [lines]);
 
   return (
-    <section className={`panel console ${active ? "active" : ""}`} aria-label="System console">
-      <h2>
+    <section className={`panel console ${active ? "active" : ""}${focused ? " focused" : ""}`} aria-label="System console">
+      <h2 {...headProps(pinned, onToggle, "system console")}>
         System console
-        <span className="console-dots" aria-hidden="true"><i /><i /><i /></span>
+        <span className="console-dots" aria-hidden="true"><i /><i /><i /><b className="expand" /></span>
       </h2>
       <div className="console-body" ref={body} role="log" aria-live="polite">
         {lines.map((l) => {

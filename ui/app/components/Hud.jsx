@@ -5,9 +5,10 @@ import { BorderBeam } from "border-beam";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
 import RichText from "./RichText";
+import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
-import { playAudio, startRecording } from "../lib/audio";
+import { chime, playAudio, startRecording } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
 const KbGraph = dynamic(() => import("./KbGraph"), {
@@ -152,6 +153,17 @@ export default function Hud() {
   const chatRef = useRef(null);
   const [tab, setTab] = useState("talk"); // phone layout: talk | activity | memory
   const stateLabel = useDecode(state.toUpperCase());
+  // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
+  // docks aside. It returns to centre stage while listening or speaking.
+  const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
+  const togglePin = (id) => setPinned((p) => (p === id ? null : id));
+  const auto = state === "listening" || state === "speaking" ? null : kbActive ? "kb" : consoleActive ? "console" : null;
+  const focus = pinned || auto;
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && setPinned(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const push = (item) => setTimeline((t) => [withId(item), ...t].slice(0, 80));
   // update the newest still-open row for this request + tool (a call and its result share one row)
@@ -218,7 +230,7 @@ export default function Hud() {
           if (ev.type === "subscribed") return setLink("online");
           if (ev.type === "thinking") setState("thinking");
           if (ev.type === "tool_call" && ev.data.risk && ev.data.risk !== "read") flash("orange");
-          if (ev.type === "approval_request") flash("orange");
+          if (ev.type === "approval_request") { flash("orange"); chime(); }
           if (ev.type === "tool_result") flash(ev.data.status === "ok" ? "green" : "red");
           if (ev.type === "tool_call")
             push({ ts: ev.ts, req: ev.request_id, tool: ev.data.tool, args: ev.data.arguments, risk: ev.data.risk,
@@ -376,7 +388,7 @@ export default function Hud() {
   };
 
   return (
-    <div className={`hud tab-${tab}`}>
+    <div className={`hud tab-${tab}${focus ? ` docked focus-${focus}` : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
         <h1>J.A.R.V.I.S.</h1>
         <div className="chips">
@@ -398,8 +410,10 @@ export default function Hud() {
       </header>
 
       <div className="side left reveal" style={{ "--i": 2 }}>
-      <section className="panel timeline">
-        <h2>Action timeline</h2>
+      <section className={`panel timeline${focus === "timeline" ? " focused" : ""}`}>
+        <h2 {...headProps(pinned === "timeline", () => togglePin("timeline"), "action timeline")}>
+          Action timeline<b className="expand" aria-hidden="true" />
+        </h2>
         <ul className="tl-list">
           {timeline.map((e, i) => {
             const d = describe(e.tool, e.args);
@@ -426,16 +440,21 @@ export default function Hud() {
           {!timeline.length && <li className="empty">Standing by. No actions yet.</li>}
         </ul>
       </section>
-      <SystemConsole lines={consoleLines} active={consoleActive} />
+      <SystemConsole lines={consoleLines} active={consoleActive} focused={focus === "console"}
+        pinned={pinned === "console"} onToggle={() => togglePin("console")} />
       </div>
 
       <section className="core reveal" style={{ "--i": 1 }}>
-        <div className="orb-wrap">
-          <Orb state={state} analyser={analyser} accent={accent} />
-        </div>
-        <div className="state" data-state={state}>
-          <span aria-hidden="true">{stateLabel}</span>
-          <span className="sr-only">{state}</span>
+        <div className="hero">
+          <div className="orb-wrap" {...(pinned ? { role: "button", tabIndex: 0, title: "Back to JARVIS (Esc)",
+            onClick: () => setPinned(null), onKeyDown: (e) => e.key === "Enter" && setPinned(null) } : {})}>
+            <Orb state={state} analyser={analyser} accent={accent} />
+          </div>
+          <div className="state" data-state={state}>
+            <span aria-hidden="true">{stateLabel}</span>
+            <span className="sr-only">{state}</span>
+            {focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${focus === "kb" ? "knowledge graph" : "console"}`}</span>}
+          </div>
         </div>
         <div className="approvals">
           {approvals.map((a) => {
@@ -475,12 +494,13 @@ export default function Hud() {
       </section>
 
       <div className="side reveal" style={{ "--i": 3 }}>
-      <section className={`panel kb ${kbActive ? "active" : ""} ${kbPulse?.kind === "write" && kbActive ? "write" : ""}`}
+      <section className={`panel kb ${kbActive ? "active" : ""} ${kbPulse?.kind === "write" && kbActive ? "write" : ""}${focus === "kb" ? " focused" : ""}`}
         aria-label="Knowledge graph">
-        <h2>
+        <h2 {...headProps(pinned === "kb", () => togglePin("kb"), "knowledge graph")}>
           Knowledge graph
           <span className="kb-state">
             {kbActive ? (kbPulse?.kind === "write" ? "writing" : "recall") : kbStats ? `${kbStats.pages} pages` : ""}
+            <b className="expand" aria-hidden="true" />
           </span>
         </h2>
         <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />
@@ -491,8 +511,10 @@ export default function Hud() {
         )}
       </section>
 
-      <section className="panel memory">
-        <h2>JARVIS memory</h2>
+      <section className={`panel memory${focus === "memory" ? " focused" : ""}`}>
+        <h2 {...headProps(pinned === "memory", () => togglePin("memory"), "memory")}>
+          JARVIS memory<b className="expand" aria-hidden="true" />
+        </h2>
         <ul>
           {memory.map((m, i) => (
             <li key={i} style={{ "--i": Math.min(i, 12) }}>

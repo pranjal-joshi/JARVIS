@@ -76,3 +76,28 @@ export async function playAudio(blob, onAnalyser) {
   await ended;
   ctx.close();
 }
+
+// Soft two-note chime for "an approval is waiting". Synthesised, so no audio file to ship.
+// Browsers only allow sound after the page has had a click or key press; before that it stays silent.
+let chimeCtx;
+export function chime() {
+  try {
+    chimeCtx ??= new AudioContext();
+    if (chimeCtx.state === "suspended") chimeCtx.resume();
+    const t0 = chimeCtx.currentTime;
+    [[880, 0], [1318.5, 0.14]].forEach(([freq, at]) => {
+      const osc = chimeCtx.createOscillator();
+      const gain = chimeCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t0 + at);
+      gain.gain.linearRampToValueAtTime(0.18, t0 + at + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.6);
+      osc.connect(gain).connect(chimeCtx.destination);
+      osc.start(t0 + at);
+      osc.stop(t0 + at + 0.65);
+    });
+  } catch {
+    /* no audio available: the card still shows */
+  }
+}

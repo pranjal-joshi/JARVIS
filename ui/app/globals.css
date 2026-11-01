@@ -800,3 +800,68 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
 .model-pick select:focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; }
 .model-pick select option { background: #04070a; color: var(--cyan); }
 .model-pick.busy { color: var(--amber); border-color: rgba(255, 179, 71, 0.6); }
+
+/* ---------- focus: the busy (or pinned) panel widens, the orb docks aside ---------- */
+.hero { position: relative; flex: none; }
+@media (min-width: 721px) { /* phones keep their own orb size */
+  .orb-wrap {
+    width: min(280px, 100%);
+    margin-left: calc((100% - min(280px, 100%)) / 2);
+    transition: width var(--dur-long) var(--ease-glide), margin-left var(--dur-long) var(--ease-glide);
+  }
+}
+.state-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 9px;
+  letter-spacing: 0.24em;
+  color: var(--cyan-dim);
+  text-shadow: none;
+  animation: fade-in var(--dur-med) var(--ease-out) both;
+}
+/* panel headings are the expand control: hint it on hover / keyboard focus */
+.panel h2[role="button"] { cursor: pointer; user-select: none; outline: none; position: relative; }
+.panel h2[role="button"]:hover, .panel h2[role="button"]:focus-visible { color: var(--cyan); }
+.panel h2[role="button"]:focus-visible { text-shadow: 0 0 8px var(--cyan-dim); }
+.expand {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 8px;
+  vertical-align: 0;
+  border: 1px solid currentColor;
+  border-width: 1px 1px 0 0;
+  opacity: 0;
+  transform: rotate(45deg) scale(0.7);
+  transition: opacity var(--dur-short) var(--ease-in-out), transform var(--dur-short) var(--ease-out);
+}
+.panel h2[role="button"]:hover .expand, .panel h2[role="button"]:focus-visible .expand { opacity: 0.9; transform: rotate(45deg) scale(1); }
+.panel h2[aria-expanded="true"] .expand { opacity: 1; transform: rotate(225deg) scale(1); color: var(--cyan); }
+.panel { transition: border-color var(--dur-med) var(--ease-in-out), box-shadow var(--dur-med) var(--ease-in-out); }
+.panel:hover { border-color: rgba(127, 231, 255, 0.4); }
+.panel.focused { border-color: var(--cyan-dim); box-shadow: inset 0 0 40px rgba(127, 231, 255, 0.07), 0 0 24px rgba(127, 231, 255, 0.08); }
+.side.left .timeline, .side .memory { transition: flex-basis var(--dur-long) var(--ease-glide), border-color var(--dur-med) var(--ease-in-out), box-shadow var(--dur-med) var(--ease-in-out); }
+
+@media (min-width: 1001px) {
+  .hud { transition: grid-template-columns var(--dur-long) var(--ease-glide); }
+  .hud.focus-kb, .hud.focus-memory { grid-template-columns: 260px 1fr 42%; }
+  .hud.focus-console, .hud.focus-timeline { grid-template-columns: 42% 1fr 260px; }
+
+  /* orb docks to the top-left of the centre column, state label beside it */
+  .hud.docked .orb-wrap { width: 96px; margin-left: 0; }
+  .hud.docked .orb-wrap[role="button"] { cursor: pointer; }
+  .hud.docked .state {
+    position: absolute;
+    left: 112px;
+    top: 50%;
+    margin: 0;
+    transform: translateY(-50%);
+    text-align: left;
+    animation: fade-in var(--dur-med) var(--ease-out) both;
+  }
+
+  .hud.focus-kb .kb { flex-basis: 74%; }
+  .hud.focus-memory .kb { flex-basis: 22%; }
+  .hud.focus-console .console { flex-basis: 66%; }
+  .hud.focus-timeline .console { flex-basis: 18%; }
+}
