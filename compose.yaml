@@ -92,10 +92,21 @@ services:
     <<: *hardened
     profiles: [voice]
     image: rhasspy/wyoming-piper:2.5.2
-    command: --voice ${PIPER_VOICE:-en_GB-alan-medium} --uri tcp://0.0.0.0:10200 --data-dir /data
+    # PIPER_VOICE is a stock voice (downloaded into piper-data) or a custom one in voice/piper/
+    command: --voice ${PIPER_VOICE:-en_GB-alan-medium} --uri tcp://0.0.0.0:10200 --data-dir /data --data-dir /custom
     environment:
       TZ: ${TZ:-UTC}
-    volumes: [piper-data:/data]
+    volumes: [piper-data:/data, ./voice/piper:/custom:ro]
+    networks: [jarvis]
+
+  kokoro:
+    # remsky/Kokoro-FastAPI (Apache-2.0): Kokoro-82M on CPU, OpenAI-compatible /v1/audio/speech.
+    # British male voices: bm_george, bm_lewis, bm_daniel, bm_fable. Hub-internal only (no host port).
+    <<: *hardened
+    profiles: [kokoro]
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.0
+    environment:
+      TZ: ${TZ:-UTC}
     networks: [jarvis]
 
   voicestudio:

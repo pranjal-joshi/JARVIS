@@ -47,3 +47,17 @@ until the homelab GPU is available (`compose.gpu.yaml`).
 wyoming-piper 2.5.2 ships an `omnivoice` backend (image tag `2.5.2-omnivoice`) that runs the same
 OmniVoice model directly over Wyoming from a folder of reference clips. It is not wired up; it's an
 option if you want HA to use the cloned voice without VoiceStudio running.
+
+## JARVIS Piper voice (fast, no GPU)
+
+[jgkawell/jarvis](https://huggingface.co/jgkawell/jarvis) (MIT) is a Piper voice fine-tuned from `en_GB-alan-medium`.
+Piper reads custom voices from `voice/piper/` (mounted read-only; the files are git-ignored):
+
+```bash
+B=https://huggingface.co/jgkawell/jarvis/resolve/37f8763122312665f091d1fc760abaf1f79b02cc/en/en_GB/jarvis
+for q in medium high; do curl -L -o voice/piper/jarvis-$q.onnx $B/$q/jarvis-$q.onnx; curl -L -o voice/piper/jarvis-$q.onnx.json $B/$q/jarvis-$q.onnx.json; done
+```
+
+Then set `PIPER_VOICE=jarvis-medium` in `.env` and `docker compose up -d piper`.
+Measured on this laptop (CPU), one two-sentence line: `jarvis-medium` ~0.6 s, `jarvis-high` ~3.5 s,
+Kokoro `bm_george` ~3.7 s (`--profile kokoro`, not wired as an engine).

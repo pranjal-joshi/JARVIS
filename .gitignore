@@ -19,3 +19,7 @@ data/
 
 # local dev certificates
 .certs/
+# custom Piper voices (downloaded, not committed)
+voice/piper/*.onnx
+voice/piper/*.onnx.json
+voice/samples/
