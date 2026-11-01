@@ -5,6 +5,7 @@ uses `append_to_user_page`, which the tool layer puts behind approval.
 Swap this class for a DB-version adapter (Logseq HTTP API) without touching
 the indexer or tools: they only use the public methods below."""
 
+import difflib
 import hashlib
 import re
 import threading
@@ -161,6 +162,14 @@ class LogseqGraph:
             if p.name.lower() == key:
                 return p
         return None
+
+    def similar_pages(self, name: str, n: int = 3) -> list[str]:
+        """Page names close to `name` (typos, singular/plural, a missing namespace)."""
+        key = name.strip().lower()
+        names = {p.name.lower(): p.name for p in self.pages()}
+        hits = difflib.get_close_matches(key, list(names), n=n, cutoff=0.6)
+        hits += [k for k in names if key and (key in k or k.rsplit("/", 1)[-1] == key) and k not in hits]
+        return [names[k] for k in hits[:n]]
 
     def _load(self, path: Path, journal: bool) -> Page:
         name = _file_to_name(path.stem)

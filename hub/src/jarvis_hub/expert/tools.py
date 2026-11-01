@@ -11,16 +11,14 @@ from jarvis_hub.config import Settings
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
 ENGINES = {
-    "claude": ("ask_claude", "Ask Claude (via Claude Code), a much stronger cloud model."),
+    "claude": ("ask_claude", "Ask Claude, a much stronger cloud model."),
     "opencode": ("ask_opencode", "Ask an opencode model (free tier, slower and quota-limited); "
                  "use only when the user asks for opencode or ask_claude is unavailable."),
 }
 COMMON = (
-    " Use ONLY for questions you cannot answer well yourself: complex reasoning, maths, coding, "
-    "technical explanations, or detailed general knowledge. Never for home control, the user's notes, "
-    "small talk or simple facts. The user must approve each call and sees exactly what is sent, so put "
-    "only what is needed in `question` and `context`; never include secrets or personal data the "
-    "question doesn't need.")
+    " Use for: hard reasoning, coding, technical detail, long explanations you can't give well yourself. "
+    "Not for notes, devices, small talk or simple facts. The user approves each call and sees what is "
+    "sent: include only what the question needs, never secrets or personal data.")
 
 
 def register_expert_tool(reg: ToolRegistry, s: Settings) -> bool:

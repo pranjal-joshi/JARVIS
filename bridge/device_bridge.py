@@ -206,7 +206,8 @@ def _device(a: dict) -> str:
         want = ""
     allowed = [d for d in _devices() if d["allowed"]]
     if not allowed:
-        raise ActionError("no allowed Android device connected (see adb_devices; add its serial to DEVICE_ADB_ALLOW)")
+        raise ActionError("no phone is connected and allowed. Tell the user to connect it from the HUD Devices "
+                          "panel; don't retry.")
     ok = allowed
     if want:
         named = [d for d in allowed if want in (norm(d["id"]), norm(d.get("serial", "")))
@@ -214,9 +215,11 @@ def _device(a: dict) -> str:
         # a small model often invents a device name ("user_phone", "Pixel 9"); with one phone that's harmless
         ok = named or (allowed if len(allowed) == 1 else [])
     if not ok:
-        raise ActionError("no allowed device matches that name; devices: " + ", ".join(d["model"] or d["id"] for d in allowed))
+        raise ActionError("no connected phone matches that name. Call the same tool again with device set to "
+                          "one of: " + ", ".join(d["model"] or d["id"] for d in allowed))
     if len(ok) > 1:
-        raise ActionError("several allowed devices: say which one (" + ", ".join(d["model"] or d["id"] for d in ok) + ")")
+        raise ActionError("several phones are connected. Call the same tool again with device set to one of: "
+                          + ", ".join(d["model"] or d["id"] for d in ok))
     return ok[0]["id"]
 
 

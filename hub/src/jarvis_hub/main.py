@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from jarvis_hub import __version__
 from jarvis_hub.agent.base import EchoAgent
+from jarvis_hub.agent.tool_select import ToolSelector
 from jarvis_hub.agent.tool_agent import ToolAgent
 from jarvis_hub.api import control, events_ws, openai_compat
 from jarvis_hub.approval.gate import ApprovalGate
@@ -93,7 +94,9 @@ async def lifespan(app: FastAPI):
         voicestudio_key=s.voicestudio_api_key.get_secret_value(),
         voicestudio_model=s.voicestudio_tts_model, voicestudio_voice=s.voicestudio_voice,
         language=s.stt_language)
-    st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(st.llm, st.tools, st.gate, st.audit, s.ask_for())
+    st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(
+        st.llm, st.tools, st.gate, st.audit, s.ask_for(), hidden=s.hidden_tools(),
+        selector=ToolSelector(embedder, s.embed_model, s.tool_select_k))
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     if s.agent != "echo":

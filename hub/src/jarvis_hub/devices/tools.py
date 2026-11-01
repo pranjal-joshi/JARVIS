@@ -11,7 +11,6 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.config import Settings
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
-DEVICE = {"device": {"type": "string", "description": "leave empty unless several phones are connected; then the model or serial from adb_devices"}}
 WIN_KEYS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 ADB_KEYS = WIN_KEYS[:3] + ["volume_up", "volume_down", "mute", "home", "back", "wake", "sleep"]
 
@@ -20,50 +19,61 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
     return {"type": "object", "properties": props, "required": required or []}
 
 
+# No `device` or `limit` parameters: the bridge picks the only phone and sensible counts itself, and small
+# models fill optional fields with guesses. With several phones the bridge's error asks for `device`,
+# which it still accepts.
+S = {"type": "string"}
 SPECS = [  # name, description, parameters, risk
-    ("win_info", "This laptop: battery, memory, uptime and the active window.", _obj({}), Risk.READ),
-    ("win_media", "Media or volume key on this laptop (times = repeat count for volume).",
+    ("win_info", "This laptop's battery, memory and active window. Use for: 'laptop battery', "
+     "'what's open on my laptop'.", _obj({}), Risk.READ),
+    ("win_media", "Press a media or volume key on this laptop. Use for: 'pause the music', 'next song', "
+     "'volume up' (times = how many presses).",
      _obj({"key": {"type": "string", "enum": WIN_KEYS}, "times": {"type": "integer"}}, ["key"]), Risk.WRITE),
-    ("win_open", "Open an allowed app (by name) or an https URL on this laptop.",
-     _obj({"target": {"type": "string"}}, ["target"]), Risk.WRITE),
-    ("win_lock", "Lock this laptop's screen.", _obj({}), Risk.WRITE),
+    ("win_open", "Open an app or a website on this laptop. Use for: 'open Spotify', 'open youtube.com'.",
+     _obj({"target": {"type": "string", "description": "app name or https URL"}}, ["target"]), Risk.WRITE),
+    ("win_lock", "Lock this laptop. Use for: 'lock my laptop'.", _obj({}), Risk.WRITE),
     ("win_screenshot", "Save a screenshot of this laptop's screen.", _obj({}), Risk.READ),
-    ("adb_devices", "List Android devices connected over ADB and whether each is allowed.", _obj({}), Risk.READ),
-    ("adb_info", "An Android device's model, battery and foreground app.", _obj(DEVICE), Risk.READ),
-    ("adb_screenshot", "Save a screenshot of an Android device.", _obj(DEVICE), Risk.READ),
-    ("adb_open_app", "Open an app on an Android device by package or app name.",
-     _obj({**DEVICE, "package": {"type": "string"}}, ["package"]), Risk.WRITE),
-    ("adb_key", "Press a media, volume or navigation key on an Android device.",
-     _obj({**DEVICE, "key": {"type": "string", "enum": ADB_KEYS}}, ["key"]), Risk.WRITE),
-    ("adb_connect", "Reconnect to a phone's wireless debugging address (ip:port).",
-     _obj({"address": {"type": "string"}}, ["address"]), Risk.WRITE),
-    ("adb_notifications", "Recent notifications on a phone (WhatsApp, Messages, calls, mail, any app); "
-     "filter by app name.", _obj({**DEVICE, "app": {"type": "string"}, "limit": {"type": "integer"}}), Risk.READ),
-    ("adb_sms_read", "Read recent SMS on a phone, optionally only from one sender.",
-     _obj({**DEVICE, "sender": {"type": "string"}, "limit": {"type": "integer"}}), Risk.READ),
-    ("adb_call_log", "Recent calls on a phone: incoming, outgoing, missed.",
-     _obj({**DEVICE, "limit": {"type": "integer"}}), Risk.READ),
-    ("adb_contacts", "Look up a contact's phone number on a phone by name.",
-     _obj({**DEVICE, "name": {"type": "string"}}, ["name"]), Risk.READ),
-    ("adb_call_answer", "Answer the ringing call on a phone.", _obj(DEVICE), Risk.WRITE),
-    ("adb_call_end", "Hang up the current call on a phone.", _obj(DEVICE), Risk.WRITE),
-    ("adb_sms_send", "Send an SMS from a phone to a number or contact name. Needs approval.",
-     _obj({**DEVICE, "to": {"type": "string"}, "text": {"type": "string"}}, ["to", "text"]), Risk.DESTRUCTIVE),
-    ("adb_whatsapp_send", "Send a WhatsApp message from a phone to a number or contact name. Needs approval.",
-     _obj({**DEVICE, "to": {"type": "string"}, "text": {"type": "string"}, "business": {"type": "boolean"}},
-          ["to", "text"]), Risk.DESTRUCTIVE),
-    ("adb_call", "Place a phone call to a number or contact name. Needs approval.",
-     _obj({**DEVICE, "to": {"type": "string"}}, ["to"]), Risk.DESTRUCTIVE),
-    ("adb_tap", "Tap a screen point on an Android device. Needs approval.",
-     _obj({**DEVICE, "x": {"type": "integer"}, "y": {"type": "integer"}}, ["x", "y"]), Risk.DESTRUCTIVE),
-    ("adb_type", "Type text into the focused field on an Android device. Needs approval.",
-     _obj({**DEVICE, "text": {"type": "string"}}, ["text"]), Risk.DESTRUCTIVE),
-    ("adb_shell", "Run a shell command on an Android device. Needs approval.",
-     _obj({**DEVICE, "command": {"type": "string"}}, ["command"]), Risk.DESTRUCTIVE),
-    ("adb_install", "Install an .apk from data/apk on an Android device. Needs approval.",
-     _obj({**DEVICE, "apk": {"type": "string"}}, ["apk"]), Risk.DESTRUCTIVE),
-    ("adb_uninstall", "Uninstall an app (exact package) from an Android device. Needs approval.",
-     _obj({**DEVICE, "package": {"type": "string"}}, ["package"]), Risk.DESTRUCTIVE),
+    ("adb_devices", "Which phones and tablets are connected. Use for: 'is my phone connected'.", _obj({}), Risk.READ),
+    ("adb_info", "The phone's battery and the app on screen. Use for: 'phone battery', 'what's on my phone'.",
+     _obj({}), Risk.READ),
+    ("adb_screenshot", "Save a screenshot of the phone's screen.", _obj({}), Risk.READ),
+    ("adb_open_app", "Open an app on the phone. Use for: 'open YouTube on my phone'.",
+     _obj({"package": {"type": "string", "description": "app name, e.g. YouTube"}}, ["package"]), Risk.WRITE),
+    ("adb_key", "Press a key on the phone. Use for: 'pause my phone', 'go home on the phone', 'phone volume up'.",
+     _obj({"key": {"type": "string", "enum": ADB_KEYS}}, ["key"]), Risk.WRITE),
+    ("adb_connect", "Reconnect a phone by its wireless debugging address (ip:port).",
+     _obj({"address": S}, ["address"]), Risk.WRITE),
+    ("adb_notifications", "Recent phone notifications (WhatsApp, messages, calls, mail, any app). "
+     "Use for: 'any new WhatsApps', 'what notifications do I have'.",
+     _obj({"app": {"type": "string", "description": "only this app, e.g. WhatsApp; empty for all"}}), Risk.READ),
+    ("adb_sms_read", "Read recent text messages (SMS). Use for: 'read my texts', 'any SMS from the bank'.",
+     _obj({"sender": {"type": "string", "description": "only from this sender; empty for all"}}), Risk.READ),
+    ("adb_call_log", "Recent calls: incoming, outgoing, missed. Use for: 'who called me', 'missed calls'.",
+     _obj({}), Risk.READ),
+    ("adb_contacts", "Look up a contact's number. Use for: 'what's Mum's number'.",
+     _obj({"name": S}, ["name"]), Risk.READ),
+    ("adb_call_answer", "Answer the ringing phone. Use for: 'answer it', 'pick up'.", _obj({}), Risk.WRITE),
+    ("adb_call_end", "Hang up or reject the current call. Use for: 'hang up', 'reject the call'.",
+     _obj({}), Risk.WRITE),
+    ("adb_sms_send", "Send a text message (SMS). Use for: 'text Mum I'm on my way'. Needs approval.",
+     _obj({"to": {"type": "string", "description": "contact name or number"}, "text": S}, ["to", "text"]),
+     Risk.DESTRUCTIVE),
+    ("adb_whatsapp_send", "Send a WhatsApp message. Use for: 'WhatsApp Rohan see you at 8'. Needs approval.",
+     _obj({"to": {"type": "string", "description": "contact name or number"}, "text": S}, ["to", "text"]),
+     Risk.DESTRUCTIVE),
+    ("adb_call", "Phone someone. Use for: 'call Mum', 'ring 98200 12345'. Needs approval.",
+     _obj({"to": {"type": "string", "description": "contact name or number"}}, ["to"]), Risk.DESTRUCTIVE),
+    # hidden from the model by default (MODEL_HIDDEN_TOOLS): they can do anything on the phone
+    ("adb_tap", "Tap a screen point on the phone. Needs approval.",
+     _obj({"x": {"type": "integer"}, "y": {"type": "integer"}}, ["x", "y"]), Risk.DESTRUCTIVE),
+    ("adb_type", "Type text into the focused field on the phone. Needs approval.",
+     _obj({"text": S}, ["text"]), Risk.DESTRUCTIVE),
+    ("adb_shell", "Run a shell command on the phone. Needs approval.",
+     _obj({"command": S}, ["command"]), Risk.DESTRUCTIVE),
+    ("adb_install", "Install an .apk from data/apk on the phone. Needs approval.",
+     _obj({"apk": S}, ["apk"]), Risk.DESTRUCTIVE),
+    ("adb_uninstall", "Uninstall an app (exact package) from the phone. Needs approval.",
+     _obj({"package": S}, ["package"]), Risk.DESTRUCTIVE),
 ]
 
 

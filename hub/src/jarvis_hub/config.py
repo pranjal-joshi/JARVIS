@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # risk levels that wait for approval (comma list of read, write, external, destructive);
     # everything else runs straight away and is audited
     approval_risks: str = "destructive,external"
+    # tools the model never sees or may call (internal names, comma list): free-form control of the phone
+    model_hidden_tools: str = "adb_tap,adb_type,adb_shell,adb_install,adb_uninstall,adb_connect"
+    # local models get only this many request-relevant tools (plus a few always-on ones); 0 = all tools.
+    # Claude models always get every visible tool.
+    tool_select_k: int = 6
 
     mcp_config: str = "../mcp/servers.yaml"
 
@@ -93,6 +98,10 @@ class Settings(BaseSettings):
     def ask_for(self) -> frozenset:
         from jarvis_hub.approval.gate import Risk
         return frozenset(Risk(r.strip()) for r in self.approval_risks.split(",") if r.strip())
+
+    def hidden_tools(self) -> frozenset[str]:
+        from jarvis_hub.tools.names import internal_name
+        return frozenset(internal_name(t.strip()) for t in self.model_hidden_tools.split(",") if t.strip())
 
     def llm_extra(self) -> dict:
         return json.loads(self.llm_extra_body or "{}")

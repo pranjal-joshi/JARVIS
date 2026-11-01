@@ -1,17 +1,19 @@
 """Default agent loop: OpenAI-style function calling over the tool registry,
 with every call passing the approval gate and landing in the audit log."""
 
+import difflib
 import json
 import logging
 from collections.abc import Callable
 from datetime import datetime
 
+from jarvis_hub.agent.tool_select import ToolSelector
 from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event, EventBus
 from jarvis_hub.llm.client import LLMClient, LLMError
-from jarvis_hub.mcp.registry import ToolCtx, ToolRegistry
+from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.persona.jarvis import SYSTEM_PROMPT, source_hint
 
 log = logging.getLogger(__name__)
@@ -25,9 +27,23 @@ FAKE_TOOL_NUDGE = ("(system) Your last message wrote a tool call or tool result 
 
 class ToolAgent:
     def __init__(self, llm: LLMClient, tools: ToolRegistry, gate: ApprovalGate,
-                 audit: AuditStore, ask_for: frozenset[Risk] = DEFAULT_ASK_FOR) -> None:
+                 audit: AuditStore, ask_for: frozenset[Risk] = DEFAULT_ASK_FOR,
+                 hidden: frozenset[str] = frozenset(), selector: ToolSelector | None = None) -> None:
         self.llm, self.tools, self.gate, self.audit = llm, tools, gate, audit
         self.ask_for = ask_for  # risk levels that wait for a human; the rest run and are audited
+        self.hidden = hidden  # internal tool names the model never sees and may not call
+        self.selector = selector  # narrows the tools offered to local models; None = offer them all
+
+    def visible(self) -> list[Tool]:
+        return [t for t in self.tools.all() if t.name not in self.hidden]
+
+    async def offered(self, messages: list[dict]) -> list[Tool]:
+        tools = self.visible()
+        if self.selector is None or str(getattr(self.llm, "model", "")).startswith("claude-"):
+            return tools
+        picked = await self.selector.select(tools, messages)
+        log.info("offering %d/%d tools: %s", len(picked), len(tools), ", ".join(t.model_name for t in picked))
+        return picked
 
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus, on_text: Callable[[str], None] | None = None) -> str:
@@ -37,7 +53,7 @@ class ToolAgent:
         convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)
                   + f"\nCurrent local time: {datetime.now():%A %d %B %Y, %H:%M}."}]
         convo += [m for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
-        schemas = [t.openai_schema() for t in self.tools.all()]
+        schemas = [t.openai_schema() for t in await self.offered(convo)]
 
         bus.publish(Event("thinking", source, request_id, {"step": 0}))
         faked = False
@@ -90,13 +106,23 @@ class ToolAgent:
                         bus: EventBus) -> str:
         fn = call.get("function", {})
         name = fn.get("name", "")
-        try:
-            args = json.loads(fn.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            return "ERROR: arguments were not valid JSON"
         tool = self.tools.get(name)
         if tool is None:
-            return f"ERROR: no such tool {name!r}"
+            return self._unknown_tool(name)
+        if tool.name in self.hidden:
+            return (f"ERROR: {name} is switched off for you. Tell the user it can only be done by hand; "
+                    "don't retry.")
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+            if not isinstance(args, dict):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            return f"ERROR: the arguments were not a JSON object. Call {tool.model_name} again with {_example(tool)}"
+        if missing := [k for k in (tool.parameters or {}).get("required", [])
+                       if args.get(k) in (None, "")]:
+            return (f"ERROR: {tool.model_name} needs {', '.join(missing)}. "
+                    f"Call it again with {_example(tool)}, or ask the user for what is missing.")
+        name = tool.name  # audit, events and approvals use the internal name
 
         bus.publish(Event("tool_call", source, request_id,
                           {"tool": name, "origin": tool.origin, "risk": tool.risk, "arguments": args}))
@@ -129,12 +155,26 @@ class ToolAgent:
         bus.publish(Event("tool_result", source, request_id,
                           {"tool": name, "status": status, "preview": output[:300]}))
         # Fence results so the model treats them as data, not instructions.
-        return f"<tool_result tool=\"{name}\">\n{output}\n</tool_result>"
+        return f"<tool_result tool=\"{tool.model_name}\">\n{output}\n</tool_result>"
+
+    def _unknown_tool(self, name: str) -> str:
+        names = [t.model_name for t in self.visible()]
+        near = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
+        hint = f" Did you mean: {', '.join(near)}?" if near else " Answer without it, or say you can't do that."
+        return f"ERROR: there is no tool called {name!r}.{hint}"
 
     @staticmethod
     def _reply(bus: EventBus, source: Source, request_id: str, text: str) -> str:
         bus.publish(Event("reply", source, request_id, {"text": text}))
         return text
+
+
+def _example(tool: Tool) -> str:
+    """A filled-in argument object for an error message, e.g. {"to": "...", "text": "..."}."""
+    props = (tool.parameters or {}).get("properties", {})
+    keys = (tool.parameters or {}).get("required") or list(props)[:2]
+    sample = {k: (0 if props.get(k, {}).get("type") in ("integer", "number") else "...") for k in keys}
+    return json.dumps(sample)
 
 
 def _unfence(result: str) -> str | None:

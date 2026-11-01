@@ -107,7 +107,7 @@ def test_unknown_tool_and_tool_results_are_fenced(parts):
     llm = FakeLLM([call("rm_rf"), call("ha__GetLiveContext"), say("ok")])
     asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus))
     last = llm.seen[-1]
-    assert "no such tool" in last[-3]["content"]
+    assert "no tool called 'rm_rf'" in last[-3]["content"]
     assert last[-1]["content"].startswith("<tool_result")
 
 

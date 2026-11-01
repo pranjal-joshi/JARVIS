@@ -16,6 +16,7 @@ from mcp import Client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 
 from jarvis_hub.approval.gate import Risk
+from jarvis_hub.tools.names import internal_name, model_name
 
 log = logging.getLogger(__name__)
 
@@ -44,9 +45,13 @@ class Tool:
     # The tool's own output is the reply (e.g. an expert answer the small model would only paraphrase badly).
     final_answer: bool = False
 
+    @property
+    def model_name(self) -> str:
+        return model_name(self.name)
+
     def openai_schema(self) -> dict:
         return {"type": "function", "function": {
-            "name": self.name, "description": self.description[:1024],
+            "name": self.model_name, "description": self.description[:1024],
             "parameters": self.parameters or {"type": "object", "properties": {}}}}
 
 
@@ -102,14 +107,15 @@ class ToolRegistry:
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> Tool | None:
-        return self._tools.get(name)
+        """By internal name or by the name the model sees."""
+        return self._tools.get(name) or self._tools.get(internal_name(name))
 
     def all(self) -> list[Tool]:
         return list(self._tools.values())
 
-    def describe(self, ask_for: frozenset = frozenset()) -> list[dict]:
+    def describe(self, ask_for: frozenset = frozenset(), hidden: frozenset = frozenset()) -> list[dict]:
         return [{"name": t.name, "origin": t.origin, "risk": t.risk,
-                 "asks": t.risk in ask_for and not t.self_scoped,
+                 "asks": t.risk in ask_for and not t.self_scoped, "hidden": t.name in hidden,
                  "description": t.description.split(". ")[0][:160]} for t in self.all()]
 
     async def load_mcp(self, config_path: str) -> None:

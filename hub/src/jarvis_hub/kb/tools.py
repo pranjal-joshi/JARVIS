@@ -36,7 +36,7 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
     async def kb_read_page(args: dict, ctx: ToolCtx) -> str:
         page = graph.page(str(args.get("page", "")))
         if page is None:
-            return "ERROR: no such page"
+            return missing_page(graph, str(args.get("page", "")), "read_page")
         body = "\n".join(f"- {b.text}" for b in page.blocks)
         return UNTRUSTED + f"# {page.name}\n{body}"[:6000]
 
@@ -77,29 +77,39 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
         return f"Appended to [[{page}]]."
 
     reg.add(Tool("kb_search", "builtin",
-                 "Semantic search over the user's Logseq notes (pages, journals, jarvis/ memory). "
-                 "Use for anything about the user's life, home, plans or past decisions.",
-                 _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
+                 "Search the user's notes and your memories. Use for: 'what did I decide about X', 'how do I "
+                 "take my coffee', 'who is Chiku', anything about the user's life, home, people or plans.",
+                 _obj({"query": {"type": "string", "description": "a few keywords"}}, ["query"]),
                  Risk.READ, kb_search))
-    reg.add(Tool("kb_read_page", "builtin", "Read one Logseq page in full by its exact name.",
-                 _obj({"page": {"type": "string"}}, ["page"]), Risk.READ, kb_read_page))
+    reg.add(Tool("kb_read_page", "builtin",
+                 "Read one notes page in full by name. Use for: 'read my Groceries page', 'what's on today's journal'.",
+                 _obj({"page": {"type": "string", "description": "page name, e.g. Groceries"}}, ["page"]),
+                 Risk.READ, kb_read_page))
     reg.add(Tool("kb_tasks", "builtin",
-                 "List open TODO/LATER/NOW tasks from Logseq with SCHEDULED/DEADLINE dates.",
+                 "The user's to-do list with due dates. Use for: 'what are my tasks', 'anything due this week'.",
                  _obj({"include_done": {"type": "boolean"}}, []), Risk.READ, kb_tasks))
     reg.add(Tool("kb_remember", "builtin",
-                 "Store a NEW fact or preference in your own jarvis/ memory. Only call this when the "
-                 "user explicitly asks you to remember something; never to record what you just looked up.",
+                 "Save a fact to your memory. Use only when the user says 'remember...' or 'note that I...'; "
+                 "never for things you just looked up.",
                  _obj({"fact": {"type": "string"},
-                       "topic": {"type": "string", "description": "short page name, e.g. preferences"}},
+                       "topic": {"type": "string", "description": "one word, e.g. preferences, people"}},
                       ["fact"]), Risk.WRITE, kb_remember, self_scoped=True))
     reg.add(Tool("kb_journal", "builtin",
-                 "Add a short note to today's Logseq journal (decisions, things done).",
+                 "Add a line to today's journal. Use for: 'note in my journal...', 'log that I...'.",
                  _obj({"text": {"type": "string"}}, ["text"]), Risk.WRITE, kb_journal,
                  self_scoped=True))
     reg.add(Tool("kb_append_to_page", "builtin",
-                 "Append a block to one of the USER's own Logseq pages. Requires approval.",
+                 "Add a line to one of the user's notes pages. Use for: 'add milk to my Groceries page'.",
                  _obj({"page": {"type": "string"}, "text": {"type": "string"}}, ["page", "text"]),
                  Risk.WRITE, kb_append_to_page))
+
+def missing_page(graph: LogseqGraph, name: str, tool: str) -> str:
+    """An error a small model can act on: the closest page names, or where to look instead."""
+    near = graph.similar_pages(name)
+    if near:
+        return (f"ERROR: no page named {name!r}. Closest: {', '.join(near)}. "
+                f"Call {tool} again with one of those names.")
+    return f"ERROR: no page named {name!r}. Call search_notes to find where it is written."
 
 
 def _today_title(graph: LogseqGraph) -> str:
