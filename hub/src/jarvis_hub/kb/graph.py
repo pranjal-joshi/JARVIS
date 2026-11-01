@@ -21,6 +21,18 @@ TASK = re.compile(r"^(TODO|DOING|LATER|NOW|DONE|WAITING|CANCELED|CANCELLED)\s+(.
 STAMP = re.compile(r"(SCHEDULED|DEADLINE):\s*<(\d{4}-\d{2}-\d{2})[^>]*>")
 JOURNAL_FILE = re.compile(r"^(\d{4})_(\d{2})_(\d{2})\.md$")
 JARVIS_NS = "jarvis/"
+_MEMORY_TAG = re.compile(r"#jarvis\b|#\[\[jarvis\]\]|\[\[jarvis\]\]", re.I)  # notes the agent wrote
+
+
+def _is_memory_note(text: str) -> bool:
+    return bool(_MEMORY_TAG.search(text))
+
+
+def _check_match(match: str) -> str:
+    m = match.strip().lower()
+    if len(m) < 3:
+        raise ValueError("give at least 3 characters of the item to delete")
+    return m
 
 
 @dataclass
@@ -218,20 +230,40 @@ class LogseqGraph:
             page.path.replace(self._trash_dir() / f"{int(time.time())}_{page.path.name}")
         return page.name
 
-    def trash_all_memory(self) -> list[str]:
+    def trash_all_memory(self) -> tuple[list[str], int]:
+        """All of the agent's memory: its jarvis/ pages (moved to .trash/) and the #jarvis notes it wrote
+        in journals (removed; the journal as it was is kept in .trash/). User-written lines stay."""
         gone = [p for p in self.pages() if not p.is_journal and p.name.lower().startswith(JARVIS_NS)]
         with self._lock:
             for p in gone:
                 p.path.replace(self._trash_dir() / f"{int(time.time())}_{p.path.name}")
-        return [p.name for p in gone]
+        notes = sum(self._drop_blocks(p, _is_memory_note) for p in self.pages() if p.is_journal)
+        return [p.name for p in gone], notes
+
+    def delete_memory_items(self, match: str) -> list[tuple[str, int]]:
+        """Remove memory items containing `match` from jarvis/ pages and #jarvis journal notes.
+        Returns (page, count) for each page that changed."""
+        m = _check_match(match)
+        out = []
+        for p in self.pages():
+            if p.is_journal:
+                n = self._drop_blocks(p, lambda t: m in t.lower() and _is_memory_note(t))
+            elif p.name.lower().startswith(JARVIS_NS):
+                n = self._drop_blocks(p, lambda t: m in t.lower())
+            else:
+                continue
+            if n:
+                out.append((p.name, n))
+        return out
 
     def delete_blocks(self, name: str, match: str) -> int:
         """Remove every block (with its children) whose text contains `match`, ignoring case.
         The page as it was is kept in .trash/."""
-        match = match.strip().lower()
-        if len(match) < 3:
-            raise ValueError("give at least 3 characters of the item to delete")
-        page = self._owned(name)
+        m = _check_match(match)
+        return self._drop_blocks(self._owned(name), lambda t: m in t.lower())
+
+    def _drop_blocks(self, page: Page, drop) -> int:
+        """Remove every top-or-nested block (with its children) for which drop(text) is true."""
         with self._lock:
             lines = page.path.read_text(encoding="utf-8").splitlines()
             out, removed, cut_below = [], 0, None
@@ -249,7 +281,7 @@ class LogseqGraph:
                         if not ns or ns.startswith("- "):
                             break
                         body.append(ns)
-                    if match in " ".join(body).lower():
+                    if drop(" ".join(body)):
                         removed += 1
                         cut_below = indent
                         continue

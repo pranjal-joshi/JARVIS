@@ -241,9 +241,10 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         return f"Forgot [[{moved}]] (moved to the graph's .trash folder)."
 
     async def kb_clear_memory(args: dict, ctx: ToolCtx) -> str:
-        gone = graph.trash_all_memory()
+        gone, notes = graph.trash_all_memory()
         await index.sync()
-        return f"Cleared {len(gone)} memory pages (moved to .trash): {', '.join(gone) or 'none'}."
+        return (f"Memory cleared: {len(gone)} memory pages and {notes} journal notes removed "
+                f"(copies kept in .trash).")
 
     async def kb_delete_page(args: dict, ctx: ToolCtx) -> str:
         try:
@@ -254,14 +255,20 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         return f"Deleted [[{gone}]] (moved to .trash)."
 
     async def kb_delete_item(args: dict, ctx: ToolCtx) -> str:
+        page, match = str(args.get("page") or "").strip(), str(args.get("match", ""))
         try:
-            n = graph.delete_blocks(str(args.get("page", "")), str(args.get("match", "")))
+            if page and graph.page(page) is not None:
+                n = graph.delete_blocks(page, match)
+                changed = [(page, n)] if n else []
+            else:  # no page, or a guessed one: look through the agent's own memories
+                changed = graph.delete_memory_items(match)
         except ValueError as e:
             return f"ERROR: {e}"
-        if not n:
-            return "ERROR: no item on that page contains that text"
+        if not changed:
+            return "ERROR: no item contains that text" + (f" on {page!r}" if page and graph.page(page) else " in memory")
         await index.sync()
-        return f"Removed {n} item(s) from [[{args.get('page')}]] (the old page is kept in .trash)."
+        where = ", ".join(f"[[{p}]] ({n})" for p, n in changed)
+        return f"Removed {sum(n for _, n in changed)} item(s) from {where} (old copies kept in .trash)."
 
     reg.add(Tool("get_time", "builtin", "Current date and time, optionally in another IANA time zone.",
                  _obj({"timezone": {"type": "string", "description": "e.g. America/New_York; empty = local"}}, []),
@@ -288,13 +295,15 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
                  _obj({"page": {"type": "string", "description": "e.g. jarvis/preferences"}}, ["page"]),
                  Risk.DESTRUCTIVE, kb_forget))
     reg.add(Tool("kb_clear_memory", "builtin",
-                 "Wipe ALL of your own jarvis/ memory pages, only when the user asks to clear your memory. Needs approval.",
+                 "Wipe ALL your memory (jarvis/ pages and #jarvis journal notes), only when the user asks to clear "
+                 "your memory. Needs approval.",
                  _obj({}, []), Risk.DESTRUCTIVE, kb_clear_memory))
     reg.add(Tool("kb_delete_page", "builtin",
                  "Delete a whole page (user page, journal or memory) from the knowledge base. Needs approval.",
                  _obj({"page": {"type": "string"}}, ["page"]), Risk.DESTRUCTIVE, kb_delete_page))
     reg.add(Tool("kb_delete_item", "builtin",
-                 "Delete items (blocks, tasks, notes) on a page whose text contains `match`. Needs approval.",
-                 _obj({"page": {"type": "string"},
-                       "match": {"type": "string", "description": "words from the item"}},
-                      ["page", "match"]), Risk.DESTRUCTIVE, kb_delete_item))
+                 "Delete items (blocks, tasks, notes, memories) whose text contains `match`. Leave page empty to "
+                 "delete from your memories (what the memory panel shows). Needs approval.",
+                 _obj({"page": {"type": "string", "description": "exact page name, or empty for your memories"},
+                       "match": {"type": "string", "description": "a few words from the item"}},
+                      ["match"]), Risk.DESTRUCTIVE, kb_delete_item))

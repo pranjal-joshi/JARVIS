@@ -42,6 +42,22 @@ def test_delete_items_and_clear_memory(tmp_path):
     assert [b.text for b in g.page("Groceries").blocks] == ["eggs", "TODO buy bread"]
     with pytest.raises(ValueError):
         g.delete_blocks("Groceries", "e")  # too vague
-    assert sorted(n.lower() for n in g.trash_all_memory()) == ["jarvis/a", "jarvis/b"]
+    g.append_journal("Learned: likes tea (see [[jarvis/a]]) #jarvis")
+    g.append_journal("my own note about tea")
+    pages, notes = g.trash_all_memory()
+    assert sorted(n.lower() for n in pages) == ["jarvis/a", "jarvis/b"] and notes == 1
+    journal = next(p for p in g.pages() if p.is_journal)
+    assert [b.text for b in journal.blocks] == ["my own note about tea"]  # the user's line stays
     assert g.page("Groceries") is not None
     assert g.trash_page("Groceries") == "Groceries" and g.page("Groceries") is None
+
+
+def test_delete_memory_items_without_a_page(tmp_path):
+    g = LogseqGraph(str(tmp_path))
+    g.write_jarvis_page("jarvis/people", "- Chivu's wife is Chinu\n- Rohan likes cricket")
+    g.append_journal("Learned: Chivu has a son (see [[jarvis/people]]) #jarvis")
+    g.append_journal("Chivu called me today")  # the user's own line, not a memory
+    changed = dict(g.delete_memory_items("chivu"))
+    assert changed == {"jarvis/people": 1, next(p.name for p in g.pages() if p.is_journal): 1}
+    assert [b.text for b in g.page("jarvis/people").blocks] == ["Rohan likes cricket"]
+    assert [b.text for b in next(p for p in g.pages() if p.is_journal).blocks] == ["Chivu called me today"]
