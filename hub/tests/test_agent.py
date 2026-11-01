@@ -13,6 +13,9 @@ from jarvis_hub.events.bus import EventBus
 from jarvis_hub.mcp.registry import Tool, ToolRegistry, classify
 
 
+ALL_GATED = frozenset({Risk.WRITE, Risk.EXTERNAL, Risk.DESTRUCTIVE})
+
+
 class FakeLLM:
     def __init__(self, script):
         self.script = list(script)
@@ -69,7 +72,7 @@ def test_read_tool_runs_without_approval(parts):
 def test_write_tool_waits_for_web_approval(parts):
     bus, gate, audit, reg, calls = parts
     agent = ToolAgent(FakeLLM([call("ha__HassTurnOn", name="desk lamp"), say("Done, sir.")]),
-                      reg, gate, audit)
+                      reg, gate, audit, ask_for=ALL_GATED)
 
     async def scenario():
         approvals = bus.subscribe(Source.WEB)
@@ -93,7 +96,7 @@ def test_unapproved_write_is_not_executed(parts):
     bus, gate, audit, reg, calls = parts
     gate._timeout = 0.05
     agent = ToolAgent(FakeLLM([call("ha__HassTurnOn", name="all"), say("Very well, sir.")]),
-                      reg, gate, audit)
+                      reg, gate, audit, ask_for=ALL_GATED)
     asyncio.run(run(agent, bus))
     assert calls == []
     assert audit.recent()[0]["status"] == "timeout"
@@ -136,7 +139,14 @@ def test_final_answer_tool_output_is_the_reply(parts):
     async def expert(args, ctx):
         return "Forty-two.\n\n— claude · m (1 s)"
 
-    reg.add(Tool("ask_expert", "expert", "x", {}, Risk.READ, expert, final_answer=True))
-    llm = FakeLLM([call("ask_expert", question="q"), say("should not be used")])
+    reg.add(Tool("ask_claude", "expert", "x", {}, Risk.READ, expert, final_answer=True))
+    llm = FakeLLM([call("ask_claude", question="q"), say("should not be used")])
     reply = asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus))
     assert reply.startswith("Forty-two.") and len(llm.seen) == 1
+
+
+def test_write_runs_without_approval_by_default(parts):
+    bus, gate, audit, reg, calls = parts
+    agent = ToolAgent(FakeLLM([call("ha__HassTurnOn", name="desk lamp"), say("Done, sir.")]), reg, gate, audit)
+    assert asyncio.run(run(agent, bus)) == "Done, sir."
+    assert calls and audit.recent()[0]["approved_by"] == "policy"

@@ -107,8 +107,10 @@ class ToolRegistry:
     def all(self) -> list[Tool]:
         return list(self._tools.values())
 
-    def describe(self) -> list[dict]:
-        return [{"name": t.name, "origin": t.origin, "risk": t.risk} for t in self.all()]
+    def describe(self, ask_for: frozenset = frozenset()) -> list[dict]:
+        return [{"name": t.name, "origin": t.origin, "risk": t.risk,
+                 "asks": t.risk in ask_for and not t.self_scoped,
+                 "description": t.description.split(". ")[0][:160]} for t in self.all()]
 
     async def load_mcp(self, config_path: str) -> None:
         if not os.path.exists(config_path):

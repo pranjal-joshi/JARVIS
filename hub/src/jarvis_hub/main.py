@@ -20,6 +20,7 @@ from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
 from jarvis_hub.kb.tools import register_kb_tools, write_daily_summary
+from jarvis_hub.tools.utility import register_utility_tools
 from jarvis_hub.llm.client import LLMClient
 from jarvis_hub.mcp.registry import ToolRegistry
 from jarvis_hub.voice.service import VoiceService
@@ -74,8 +75,9 @@ async def lifespan(app: FastAPI):
     st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
     st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url)
     register_kb_tools(st.tools, st.kb_graph, st.kb_index)
+    register_utility_tools(st.tools, st.kb_graph, st.kb_index)
     if register_expert_tool(st.tools, s):
-        log.info("ask_expert enabled via %s", s.expert_bridge_url)
+        log.info("ask_claude/ask_opencode enabled via %s", s.expert_bridge_url)
     if register_web_search(st.tools, s):
         log.info("web_search enabled (approval %s)", "on" if s.web_search_approval else "off")
     await st.tools.load_mcp(s.mcp_config)
@@ -85,7 +87,7 @@ async def lifespan(app: FastAPI):
         voicestudio_key=s.voicestudio_api_key.get_secret_value(),
         voicestudio_model=s.voicestudio_tts_model, voicestudio_voice=s.voicestudio_voice,
         language=s.stt_language)
-    st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(st.llm, st.tools, st.gate, st.audit)
+    st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(st.llm, st.tools, st.gate, st.audit, s.ask_for())
 
     tasks = []
     if s.agent != "echo":

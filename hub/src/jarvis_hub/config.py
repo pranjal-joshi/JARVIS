@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # per-model overrides of llm_extra_body, JSON {"model": {...}} (e.g. thinking on for one model)
     llm_model_extra: str = "{}"
     approval_timeout_s: float = 90
+    # risk levels that wait for approval (comma list of read, write, external, destructive);
+    # everything else runs straight away and is audited
+    approval_risks: str = "destructive,external"
 
     mcp_config: str = "../mcp/servers.yaml"
 
@@ -57,7 +60,7 @@ class Settings(BaseSettings):
     voicestudio_tts_model: str = "tts-1"
     voicestudio_voice: str = "jarvis"
 
-    # expert bridge (bridge/expert_bridge.py on the host): empty token = ask_expert tool off
+    # expert bridge (bridge/expert_bridge.py on the host): empty token = ask_claude/ask_opencode tool off
     expert_bridge_url: str = "http://host.docker.internal:8790"
     expert_bridge_token: SecretStr = SecretStr("")
     expert_default_engine: str = "claude"
@@ -79,6 +82,10 @@ class Settings(BaseSettings):
             for src, tok in pairs.items()
             if tok and tok.get_secret_value() not in ("", "change-me")
         }
+
+    def ask_for(self) -> frozenset:
+        from jarvis_hub.approval.gate import Risk
+        return frozenset(Risk(r.strip()) for r in self.approval_risks.split(",") if r.strip())
 
     def llm_extra(self) -> dict:
         return json.loads(self.llm_extra_body or "{}")

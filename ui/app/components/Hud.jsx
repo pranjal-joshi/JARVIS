@@ -70,7 +70,7 @@ function useDecode(label, duration = 420) {
 }
 
 // Which KB pages an event touched, and whether it was a read or a write.
-const KB_WRITES = new Set(["kb_remember", "kb_journal", "kb_append_to_page"]);
+const KB_WRITES = new Set(["kb_remember", "kb_journal", "kb_append_to_page", "kb_forget", "kb_clear_memory", "kb_delete_page", "kb_delete_item"]);
 function kbTouch(ev) {
   if (ev.type === "kb_retrieved") return { pages: ev.data?.pages || [], kind: "read", tool: "kb_search" };
   const tool = ev.data?.tool;
@@ -158,10 +158,19 @@ export default function Hud() {
   // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
   // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
   // playback ends; listening always brings the orb back to centre.
+  const [toolsOpen, setToolsOpen] = useState(false);
+  useEffect(() => { // close the tools list on any click outside it
+    if (!toolsOpen) return;
+    const off = (e) => !e.target.closest?.(".tools-pick") && setToolsOpen(false);
+    document.addEventListener("pointerdown", off);
+    return () => document.removeEventListener("pointerdown", off);
+  }, [toolsOpen]);
   const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
-  const busy = kbActive ? "kb" : consoleActive ? "console" : null;
+  // a write to JARVIS's own memory pages focuses the memory panel, any other KB use the graph
+  const memWrite = kbActive && kbPulse?.kind === "write" && /^kb_(remember|forget|clear_memory)$/.test(kbPulse?.tool || "");
+  const busy = memWrite ? "memory" : kbActive ? "kb" : consoleActive ? "console" : null;
   const holding = state === "thinking" || state === "speaking";
   if (busy) lastBusy.current = busy;
   else if (!holding) lastBusy.current = null;
@@ -194,7 +203,7 @@ export default function Hud() {
     setState("idle");
   };
   useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && setPinned(null);
+    const onKey = (e) => { if (e.key === "Escape") { setPinned(null); setToolsOpen(false); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -429,24 +438,42 @@ export default function Hud() {
   return (
     <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
-        <h1>J.A.R.V.I.S.</h1>
+        <h1 className={link === "online" ? "" : "offline"} title={`hub link ${link}`}>J.A.R.V.I.S.</h1>
         <div className="chips">
           <button type="button" className="chip new-session" onClick={newSession}
             title="Clear this conversation and start fresh (JARVIS forgets the chat; memory pages stay)">⟲ new session</button>
-          <span className={`chip ${link}`}>link {link}</span>
-          {status && (models.length > 1 ? (
+          {models.length > 1 && (
             <label className={`chip model-pick${switching ? " busy" : ""}`} title="Language model">
               llm
               <select value={status.llm?.model || ""} disabled={switching} aria-label="Language model"
                 onChange={(e) => switchModel(e.target.value)}>
                 {models.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
-              {status.llm?.up ? "●" : "○"}
             </label>
-          ) : <span className="chip">llm {status.llm?.model} {status.llm?.up ? "●" : "○"}</span>)}
-          {status && <span className="chip">kb {status.kb?.vector ? "vector" : "keyword"}</span>}
-          {status && <span className="chip">tts {status.voice?.voicestudio === "up" ? "jarvis" : "piper"}</span>}
-          {status && <span className="chip">tools {status.tools?.length}</span>}
+          )}
+          {status && (
+            <div className="tools-pick">
+              <button type="button" className="chip" aria-expanded={toolsOpen}
+                onClick={() => setToolsOpen((o) => !o)} title="Show the tools JARVIS can use">
+                tools {status.tools?.length} {toolsOpen ? "▴" : "▾"}
+              </button>
+              {toolsOpen && (
+                <div className="tools-list" role="dialog" aria-label="Available tools">
+                  <p className="tools-note">auto = runs straight away (audited) · ask = waits for your approval</p>
+                  <ul>
+                    {[...(status.tools || [])].sort((a, b) => a.origin.localeCompare(b.origin) || a.name.localeCompare(b.name)).map((t) => (
+                      <li key={t.name} title={t.description || ""}>
+                        <span className={`gate ${t.asks ? "ask" : "auto"}`}>{t.asks ? "ask" : "auto"}</span>
+                        <b>{t.name}</b>
+                        <i>{t.origin} · {t.risk}</i>
+                        {t.description && <small>{t.description}</small>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 

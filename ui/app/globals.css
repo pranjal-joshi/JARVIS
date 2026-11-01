@@ -871,7 +871,34 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   .hud.focus-memory .kb { flex-basis: 22%; }
   .hud.focus-console .console { flex-basis: 66%; }
   .hud.focus-timeline .console { flex-basis: 18%; }
+  /* only the panel in use widens; its neighbour keeps its normal width on the outer edge */
+  .hud.focus-kb .memory, .hud.focus-memory .kb { width: 300px; align-self: flex-end; }
+  .hud.focus-console .timeline, .hud.focus-timeline .console { width: 300px; align-self: flex-start; }
 }
 
 .new-session { cursor: pointer; font-family: var(--mono); }
 .new-session:hover, .new-session:focus-visible { color: var(--text); border-color: var(--cyan-dim); background: rgba(127, 231, 255, 0.08); outline: none; }
+
+header h1.offline { opacity: 0.45; }
+/* above the panels (their entrance and view-transition layers stack later) so the tools list stays on top */
+header { position: relative; z-index: 20; }
+.tools-pick { position: relative; }
+.tools-pick > button { cursor: pointer; font-family: var(--mono); }
+.tools-pick > button:hover, .tools-pick > button[aria-expanded="true"] { color: var(--text); border-color: var(--cyan-dim); }
+.tools-list {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
+  width: min(420px, calc(100vw - 32px)); max-height: 60vh; overflow: auto;
+  background: rgba(3, 9, 13, 0.97); border: 1px solid var(--cyan-dim); border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6); padding: 10px 12px;
+  animation: fade-in var(--dur-short) var(--ease-out) both;
+}
+.tools-note { margin: 0 0 8px; font-size: 10px; opacity: 0.6; }
+.tools-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tools-list li { display: grid; grid-template-columns: 42px 1fr; column-gap: 8px; font-size: 12px; }
+.tools-list li b { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.tools-list li i { grid-column: 2; font-style: normal; font-size: 10px; opacity: 0.55; }
+.tools-list li small { grid-column: 2; font-size: 11px; opacity: 0.7; line-height: 1.35; }
+.tools-list .gate { grid-row: span 3; align-self: start; text-align: center; font-size: 10px; letter-spacing: 0.08em;
+  border: 1px solid; border-radius: 4px; padding: 1px 0; }
+.gate.auto { color: var(--green, #6dffa8); border-color: rgba(109, 255, 168, 0.4); }
+.gate.ask { color: var(--amber); border-color: rgba(255, 179, 71, 0.5); }

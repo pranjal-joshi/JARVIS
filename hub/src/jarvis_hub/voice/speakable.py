@@ -10,7 +10,7 @@ MAX_SPOKEN = 500
 
 _FENCE = re.compile(r"```.*?(```|$)", re.S)
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.M)
-_SIGNATURE = re.compile(r"^\s*— .*$", re.M)  # ask_expert footer: "— claude · model (9 s)"
+_SIGNATURE = re.compile(r"^\s*— .*$", re.M)  # ask_claude/ask_opencode footer: "— claude · model (9 s)"
 _LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 _MARKS = [
     (re.compile(r"^\s{0,3}#{1,6}\s*", re.M), ""),           # headings

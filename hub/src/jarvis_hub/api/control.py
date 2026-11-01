@@ -132,7 +132,7 @@ async def status(request: Request, _: Source = Depends(require_source)) -> dict:
         "time": time.time(),
         "llm": {"model": s.llm.model, "up": await s.llm.ping()} if s.llm else None,
         "mcp": s.tools.status,
-        "tools": s.tools.describe(),
+        "tools": s.tools.describe(s.settings.ask_for()),
         "kb": {"graph": s.kb_graph.name, "vector": s.kb_index.vector_ready,
                "last_sync": s.kb_index.last_sync},
         "voice": await s.voice.status(),

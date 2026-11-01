@@ -16,6 +16,7 @@ from jarvis_hub.persona.jarvis import SYSTEM_PROMPT, source_hint
 log = logging.getLogger(__name__)
 MAX_STEPS = 6
 MAX_TOOL_RESULT_CHARS = 6000
+DEFAULT_ASK_FOR = frozenset({Risk.DESTRUCTIVE, Risk.EXTERNAL})
 FAKE_TOOL_MARKERS = ("<tool_result", "</tool_result>", "<tool_call", "<function_call", "<function=")
 FAKE_TOOL_NUDGE = ("(system) Your last message wrote a tool call or tool result as plain text; no tool ran. "
                    "Call the tool through the tools interface, or answer without claiming any action happened.")
@@ -23,8 +24,9 @@ FAKE_TOOL_NUDGE = ("(system) Your last message wrote a tool call or tool result 
 
 class ToolAgent:
     def __init__(self, llm: LLMClient, tools: ToolRegistry, gate: ApprovalGate,
-                 audit: AuditStore) -> None:
+                 audit: AuditStore, ask_for: frozenset[Risk] = DEFAULT_ASK_FOR) -> None:
         self.llm, self.tools, self.gate, self.audit = llm, tools, gate, audit
+        self.ask_for = ask_for  # risk levels that wait for a human; the rest run and are audited
 
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus) -> str:
@@ -92,7 +94,7 @@ class ToolAgent:
         approved_by = "policy"
         if tool.self_scoped:
             approved_by = "policy:self-scoped"
-        elif tool.risk is not Risk.READ:
+        elif tool.risk in self.ask_for:
             decision = await self.gate.request(request_id=request_id, source=source,
                                                tool=name, risk=tool.risk, arguments=args)
             approved_by = decision.by
@@ -144,4 +146,6 @@ def _strip_think(text: str) -> str:
     while "<think>" in text and "</think>" in text:
         start, end = text.index("<think>"), text.index("</think>") + len("</think>")
         text = text[:start] + text[end:]
+    if "</think>" in text:  # opening tag lost (thinking cut short): keep only what follows
+        text = text.rsplit("</think>", 1)[1]
     return text

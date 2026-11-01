@@ -8,6 +8,7 @@ the indexer or tools: they only use the public methods below."""
 import hashlib
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -190,6 +191,74 @@ class LogseqGraph:
     def append_to_user_page(self, name: str, text: str) -> str:
         """Edits one of the user's pages. Callers must gate this behind approval."""
         return self._write_page(name, text, replace=False)
+
+    # ---------- removing (callers gate these as destructive; everything goes to .trash/) ----------
+    def _trash_dir(self) -> Path:
+        trash = self.root / ".trash"
+        trash.mkdir(exist_ok=True)
+        return trash
+
+    def _owned(self, name: str) -> Page:
+        page = self.page(name.strip())
+        if page is None:
+            raise ValueError(f"no page called {name!r}")
+        if page.path.parent.resolve() not in (self.pages_dir.resolve(), self.journals_dir.resolve()):
+            raise ValueError("page is outside the graph")
+        return page
+
+    def trash_jarvis_page(self, name: str) -> str:
+        """Move one of the agent's own jarvis/ pages to .trash/ (recoverable). User pages are refused."""
+        if not name.strip().lower().startswith(JARVIS_NS):
+            raise ValueError("only jarvis/ memory pages can be forgotten; use kb_delete_page for others")
+        return self.trash_page(name)
+
+    def trash_page(self, name: str) -> str:
+        page = self._owned(name)
+        with self._lock:
+            page.path.replace(self._trash_dir() / f"{int(time.time())}_{page.path.name}")
+        return page.name
+
+    def trash_all_memory(self) -> list[str]:
+        gone = [p for p in self.pages() if not p.is_journal and p.name.lower().startswith(JARVIS_NS)]
+        with self._lock:
+            for p in gone:
+                p.path.replace(self._trash_dir() / f"{int(time.time())}_{p.path.name}")
+        return [p.name for p in gone]
+
+    def delete_blocks(self, name: str, match: str) -> int:
+        """Remove every block (with its children) whose text contains `match`, ignoring case.
+        The page as it was is kept in .trash/."""
+        match = match.strip().lower()
+        if len(match) < 3:
+            raise ValueError("give at least 3 characters of the item to delete")
+        page = self._owned(name)
+        with self._lock:
+            lines = page.path.read_text(encoding="utf-8").splitlines()
+            out, removed, cut_below = [], 0, None
+            for i, line in enumerate(lines):
+                stripped = line.lstrip("\t ")
+                indent = len(line) - len(stripped)
+                if cut_below is not None:  # inside a removed block: drop its continuation and children
+                    if not stripped or indent > cut_below or not stripped.startswith("- "):
+                        continue
+                    cut_below = None
+                if stripped.startswith("- "):
+                    body = [stripped[2:]]
+                    for nxt in lines[i + 1:]:
+                        ns = nxt.lstrip("\t ")
+                        if not ns or ns.startswith("- "):
+                            break
+                        body.append(ns)
+                    if match in " ".join(body).lower():
+                        removed += 1
+                        cut_below = indent
+                        continue
+                out.append(line)
+            if removed:
+                (self._trash_dir() / f"{int(time.time())}_{page.path.name}").write_text(
+                    "\n".join(lines) + "\n", encoding="utf-8")
+                page.path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+        return removed
 
     def _write_page(self, name: str, text: str, replace: bool) -> str:
         path = (self.pages_dir / _name_to_file(name)).resolve()

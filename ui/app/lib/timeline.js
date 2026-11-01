@@ -31,8 +31,19 @@ export function describe(tool = "", args = {}) {
     case "kb_journal": return { glyph: "✎", title: "LOG ENTRY", detail: clip(a.text) };
     case "kb_append_to_page": return { glyph: "✎", title: "PAGE EDIT", detail: clip(a.page) };
     case "web_search": return { glyph: "⌖", title: "NET SWEEP", detail: quoted(a.query) };
-    case "ask_expert":
-      return { glyph: "⟁", title: `EXPERT UPLINK · ${a.engine === "opencode" ? "OPENCODE" : "CLAUDE"}`, detail: quoted(a.question) };
+    case "ask_claude": return { glyph: "⟁", title: "EXPERT UPLINK · CLAUDE", detail: quoted(a.question) };
+    case "ask_opencode": return { glyph: "⟁", title: "EXPERT UPLINK · OPENCODE", detail: quoted(a.question) };
+    case "get_time": return { glyph: "◷", title: "CHRONO", detail: clip(a.timezone || "local") };
+    case "calculate": return { glyph: "∑", title: "COMPUTE", detail: clip(a.expression) };
+    case "weather": return { glyph: "☁", title: "ATMOSPHERICS", detail: clip(a.place) };
+    case "fetch_page": return { glyph: "⌖", title: "PAGE READ", detail: clip(a.url) };
+    case "set_timer": return { glyph: "◴", title: "TIMER SET", detail: clip(a.label || `${a.minutes || 0}m ${a.seconds || 0}s`) };
+    case "list_timers": return { glyph: "◴", title: "TIMERS", detail: "running" };
+    case "cancel_timer": return { glyph: "◴", title: "TIMER CANCEL", detail: clip(a.label) };
+    case "kb_forget": return { glyph: "✖", title: "MEMORY ERASE", detail: clip(a.page) };
+    case "kb_clear_memory": return { glyph: "✖", title: "MEMORY WIPE", detail: "all jarvis/ pages" };
+    case "kb_delete_page": return { glyph: "✖", title: "PAGE DELETE", detail: clip(a.page) };
+    case "kb_delete_item": return { glyph: "✖", title: "ITEM DELETE", detail: clip(`${a.page}: ${a.match}`) };
   }
   const base = tool.includes("__") ? tool.split("__").pop() : tool;
   if (HA[base]) {
@@ -59,11 +70,12 @@ export function insight(tool, status, preview = "") {
     return n ? `${n} open` : "clear";
   }
   if (tool?.startsWith("kb_") && /remember|journal|append/.test(tool)) return "saved";
+  if (tool?.startsWith("kb_") && /forget|clear|delete/.test(tool)) return "removed";
   if (tool === "web_search") {
     const n = (String(preview).match(/^- /gm) || []).length;
     return n ? `${n} sources` : "no signal";
   }
-  if (tool === "ask_expert") {
+  if (tool === "ask_claude" || tool === "ask_opencode") {
     const s = String(preview).match(/\(([\d.]+) s\)/);
     return s ? `answered · ${Math.round(+s[1])}s` : "answered";
   }
