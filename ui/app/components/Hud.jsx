@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
+import RichText from "./RichText";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
 import { playAudio, startRecording } from "../lib/audio";
@@ -101,7 +102,7 @@ function Message({ m, latest }) {
   return (
     <div className={`msg ${m.role}`}>
       <span className="who">{m.role === "user" ? "YOU" : "JARVIS"}</span>
-      <span className="text">{text}</span>
+      <div className="text"><RichText text={text} /></div>
     </div>
   );
 }
@@ -133,7 +134,8 @@ export default function Hud() {
   const flash = (color) => setAccent({ color, at: Date.now() });
   const consoleTimer = useRef(null);
   const recording = useRef(null);
-  const chatEnd = useRef(null);
+  const chatRef = useRef(null);
+  const [tab, setTab] = useState("talk"); // phone layout: talk | activity | memory
   const stateLabel = useDecode(state.toUpperCase());
 
   const push = (item) => setTimeline((t) => [withId(item), ...t].slice(0, 80));
@@ -222,8 +224,10 @@ export default function Hud() {
             kbTimer.current = setTimeout(() => setKbActive(false), 9000);
             if (kb.kind === "write" && kb.status === "ok") setKbVersion((v) => v + 1);
           }
-          if (ev.type === "approval_request")
+          if (ev.type === "approval_request") {
             setApprovals((a) => (a.some((x) => x.approval_id === ev.data.approval_id) ? a : [...a, ev.data]));
+            setTab("talk"); // phone: an approval card always comes to the front
+          }
         };
         ws.onclose = () => {
           setLink("offline");
@@ -245,7 +249,8 @@ export default function Hud() {
   }, []);
 
   useEffect(() => {
-    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
+    const el = chatRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   const send = async (text) => {
@@ -333,7 +338,7 @@ export default function Hud() {
   };
 
   return (
-    <div className="hud">
+    <div className={`hud tab-${tab}`}>
       <header className="reveal" style={{ "--i": 0 }}>
         <h1>J.A.R.V.I.S.</h1>
         <div className="chips">
@@ -403,9 +408,8 @@ export default function Hud() {
             );
           })}
         </div>
-        <div className="chat">
+        <div className="chat" ref={chatRef}>
           {messages.map((m, i) => <Message key={i} m={m} latest={i === messages.length - 1} />)}
-          <div ref={chatEnd} />
         </div>
         <form className="input reveal" style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
           <button type="button" className={`mic ${state === "listening" ? "on" : ""}`} onClick={toggleMic}
@@ -449,6 +453,19 @@ export default function Hud() {
         </ul>
       </section>
       </div>
+
+      <nav className="mnav" aria-label="Sections">
+        {[
+          ["talk", "◉", "Talk", approvals.length > 0],
+          ["activity", "⟐", "Activity", consoleActive],
+          ["memory", "◈", "Memory", kbActive],
+        ].map(([id, glyph, label, live]) => (
+          <button key={id} type="button" className={`${tab === id ? "on" : ""} ${live && tab !== id ? "live" : ""}`}
+            aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>
+            <span aria-hidden="true">{glyph}</span>{label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

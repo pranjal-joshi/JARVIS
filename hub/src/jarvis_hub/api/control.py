@@ -12,6 +12,7 @@ from jarvis_hub.approval.gate import APPROVER_SOURCES
 from jarvis_hub.config import Source
 from jarvis_hub.kb.tools import recent_memory, write_daily_summary
 from jarvis_hub.voice.service import VoiceError
+from jarvis_hub.voice.speakable import to_speech
 
 router = APIRouter(prefix="/v1")
 
@@ -111,7 +112,7 @@ async def speech(body: SpeechBody, request: Request,
     if not body.input.strip():
         raise HTTPException(400, "empty input")
     try:
-        audio, engine = await request.app.state.voice.speak(body.input[:2000])
+        audio, engine = await request.app.state.voice.speak(to_speech(body.input[:6000]))
     except VoiceError as e:
         raise HTTPException(502, str(e)) from e
     return Response(audio, media_type="audio/wav", headers={"X-TTS-Engine": engine})

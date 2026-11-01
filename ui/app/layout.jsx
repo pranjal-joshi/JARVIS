@@ -11,7 +11,7 @@ const display = Chakra_Petch({
 });
 
 export const metadata = { title: "JARVIS" };
-export const viewport = { themeColor: "#04070a", width: "device-width", initialScale: 1 };
+export const viewport = { themeColor: "#04070a", width: "device-width", initialScale: 1, viewportFit: "cover" };
 
 export default function RootLayout({ children }) {
   return (
