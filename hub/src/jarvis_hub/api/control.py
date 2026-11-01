@@ -181,6 +181,15 @@ async def devices_allow(body: AllowBody, request: Request, _: Source = Depends(r
     return {"result": await _device_bridge(request, "adb_allow", body.model_dump())}
 
 
+class DisconnectBody(BaseModel):
+    id: str
+
+
+@router.post("/devices/disconnect")
+async def devices_disconnect(body: DisconnectBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    return {"result": await _device_bridge(request, "adb_disconnect", body.model_dump())}
+
+
 # ---------- skills (KB pages under skills/, run on events once enabled here) ----------
 @router.get("/skills")
 async def skills_list(request: Request, _: Source = Depends(require_approver)) -> dict:

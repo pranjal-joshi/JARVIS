@@ -395,6 +395,18 @@ def adb_list(_: dict) -> list[dict]:
     return _devices()
 
 
+def adb_disconnect(a: dict) -> str:
+    """Drop a wireless device (HUD only, not a model tool). It can reconnect from Wireless debugging."""
+    dev_id = str(a.get("id", ""))
+    if dev_id not in {d["id"] for d in _devices()}:
+        raise ActionError("no such device connected")
+    if not _wireless(dev_id):
+        raise ActionError("that device is on USB; unplug it instead")
+    adb("disconnect", dev_id, timeout=10)
+    _misses.pop(dev_id, None)
+    return "Disconnected."
+
+
 def adb_allow(a: dict) -> str:
     serial = str(a.get("serial", "")).strip()
     if not re.match(r"^[\w.-]{4,64}$", serial):
@@ -482,7 +494,7 @@ ACTIONS = {f.__name__: f for f in (
     win_info, win_media, win_open, win_lock, win_screenshot,
     adb_devices, adb_info, adb_screenshot, adb_open_app, adb_key, adb_tap, adb_type,
     adb_shell, adb_install, adb_uninstall, adb_connect,
-    adb_pair_start, adb_pair_status, adb_list, adb_allow,
+    adb_pair_start, adb_pair_status, adb_list, adb_allow, adb_disconnect,
     adb_notifications, adb_sms_read, adb_call_log, adb_contacts, adb_sms_send, adb_whatsapp_send,
     adb_call, adb_call_answer, adb_call_end, adb_watch)}
 

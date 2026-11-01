@@ -66,6 +66,15 @@ export default function DevicesPanel({ onCount, version }) {
     if (job?.serial === serial) setJob((j) => ({ ...j, allowed }));
   };
 
+  const disconnect = async (d) => {
+    const r = await api("devices/disconnect", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: d.id }) }).catch(() => null);
+    if (!r?.ok) setError((await r?.json().catch(() => ({})))?.detail || "couldn't disconnect");
+    load();
+  };
+
+  const wireless = (id) => id.includes(":") || id.includes("._adb-tls-connect.");
+
   return (
     <div className="dev-panel">
       <p className="tools-note">Android devices over wireless ADB. JARVIS only touches devices you allow.</p>
@@ -81,6 +90,10 @@ export default function DevicesPanel({ onCount, version }) {
                 title={d.allowed ? "Click to stop JARVIS using this device" : "Click to let JARVIS use this device"}>
                 {d.allowed ? "allowed" : "allow"}
               </button>
+            )}
+            {wireless(d.id) && (
+              <button type="button" className="dev-x" onClick={() => disconnect(d)} aria-label={`Disconnect ${d.model || d.id}`}
+                title="Disconnect (reconnect any time from Wireless debugging on the phone)">×</button>
             )}
           </li>
         ))}
