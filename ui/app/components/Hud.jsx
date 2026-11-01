@@ -1,8 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Orb from "./Orb";
 import { playAudio, startRecording } from "../lib/audio";
+
+// WebGL graph: client-only so the server build never touches three.js
+const KbGraph = dynamic(() => import("./KbGraph"), {
+  ssr: false,
+  loading: () => <div className="kb-canvas kb-loading">initialising graph…</div>,
+});
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
 
@@ -27,6 +34,64 @@ function useTypewriter(text, speed = 14) {
   }, [text, speed]);
   return shown;
 }
+
+const reducedMotion = () =>
+  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Short "decode" reveal: random glyphs resolve left-to-right into the label.
+const GLYPHS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%/+=";
+function useDecode(label, duration = 420) {
+  const [shown, setShown] = useState(label);
+  useEffect(() => {
+    if (reducedMotion()) {
+      setShown(label);
+      return;
+    }
+    const start = performance.now();
+    let raf;
+    const tick = (now) => {
+      const p = Math.min(1, (now - start) / duration);
+      const fixed = Math.floor(p * label.length);
+      let out = label.slice(0, fixed);
+      for (let i = fixed; i < label.length; i++) out += GLYPHS[(Math.random() * GLYPHS.length) | 0];
+      setShown(out);
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [label, duration]);
+  return shown;
+}
+
+// Which KB pages an event touched, and whether it was a read or a write.
+const KB_WRITES = new Set(["kb_remember", "kb_journal", "kb_append_to_page"]);
+function kbTouch(ev) {
+  if (ev.type === "kb_retrieved") return { pages: ev.data?.pages || [], kind: "read", tool: "kb_search" };
+  const tool = ev.data?.tool;
+  if ((ev.type !== "tool_call" && ev.type !== "tool_result") || !tool?.startsWith("kb_")) return null;
+  const kind = KB_WRITES.has(tool) ? "write" : "read";
+  const pages = [];
+  if (ev.type === "tool_call") {
+    const args = ev.data.arguments || {};
+    if (args.page) pages.push(String(args.page));
+    if (tool === "kb_remember") {
+      const topic = String(args.topic || "memory").trim() || "memory";
+      pages.push(topic.toLowerCase().startsWith("jarvis/") ? topic : `jarvis/${topic}`);
+    }
+  } else if (typeof ev.data.preview === "string") {
+    const p = ev.data.preview;
+    for (const m of p.matchAll(/\[\[([^\]\n]{1,120})\]\]/g)) pages.push(m[1]); // [[page]]
+    // "[page] text" search hits and "... [page]" task lines
+    for (const m of p.matchAll(/(?:^|\n)\[([^[\]\n]{1,120})\]|\[([^[\]\n]{1,120})\][ \t]*(?=\n|$)/g)) pages.push(m[1] || m[2]);
+    const j = p.match(/journal (.+?)\.\s*$/);
+    if (j) pages.push(j[1]);
+  }
+  return { pages, kind, tool, status: ev.type === "tool_result" ? ev.data.status : null };
+}
+
+// Stable keys so newly pushed timeline rows animate in (index keys would not).
+let seq = 0;
+const withId = (item) => ({ ...item, id: ++seq });
 
 function Message({ m, latest }) {
   const typed = useTypewriter(latest && m.role === "assistant" ? m.text : "");
@@ -54,10 +119,17 @@ export default function Hud() {
   const [status, setStatus] = useState(null);
   const [link, setLink] = useState("connecting");
   const [speak, setSpeak] = useState(true);
+  const [leaving, setLeaving] = useState(() => new Set());
+  const [kbPulse, setKbPulse] = useState(null);
+  const [kbActive, setKbActive] = useState(false);
+  const [kbVersion, setKbVersion] = useState(0);
+  const [kbStats, setKbStats] = useState(null);
+  const kbTimer = useRef(null);
   const recording = useRef(null);
   const chatEnd = useRef(null);
+  const stateLabel = useDecode(state.toUpperCase());
 
-  const push = (item) => setTimeline((t) => [item, ...t].slice(0, 80));
+  const push = (item) => setTimeline((t) => [withId(item), ...t].slice(0, 80));
 
   const refreshMemory = useCallback(async () => {
     const r = await api("kb/memory?limit=15");
@@ -70,7 +142,7 @@ export default function Hud() {
       const [a, s, p] = await Promise.all([api("audit?limit=30"), api("status"), api("approvals")]);
       if (a.ok) {
         const rows = await a.json();
-        setTimeline(rows.map((r) => ({ kind: "audit", ts: r.ts, tool: r.tool, risk: r.risk,
+        setTimeline(rows.map((r) => withId({ kind: "audit", ts: r.ts, tool: r.tool, risk: r.risk,
           status: r.status, source: r.source, by: r.approved_by })));
       }
       if (s.ok) setStatus(await s.json());
@@ -99,6 +171,14 @@ export default function Hud() {
           if (ev.type === "tool_call") push({ kind: "call", ts: ev.ts, tool: ev.data.tool, risk: ev.data.risk, args: ev.data.arguments });
           if (ev.type === "tool_result") push({ kind: "result", ts: ev.ts, tool: ev.data.tool, status: ev.data.status, preview: ev.data.preview });
           if (ev.type === "kb_retrieved") push({ kind: "kb", ts: ev.ts, pages: ev.data.pages });
+          const kb = kbTouch(ev);
+          if (kb) {
+            setKbPulse((p) => ({ ...kb, seq: (p?.seq || 0) + 1 }));
+            setKbActive(true);
+            clearTimeout(kbTimer.current);
+            kbTimer.current = setTimeout(() => setKbActive(false), 9000);
+            if (kb.kind === "write" && kb.status === "ok") setKbVersion((v) => v + 1);
+          }
           if (ev.type === "approval_request")
             setApprovals((a) => (a.some((x) => x.approval_id === ev.data.approval_id) ? a : [...a, ev.data]));
         };
@@ -115,6 +195,7 @@ export default function Hud() {
     return () => {
       stop = true;
       clearTimeout(retry);
+      clearTimeout(kbTimer.current);
       ws?.close();
     };
   }, []);
@@ -195,12 +276,21 @@ export default function Hud() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approved }),
     });
-    setApprovals((a) => a.filter((x) => x.approval_id !== id));
+    // play the exit animation, then drop the card (instant under reduced motion)
+    setLeaving((s) => new Set(s).add(id));
+    setTimeout(() => {
+      setApprovals((a) => a.filter((x) => x.approval_id !== id));
+      setLeaving((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      });
+    }, reducedMotion() ? 0 : 300);
   };
 
   return (
     <div className="hud">
-      <header>
+      <header className="reveal" style={{ "--i": 0 }}>
         <h1>J.A.R.V.I.S.</h1>
         <div className="chips">
           <span className={`chip ${link}`}>link {link}</span>
@@ -211,11 +301,11 @@ export default function Hud() {
         </div>
       </header>
 
-      <section className="panel timeline">
+      <section className="panel timeline reveal" style={{ "--i": 2 }}>
         <h2>Action timeline</h2>
         <ul>
           {timeline.map((e, i) => (
-            <li key={i} className={`ev ${e.kind} ${e.risk || ""} ${e.status || ""}`}>
+            <li key={e.id} className={`ev ${e.kind} ${e.risk || ""} ${e.status || ""}`} style={{ "--i": Math.min(i, 12) }}>
               <time>{fmtTime(e.ts)}</time>
               {e.kind === "kb" && <span>◈ recalled {e.pages.join(", ") || "nothing"}</span>}
               {e.kind === "call" && <span>→ {e.tool} <em>{e.risk}</em></span>}
@@ -227,41 +317,70 @@ export default function Hud() {
         </ul>
       </section>
 
-      <section className="core">
-        <Orb state={state} analyser={analyser} />
-        <div className="state">{state.toUpperCase()}</div>
-        {approvals.map((a) => (
-          <div key={a.approval_id} className={`approval ${a.risk}`}>
-            <div className="title">APPROVAL REQUIRED · {a.risk.toUpperCase()}</div>
-            <div className="tool">{a.tool}</div>
-            <pre>{JSON.stringify(a.arguments, null, 1)}</pre>
-            <div className="meta">requested via {a.requested_by}</div>
-            <div className="buttons">
-              <button onClick={() => decide(a.approval_id, true)}>Approve</button>
-              <button className="deny" onClick={() => decide(a.approval_id, false)}>Deny</button>
-            </div>
-          </div>
-        ))}
+      <section className="core reveal" style={{ "--i": 1 }}>
+        <div className="orb-wrap">
+          <Orb state={state} analyser={analyser} />
+        </div>
+        <div className="state" data-state={state}>
+          <span aria-hidden="true">{stateLabel}</span>
+          <span className="sr-only">{state}</span>
+        </div>
+        <div className="approvals">
+          {approvals.map((a) => {
+            const out = leaving.has(a.approval_id);
+            return (
+              <div key={a.approval_id} className={`approval ${a.risk}${out ? " leaving" : ""}`}
+                role="group" aria-label={`Approval required for ${a.tool}`}>
+                <div className="title">APPROVAL REQUIRED · {a.risk.toUpperCase()}</div>
+                <div className="tool">{a.tool}</div>
+                <pre>{JSON.stringify(a.arguments, null, 1)}</pre>
+                <div className="meta">requested via {a.requested_by}</div>
+                <div className="buttons">
+                  <button onClick={() => decide(a.approval_id, true)} disabled={out}>Approve</button>
+                  <button className="deny" onClick={() => decide(a.approval_id, false)} disabled={out}>Deny</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
         <div className="chat">
           {messages.map((m, i) => <Message key={i} m={m} latest={i === messages.length - 1} />)}
           <div ref={chatEnd} />
         </div>
-        <form className="input" onSubmit={(e) => { e.preventDefault(); send(input); }}>
+        <form className="input reveal" style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
           <button type="button" className={`mic ${state === "listening" ? "on" : ""}`} onClick={toggleMic}
-            aria-label={state === "listening" ? "Stop and send" : "Speak"}>
+            aria-label={state === "listening" ? "Stop and send" : "Speak"} aria-pressed={state === "listening"}>
             {state === "listening" ? "■" : "◉"}
           </button>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Speak or type, sir…" />
-          <button type="submit">Send</button>
+          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Speak or type, sir…"
+            aria-label="Message JARVIS" autoComplete="off" />
+          <button type="submit" className="send">Send</button>
           <label className="speak"><input type="checkbox" checked={speak} onChange={(e) => setSpeak(e.target.checked)} /> voice</label>
         </form>
+      </section>
+
+      <div className="side reveal" style={{ "--i": 3 }}>
+      <section className={`panel kb ${kbActive ? "active" : ""} ${kbPulse?.kind === "write" && kbActive ? "write" : ""}`}
+        aria-label="Knowledge graph">
+        <h2>
+          Knowledge graph
+          <span className="kb-state">
+            {kbActive ? (kbPulse?.kind === "write" ? "writing" : "recall") : kbStats ? `${kbStats.pages} pages` : ""}
+          </span>
+        </h2>
+        <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />
+        {kbActive && kbPulse?.pages?.length > 0 && (
+          <div className="kb-touched" aria-live="polite">
+            {kbPulse.kind === "write" ? "✎ " : "◈ "}{[...new Set(kbPulse.pages)].slice(0, 4).join(" · ")}
+          </div>
+        )}
       </section>
 
       <section className="panel memory">
         <h2>JARVIS memory</h2>
         <ul>
           {memory.map((m, i) => (
-            <li key={i}>
+            <li key={i} style={{ "--i": Math.min(i, 12) }}>
               <a href={m.link} title="Open in Logseq">{m.page}</a>
               <p>{m.text}</p>
             </li>
@@ -269,6 +388,7 @@ export default function Hud() {
           {!memory.length && <li className="empty">Nothing remembered yet.</li>}
         </ul>
       </section>
+      </div>
     </div>
   );
 }
