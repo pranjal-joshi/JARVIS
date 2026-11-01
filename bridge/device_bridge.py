@@ -14,6 +14,7 @@ Safety:
 """
 
 import ctypes
+import difflib
 import hmac
 import json
 import logging
@@ -172,12 +173,21 @@ def _devices() -> list[dict]:
 
 def _device(a: dict) -> str:
     """The adb id of an allowed device: the one named (model, serial or id), or the only one."""
-    want = str(a.get("device") or "").strip().lower()
-    ok = [d for d in _devices() if d["allowed"]]
-    if want:
-        ok = [d for d in ok if want in (d["id"].lower(), d.get("serial", "").lower()) or want in d["model"].lower()]
-    if not ok:
+    norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
+    want = norm(a.get("device") or "")
+    if want in ("none", "null", "phone", "myphone", "default", "any"):
+        want = ""
+    allowed = [d for d in _devices() if d["allowed"]]
+    if not allowed:
         raise ActionError("no allowed Android device connected (see adb_devices; add its serial to DEVICE_ADB_ALLOW)")
+    ok = allowed
+    if want:
+        named = [d for d in allowed if want in (norm(d["id"]), norm(d.get("serial", "")))
+                 or want in norm(d["model"]) or norm(d["model"]) in want]
+        # a small model often invents a device name ("user_phone", "Pixel 9"); with one phone that's harmless
+        ok = named or (allowed if len(allowed) == 1 else [])
+    if not ok:
+        raise ActionError("no allowed device matches that name; devices: " + ", ".join(d["model"] or d["id"] for d in allowed))
     if len(ok) > 1:
         raise ActionError("several allowed devices: say which one (" + ", ".join(d["model"] or d["id"] for d in ok) + ")")
     return ok[0]["id"]
@@ -217,16 +227,20 @@ PKG = re.compile(r"^[A-Za-z][\w]*(\.[A-Za-z][\w]*)+$")
 
 def adb_open_app(a: dict) -> str:
     s = _device(a)
-    pkg = str(a.get("package", "")).strip()
-    if not PKG.match(pkg):
-        name = pkg.lower()
-        pkgs = [l.removeprefix("package:") for l in adb("shell", "pm", "list", "packages", serial=s).splitlines()]
-        hits = [p for p in pkgs if name and name.replace(" ", "") in p.lower()]
+    want = str(a.get("package", "")).strip()
+    # only apps with a launcher icon; the model often guesses package names, so check every guess
+    out = adb("shell", "cmd", "package", "query-activities", "--brief", "-a", "android.intent.action.MAIN",
+              "-c", "android.intent.category.LAUNCHER", serial=s)
+    apps = sorted({l.strip().split("/")[0] for l in out.splitlines() if "/" in l})
+    if want not in apps:
+        key = re.sub(r"[^a-z0-9]", "", want.lower().rsplit(".", 1)[-1] if PKG.match(want) else want.lower())
+        hits = [p for p in apps if key and key in re.sub(r"[^a-z0-9]", "", p.lower())]
         if len(hits) != 1:
-            raise ActionError(f"give the package name; matches: {', '.join(hits[:8]) or 'none'}")
-        pkg = hits[0]
-    adb("shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1", serial=s)
-    return f"Opened {pkg}."
+            close = hits or difflib.get_close_matches(key, apps, n=5, cutoff=0.3)
+            raise ActionError(f"no single app matches {want!r}; candidates: {', '.join(close[:6]) or 'none'}")
+        want = hits[0]
+    adb("shell", "monkey", "-p", want, "-c", "android.intent.category.LAUNCHER", "1", serial=s)
+    return f"Opened {want}."
 
 
 KEYS = {"play_pause": 85, "next": 87, "previous": 88, "volume_up": 24, "volume_down": 25, "mute": 164,
@@ -474,6 +488,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"detail": "not found"})
         if not self._authorised():
             return self._send(401, {"detail": "unauthorised"})
+        body = {}
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length > 16_000:
@@ -487,7 +502,7 @@ class Handler(BaseHTTPRequestHandler):
             log.info("action=%s ok secs=%.1f", name, time.monotonic() - start)
             self._send(200, {"result": result})
         except (ActionError, ValueError, TypeError) as e:
-            log.info("action failed: %s", e)
+            log.info("action=%s failed (%s)", body.get("action") if isinstance(body, dict) else "?", type(e).__name__)  # no details: they can hold names and numbers
             self._send(400, {"detail": str(e)})
         except subprocess.TimeoutExpired:
             self._send(504, {"detail": "the device took too long"})

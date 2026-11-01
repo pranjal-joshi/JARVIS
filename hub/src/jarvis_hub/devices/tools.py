@@ -11,7 +11,7 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.config import Settings
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
-DEVICE = {"device": {"type": "string", "description": "phone model or serial; empty if only one"}}
+DEVICE = {"device": {"type": "string", "description": "leave empty unless several phones are connected; then the model or serial from adb_devices"}}
 WIN_KEYS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 ADB_KEYS = WIN_KEYS[:3] + ["volume_up", "volume_down", "mute", "home", "back", "wake", "sleep"]
 

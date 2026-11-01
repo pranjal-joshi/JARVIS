@@ -5,6 +5,7 @@ sending SMS / WhatsApp messages and placing calls. No root and no app on the pho
 Pure helpers (parsers) are kept free of adb so they can be tested on sample output.
 """
 
+import difflib
 import re
 import shlex
 import time
@@ -79,6 +80,39 @@ def parse_rows(output: str, fields: list[str]) -> list[dict]:
     return rows
 
 
+def _plain(name: str) -> str:
+    """Lowercase letters/digits/spaces only: "Sanika ❤️" -> "sanika"."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]|_", " ", name.lower())).strip()
+
+
+def rank_contacts(rows: list[dict], query: str) -> tuple[int, list[dict]]:
+    """Best tier of contacts matching `query`, with its hits (unique name+number):
+    1 the whole name, 2 a word of the name before any "(nickname)", 3 anywhere (nicknames too),
+    4 a close spelling only (a suggestion), 0 nothing."""
+    q = _plain(query)
+    tiers: dict[int, list[dict]] = {1: [], 2: [], 3: [], 4: []}
+    seen = set()
+    for r in rows:
+        name, num = r["display_name"], re.sub(r"[\s()-]", "", r["data1"])
+        if not q or (name, num) in seen:
+            continue
+        seen.add((name, num))
+        full, main = _plain(name), _plain(name.split("(")[0])
+        hit = {"name": name, "number": num}
+        if full == q or main == q:
+            tiers[1].append(hit)
+        elif re.search(rf"\b{re.escape(q)}\b", main):
+            tiers[2].append(hit)
+        elif q in full:
+            tiers[3].append(hit)
+        elif any(difflib.SequenceMatcher(None, q, w).ratio() >= 0.8 for w in [main, *main.split()]):
+            tiers[4].append(hit)
+    for t in (1, 2, 3, 4):
+        if tiers[t]:
+            return t, tiers[t]
+    return 0, []
+
+
 def find_button(xml: str, labels: tuple[str, ...]) -> tuple[int, int] | None:
     """Centre of the first clickable node whose text or content-desc starts with one of `labels`."""
     for node in re.finditer(r"<node [^>]*>", xml):
@@ -126,28 +160,26 @@ class Comms:
     def contacts(self, s: str, name: str) -> list[dict]:
         out = self.shell(s, "content", "query", "--uri", "content://com.android.contacts/data/phones",
                          "--projection", "display_name:data1")
-        rows = parse_rows(out, ["display_name", "data1"])
-        want = name.lower().strip()
-        seen, hits = set(), []
-        for r in rows:
-            num = re.sub(r"[\s()-]", "", r["data1"])
-            if want in r["display_name"].lower() and (r["display_name"], num) not in seen:
-                seen.add((r["display_name"], num))
-                hits.append({"name": r["display_name"], "number": num})
-        return hits[:10]
+        return rank_contacts(parse_rows(out, ["display_name", "data1"]), name)[1][:10]
 
     def resolve(self, s: str, to: str) -> tuple[str, str]:
-        """A phone number for `to` (a number, or a contact name with exactly one number)."""
+        """A phone number for `to`: a number, or a contact name that clearly means one person.
+        A near miss (e.g. a speech-to-text typo) is suggested, never picked: the message must not go
+        to someone the user didn't name."""
         to = to.strip()
         if NUMBER.match(to):
             return re.sub(r"[\s()-]", "", to), to
-        hits = self.contacts(s, to)
-        exact = [h for h in hits if h["name"].lower() == to.lower()] or hits
-        if len({h["number"] for h in exact}) == 1:
-            return exact[0]["number"], exact[0]["name"]
+        out = self.shell(s, "content", "query", "--uri", "content://com.android.contacts/data/phones",
+                         "--projection", "display_name:data1")
+        tier, hits = rank_contacts(parse_rows(out, ["display_name", "data1"]), to)
+        if tier and tier < 4 and len({h["number"] for h in hits}) == 1:
+            return hits[0]["number"], hits[0]["name"]
+        listing = "; ".join(f"{h['name']} {h['number']}" for h in hits[:6])
         if not hits:
             raise self.Error(f"no contact matches {to!r}; give a number")
-        raise self.Error("several matches: " + "; ".join(f"{h['name']} {h['number']}" for h in hits[:6]))
+        if tier == 4:
+            raise self.Error(f"no contact called {to!r}; did you mean: {listing}? Ask the user which.")
+        raise self.Error(f"{to!r} matches several numbers: {listing}. Ask the user which.")
 
     def press(self, s: str, labels: tuple[str, ...], wait: float = 2.5) -> bool:
         """Wait for the screen to settle, find a button by its label and tap it."""

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from android_comms import find_button, parse_notifications, parse_rows, sh  # noqa: E402
+from android_comms import find_button, parse_notifications, parse_rows, rank_contacts, sh  # noqa: E402
 
 DUMP = """
 Current Notification Manager state:
@@ -66,3 +66,21 @@ def test_send_button_found_by_label():
 def test_shell_quoting_keeps_text_as_one_argument():
     assert sh("am", "start", "--es", "sms_body", "it's 5 o'clock; rm -rf /") == \
         "am start --es sms_body 'it'\"'\"'s 5 o'\"'\"'clock; rm -rf /'"
+
+
+ROWS = [{"display_name": n, "data1": d} for n, d in [
+    ("Sanika ❤️", "+91 80000 00001"), ("Prachi Kulkarni (Sanika)", "+910000000002"),
+    ("Deepa Kulkarni (Sanika)", "+910000000003"), ("Sanika Patil", "+910000000004"),
+    ("Rahul Mehta", "+910000000005"), ("Rahul Mehta", "+910000000005")]]
+
+
+def test_contact_whole_name_beats_nickname_and_partial_matches():
+    assert rank_contacts(ROWS, "Sanika") == (1, [{"name": "Sanika ❤️", "number": "+918000000001"}])
+    assert rank_contacts(ROWS, "rahul")[0] == 2 and len(rank_contacts(ROWS, "rahul")[1]) == 1  # duplicate rows merged
+    assert rank_contacts(ROWS, "Kulkarni")[0] == 2
+
+
+def test_misspelt_contact_is_only_a_suggestion():
+    tier, hits = rank_contacts(ROWS, "Saniqa")
+    assert tier == 4 and {h["name"] for h in hits} >= {"Sanika ❤️", "Sanika Patil"}
+    assert rank_contacts(ROWS, "Zed") == (0, [])
