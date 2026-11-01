@@ -89,7 +89,7 @@
       <label for="out">Output</label>
       <select id="out">
         <option value="speaker">Satellite speaker (this page)</option>
-        <option value="sendspin" disabled>Sendspin player (hub not serving yet)</option>
+        <option value="sendspin" id="ssopt" disabled>Sendspin player (checking…)</option>
       </select>
       <label><input type="checkbox" id="mute"> mute</label>
     </div>
@@ -175,7 +175,25 @@ async function startRec() {
 
 // ---- speaker: sentences play in order as their audio arrives ----
 let turn = 0, playing = null;
-function stopAudio() { try { playing?.stop(); } catch {} playing = null; }
+let ssUntil = 0; // Sendspin: when the players should finish what's been queued (performance.now() ms)
+function stopAudio() {
+  try { playing?.stop(); } catch {} playing = null;
+  if (ssUntil > performance.now()) { ssUntil = 0; fetch("/api/sendspin/stop", { method: "POST" }).catch(() => {}); }
+}
+// Sendspin output: the emulator queues each sentence on the players and returns at once; the
+// page only estimates playback from the WAV length to keep the ring "replying" meanwhile.
+async function sendspinPlay(blob, mine) {
+  const r = await fetch("/api/sendspin/play", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || `sendspin HTTP ${r.status}`);
+  if (!j.players) log("err", "SENDSPIN", "no players connected: sentence dropped");
+  if (mine === turn) ssUntil = Math.max(ssUntil, performance.now()) + j.duration_s * 1000;
+}
+async function sendspinDrain(mine) {
+  const meter = setInterval(() => { level = 0.12 + Math.random() * 0.12; }, 120);
+  while (mine === turn && performance.now() < ssUntil) await new Promise((r) => setTimeout(r, 100));
+  clearInterval(meter); level = 0;
+}
 async function play(blob, mine) {
   const ctx = new AudioContext();
   const b = await ctx.decodeAudioData(await blob.arrayBuffer());
@@ -196,15 +214,17 @@ function speaker(mine) {
       const t0 = performance.now();
       const audio = fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: text }) })
         .then((r) => (r.ok && r.status !== 204 ? r.blob() : null)).catch(() => null);
+      const viaSendspin = $("out").value === "sendspin";
       chain = chain.then(async () => {
         const blob = await audio;
         if (!blob || mine !== turn) return;
-        log("tts", "TTS", `${text.trim()} (${Math.round(performance.now() - t0)} ms)`);
+        log("tts", "TTS", `${text.trim()} (${Math.round(performance.now() - t0)} ms)${viaSendspin ? " → sendspin" : ""}`);
         setState("replying");
-        await play(blob, mine);
+        if (viaSendspin) await sendspinPlay(blob, mine).catch((e) => log("err", "SENDSPIN", String(e.message || e)));
+        else await play(blob, mine);
       });
     },
-    done: () => chain,
+    done: () => chain.then(() => sendspinDrain(mine)),
   };
 }
 function sentenceEnd(s) {
@@ -279,6 +299,17 @@ $("say").addEventListener("submit", (e) => {
   e.preventDefault(); const t = $("text").value.trim(); if (!t) return;
   $("text").value = ""; log("wake", "WAKE", "typed (as if spoken)"); converse(t);
 });
+// Sendspin output: offered once the emulator's Sendspin server is up; shows the connected players
+async function sendspinStatus() {
+  const s = await fetch("/api/sendspin/status").then((r) => r.json()).catch(() => null);
+  const opt = $("ssopt");
+  opt.disabled = !s?.running;
+  opt.textContent = s?.running
+    ? `Sendspin player (${s.players.length} connected${s.players.length ? ": " + s.players.join(", ") : ""})`
+    : `Sendspin player (${s?.enabled ? "server failed: " + (s.error || "?") : "not running"})`;
+  if (opt.disabled && $("out").value === "sendspin") $("out").value = "speaker";
+}
+sendspinStatus(); setInterval(sendspinStatus, 5000);
 fetch("/api/info").then((r) => r.json()).then((i) => { $("name").textContent = `${i.name} · source=satellite · hub ${i.hub}`; });
 </script>
 </body>

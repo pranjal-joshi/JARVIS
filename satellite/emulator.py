@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["aiosendspin[server]==10.2.2"]  # only for the optional Sendspin output
+# ///
 """Satellite emulator: a stand-in for an ESPHome voice satellite (e.g. Home Assistant Voice PE),
 so the hub's satellite path can be exercised without hardware.
 
@@ -6,12 +10,15 @@ it as source=satellite: short spoken answers, and it can never approve an action
 
 Runs on the host, bound to 127.0.0.1 (browsers allow the microphone on localhost without HTTPS).
 Standard library only:  uv run --no-project python satellite/emulator.py   ->  http://127.0.0.1:8792
+With the Sendspin output (aiosendspin, from the inline metadata above, in uv's cache only):
+                         uv run --script satellite/emulator.py
 """
 
 import json
 import logging
 import os
 import uuid
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -38,6 +45,24 @@ TOKEN = CFG.get("HUB_TOKEN_SATELLITE", "")
 PORT = int(CFG.get("SATELLITE_EMULATOR_PORT", "8792"))
 NAME = CFG.get("SATELLITE_NAME", "Satellite (emulated)")
 MAX_BODY = 10 * 1024 * 1024
+SENDSPIN_PORT = int(CFG.get("SATELLITE_SENDSPIN_PORT", "8927"))
+SENDSPIN = None  # SendspinOut once started; None = Sendspin unavailable, the page plays replies itself
+
+
+def start_sendspin() -> None:
+    """Optional: a Sendspin server for speaking replies on players. Any failure leaves it off."""
+    global SENDSPIN
+    if CFG.get("SATELLITE_SENDSPIN", "true").lower() in ("0", "false", "no", "off"):
+        return log.info("sendspin output disabled (SATELLITE_SENDSPIN=false)")
+    try:
+        from sendspin_out import SendspinOut
+    except ImportError as e:
+        return log.info("sendspin output off (%s); run with `uv run --script` to enable it", e)
+    out = SendspinOut(NAME, SENDSPIN_PORT, CFG.get("SATELLITE_SENDSPIN_HOST", "0.0.0.0"),
+                      identity_file=ROOT / "data" / "satellite" / "sendspin_identity.key",
+                      discover=CFG.get("SATELLITE_SENDSPIN_DISCOVER", "false").lower() == "true")
+    if out.start():
+        SENDSPIN = out
 
 
 def hub(path: str, data: bytes | None, ctype: str | None, timeout: float = 200):
@@ -67,6 +92,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/info":
             return self._json(200, {"name": NAME, "hub": HUB, "token": bool(TOKEN)})
+        if self.path == "/api/sendspin/status":
+            if not SENDSPIN:
+                return self._json(200, {"enabled": False, "running": False, "players": []})
+            return self._json(200, SENDSPIN.call(SENDSPIN.status(), 5))
         self._json(404, {"detail": "not found"})
 
     def do_POST(self) -> None:
@@ -84,6 +113,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/tts":
                 with hub("audio/speech", body, "application/json", 60) as r:
                     return self._send(r.status, r.read(), r.headers.get("Content-Type", "audio/wav"))
+            if self.path.startswith("/api/sendspin/"):
+                return self._sendspin(body)
             if self.path == "/api/chat":  # stream the hub's SSE straight through
                 req = json.loads(body or b"{}")
                 payload = json.dumps({"model": "jarvis", "stream": True,
@@ -105,6 +136,22 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _sendspin(self, body: bytes) -> None:
+        if not SENDSPIN:
+            return self._json(503, {"detail": "sendspin output not running"})
+        try:
+            if self.path == "/api/sendspin/play":  # one sentence's WAV -> queued on every player
+                return self._json(200, SENDSPIN.call(SENDSPIN.play_wav(body)))
+            if self.path == "/api/sendspin/stop":  # barge-in: drop what's still queued
+                SENDSPIN.call(SENDSPIN.stop(), 5)
+                return self._json(200, {"ok": True})
+            self._json(404, {"detail": "not found"})
+        except (wave.Error, EOFError, ValueError) as e:
+            self._json(400, {"detail": f"bad audio: {e}"})
+        except Exception as e:  # timeouts, stream errors: report it, keep serving
+            log.warning("%s failed: %r", self.path, e)
+            self._json(500, {"detail": f"{type(e).__name__}: {e}"})
+
     def log_message(self, fmt: str, *args) -> None:
         log.debug(fmt, *args)
 
@@ -113,9 +160,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if not TOKEN or TOKEN == "change-me":
         raise SystemExit("set HUB_TOKEN_SATELLITE in .env first")
+    start_sendspin()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     log.info("satellite emulator on http://127.0.0.1:%d -> hub %s", PORT, HUB)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if SENDSPIN:
+            SENDSPIN.close()
 
 
 if __name__ == "__main__":
