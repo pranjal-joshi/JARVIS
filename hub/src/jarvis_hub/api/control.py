@@ -148,7 +148,8 @@ async def _device_bridge(request: Request, action: str, args: dict | None = None
             r = await c.post(s.device_bridge_url.rstrip("/") + "/v1/act", json={"action": action, "args": args or {}},
                              headers={"Authorization": f"Bearer {token}"})
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"device bridge unreachable ({type(e).__name__})") from e
+        raise HTTPException(502, f"device bridge not running on this PC ({type(e).__name__}). Start it with: "
+                                 "uv run --no-project python bridge/device_bridge.py") from e
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     if r.status_code != 200:
         raise HTTPException(r.status_code, body.get("detail") or "device bridge error")

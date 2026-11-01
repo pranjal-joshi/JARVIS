@@ -21,7 +21,9 @@ const server = https.createServer(tls, (req, res) => {
     res.writeHead(r.statusCode, r.headers);
     r.pipe(res);
   });
-  up.on("error", () => { res.writeHead(502); res.end("upstream down"); });
+  // upstream gone mid-response (e.g. next dev restarting): just cut this response, never crash the proxy
+  up.on("error", () => { if (res.headersSent) res.destroy(); else { res.writeHead(502); res.end("upstream down"); } });
+  res.on("error", () => up.destroy());
   req.pipe(up);
 });
 
