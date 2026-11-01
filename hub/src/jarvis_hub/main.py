@@ -16,6 +16,7 @@ from jarvis_hub.config import get_settings
 from jarvis_hub.events.bus import EventBus
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
+from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.kb.tools import register_kb_tools, write_daily_summary
 from jarvis_hub.llm.client import LLMClient
 from jarvis_hub.mcp.registry import ToolRegistry
@@ -65,6 +66,8 @@ async def lifespan(app: FastAPI):
     st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
     st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url)
     register_kb_tools(st.tools, st.kb_graph, st.kb_index)
+    if register_expert_tool(st.tools, s):
+        log.info("ask_expert enabled via %s", s.expert_bridge_url)
     await st.tools.load_mcp(s.mcp_config)
     st.voice = VoiceService(
         whisper_uri=s.whisper_uri, piper_uri=s.piper_uri, engine=s.tts_engine,

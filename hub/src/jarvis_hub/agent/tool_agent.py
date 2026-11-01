@@ -60,10 +60,17 @@ class ToolAgent:
                 return self._reply(bus, source, request_id, text or "Done, sir.")
             convo.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": calls})
+            final = None
             for call in calls:
                 result = await self._run_tool(call, source, request_id, bus)
                 convo.append({"role": "tool", "tool_call_id": call.get("id", ""),
                               "content": result})
+                tool = self.tools.get(call.get("function", {}).get("name", ""))
+                body = _unfence(result)
+                if tool and tool.final_answer and body is not None and not body.startswith("ERROR"):
+                    final = body
+            if final is not None:
+                return self._reply(bus, source, request_id, final)
             bus.publish(Event("thinking", source, request_id, {"step": step + 1}))
         return self._reply(bus, source, request_id,
                            "I seem to be going in circles, sir. Shall we try that differently?")
@@ -117,6 +124,13 @@ class ToolAgent:
     def _reply(bus: EventBus, source: Source, request_id: str, text: str) -> str:
         bus.publish(Event("reply", source, request_id, {"text": text}))
         return text
+
+
+def _unfence(result: str) -> str | None:
+    """Tool output without the <tool_result> fence; None if the tool never ran."""
+    if not result.startswith("<tool_result"):
+        return None
+    return result.split("\n", 1)[1].rsplit("\n</tool_result>", 1)[0].strip()
 
 
 def _fakes_tool_use(text: str) -> bool:

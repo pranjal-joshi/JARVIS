@@ -68,6 +68,12 @@ It uses ~1.4 of the ~1.5 GB free, so STT, TTS and embeddings (`jarvis-embed-cpu`
 Measured: 2–4 s per reply with tool lookups, against 11–57 s for qwen3.5:4b on CPU. The 2b model is
 weaker at tool judgement; the hub catches replies that fake a tool call as text and never reports them as done.
 
+## Expert uplink (optional)
+
+For hard questions JARVIS can consult Claude Code or opencode on this machine (`ask_expert`).
+Run `uv run --no-project python -I bridge/expert_bridge.py` on the host; each question needs your
+approval in the HUD and the expert runs answer-only, with no tools. See [bridge/README.md](bridge/README.md).
+
 ## Security model
 
 - **Source by token.** Each client has its own bearer token (`HUB_TOKEN_SATELLITE/WEB/PHONE`). The token,

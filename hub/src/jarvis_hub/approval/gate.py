@@ -18,10 +18,12 @@ class Risk(StrEnum):
     READ = "read"
     WRITE = "write"
     DESTRUCTIVE = "destructive"
+    # sends data off this machine (e.g. a cloud model): needs approval like a write
+    EXTERNAL = "external"
 
     @property
     def rank(self) -> int:
-        return {"read": 0, "write": 1, "destructive": 2}[self.value]
+        return {"read": 0, "write": 1, "external": 1, "destructive": 2}[self.value]
 
 
 @dataclass

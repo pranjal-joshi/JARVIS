@@ -128,3 +128,15 @@ def test_faked_tool_result_is_retried_then_refused(parts):
     llm = FakeLLM([fake, fake])
     reply = asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus))
     assert "Nothing was changed" in reply and calls == []
+
+
+def test_final_answer_tool_output_is_the_reply(parts):
+    bus, gate, audit, reg, _ = parts
+
+    async def expert(args, ctx):
+        return "Forty-two.\n\n— claude · m (1 s)"
+
+    reg.add(Tool("ask_expert", "expert", "x", {}, Risk.READ, expert, final_answer=True))
+    llm = FakeLLM([call("ask_expert", question="q"), say("should not be used")])
+    reply = asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus))
+    assert reply.startswith("Forty-two.") and len(llm.seen) == 1

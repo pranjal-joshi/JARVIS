@@ -41,6 +41,8 @@ class Tool:
     call: ToolFn
     # Writes confined to the agent's own jarvis/ namespace and journal: audited, not gated.
     self_scoped: bool = False
+    # The tool's own output is the reply (e.g. an expert answer the small model would only paraphrase badly).
+    final_answer: bool = False
 
     def openai_schema(self) -> dict:
         return {"type": "function", "function": {

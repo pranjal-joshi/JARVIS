@@ -30,6 +30,8 @@ export function describe(tool = "", args = {}) {
     case "kb_remember": return { glyph: "✎", title: "MEMORY WRITE", detail: clip(a.fact) };
     case "kb_journal": return { glyph: "✎", title: "LOG ENTRY", detail: clip(a.text) };
     case "kb_append_to_page": return { glyph: "✎", title: "PAGE EDIT", detail: clip(a.page) };
+    case "ask_expert":
+      return { glyph: "⟁", title: `EXPERT UPLINK · ${a.engine === "opencode" ? "OPENCODE" : "CLAUDE"}`, detail: quoted(a.question) };
   }
   const base = tool.includes("__") ? tool.split("__").pop() : tool;
   if (HA[base]) {
@@ -56,6 +58,10 @@ export function insight(tool, status, preview = "") {
     return n ? `${n} open` : "clear";
   }
   if (tool?.startsWith("kb_") && /remember|journal|append/.test(tool)) return "saved";
+  if (tool === "ask_expert") {
+    const s = String(preview).match(/\(([\d.]+) s\)/);
+    return s ? `answered · ${Math.round(+s[1])}s` : "answered";
+  }
   return "done";
 }
 

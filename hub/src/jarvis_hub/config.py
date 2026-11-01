@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     voicestudio_tts_model: str = "tts-1"
     voicestudio_voice: str = "jarvis"
 
+    # expert bridge (bridge/expert_bridge.py on the host): empty token = ask_expert tool off
+    expert_bridge_url: str = "http://host.docker.internal:8790"
+    expert_bridge_token: SecretStr = SecretStr("")
+    expert_default_engine: str = "claude"
+    expert_timeout_s: float = 170
+
     def token_sources(self) -> dict[str, Source]:
         """Map each configured bearer token to the source it may speak for.
         Empty or placeholder tokens are treated as disabled."""
