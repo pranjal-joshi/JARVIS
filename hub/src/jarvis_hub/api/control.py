@@ -114,8 +114,11 @@ async def speech(body: SpeechBody, request: Request,
                  _: Source = Depends(require_source)) -> Response:
     if not body.input.strip():
         raise HTTPException(400, "empty input")
+    spoken = to_speech(body.input[:6000])
+    if not spoken:  # nothing sayable (e.g. a code-only reply): stay quiet
+        return Response(status_code=204)
     try:
-        audio, engine = await request.app.state.voice.speak(to_speech(body.input[:6000]))
+        audio, engine = await request.app.state.voice.speak(spoken)
     except VoiceError as e:
         raise HTTPException(502, str(e)) from e
     return Response(audio, media_type="audio/wav", headers={"X-TTS-Engine": engine})

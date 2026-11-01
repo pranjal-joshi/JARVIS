@@ -301,7 +301,7 @@ export default function Hud() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input: text }),
     });
-    if (!r.ok) return;
+    if (!r.ok || r.status === 204) return; // 204: nothing worth saying aloud
     setState("speaking");
     await playAudio(await r.blob(), setAnalyser);
     setAnalyser(null);

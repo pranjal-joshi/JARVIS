@@ -1,12 +1,12 @@
 """Turn an on-screen reply (possibly markdown) into something worth saying aloud.
 
-The HUD shows the full reply; speech gets the prose, without markup, code or tables,
-and stops after a few sentences so long answers don't turn into a lecture."""
+The HUD shows the full reply; speech gets the prose, without markup, code or tables.
+Replies are meant to be short already (the persona caps them); the sentence cap here
+is only a quiet safety net for a runaway answer."""
 
 import re
 
-ON_SCREEN = "The rest is on screen, sir."
-MAX_SPOKEN = 320
+MAX_SPOKEN = 500
 
 _FENCE = re.compile(r"```.*?(```|$)", re.S)
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.M)
@@ -26,11 +26,9 @@ _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
 def to_speech(text: str, max_chars: int = MAX_SPOKEN) -> str:
-    cut = False
-    out, n = _FENCE.subn(" ", text)
-    cut |= n > 0
-    out, n = _TABLE_ROW.subn("", out)
-    cut |= n > 0
+    """Spoken form of a reply; "" when nothing in it is worth saying (e.g. only code)."""
+    out = _FENCE.sub(" ", text)
+    out = _TABLE_ROW.sub("", out)
     out = _SIGNATURE.sub("", out)
     out = _LINK.sub(r"\1", out)
     for rx, rep in _MARKS:
@@ -45,9 +43,7 @@ def to_speech(text: str, max_chars: int = MAX_SPOKEN) -> str:
             if spoken and len(spoken) + len(s) > max_chars:
                 break
             spoken = f"{spoken} {s}".strip()
-        out, cut = spoken[:max_chars], True
+        out = spoken[:max_chars]
     if out.endswith(":"):
         out = out[:-1] + "."
-    if cut:
-        out = f"{out} {ON_SCREEN}".strip()
-    return out or ON_SCREEN
+    return out
