@@ -15,9 +15,10 @@ class LLMError(RuntimeError):
 
 class LLMClient:
     def __init__(self, base_url: str, api_key: str, model: str, timeout_s: float = 180,
-                 extra_body: dict | None = None) -> None:
+                 extra_body: dict | None = None, per_model: dict | None = None) -> None:
         self.model = model
         self._extra = extra_body or {}
+        self._per_model = per_model or {}  # model -> extra fields overriding extra_body
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -26,7 +27,7 @@ class LLMClient:
 
     async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         """Return the assistant message dict (content and/or tool_calls)."""
-        body = {"model": self.model, "messages": messages, **self._extra}
+        body = {"model": self.model, "messages": messages, **self._extra, **self._per_model.get(self.model, {})}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

@@ -6,6 +6,7 @@ const ALLOWED = [
   /^approvals(\/[\w-]+)?$/,
   /^audit$/,
   /^status$/,
+  /^llm$/,
   /^kb\/(search|graph|memory|tasks|sync|daily-summary)$/,
   /^audio\/(transcriptions|speech)$/,
 ];

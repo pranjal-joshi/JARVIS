@@ -132,6 +132,8 @@ export default function Hud() {
   const [approvals, setApprovals] = useState([]);
   const [memory, setMemory] = useState([]);
   const [status, setStatus] = useState(null);
+  const [models, setModels] = useState([]);
+  const [switching, setSwitching] = useState(false);
   const [link, setLink] = useState("connecting");
   const [speak, setSpeak] = useState(true);
   const [leaving, setLeaving] = useState(() => new Set());
@@ -190,6 +192,8 @@ export default function Hud() {
           risk: r.risk, status: r.status, preview: r.result || "", source: r.source, by: r.approved_by })));
       }
       if (s.ok) setStatus(await s.json());
+      const l = await api("llm");
+      if (l.ok) setModels((await l.json()).models || []);
       if (p.ok) setApprovals(await p.json());
       refreshMemory();
     })();
@@ -341,6 +345,17 @@ export default function Hud() {
     }
   };
 
+  const switchModel = async (model) => {
+    setSwitching(true);
+    try {
+      const r = await api("llm", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }) });
+      if (r.ok) setStatus((s) => ({ ...s, llm: { ...s?.llm, model } }));
+    } finally {
+      setSwitching(false);
+    }
+  };
+
   const decide = async (id, approved) => {
     await api(`approvals/${id}`, {
       method: "POST",
@@ -365,7 +380,16 @@ export default function Hud() {
         <h1>J.A.R.V.I.S.</h1>
         <div className="chips">
           <span className={`chip ${link}`}>link {link}</span>
-          {status && <span className="chip">llm {status.llm?.model} {status.llm?.up ? "●" : "○"}</span>}
+          {status && (models.length > 1 ? (
+            <label className={`chip model-pick${switching ? " busy" : ""}`} title="Language model">
+              llm
+              <select value={status.llm?.model || ""} disabled={switching} aria-label="Language model"
+                onChange={(e) => switchModel(e.target.value)}>
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              {status.llm?.up ? "●" : "○"}
+            </label>
+          ) : <span className="chip">llm {status.llm?.model} {status.llm?.up ? "●" : "○"}</span>)}
           {status && <span className="chip">kb {status.kb?.vector ? "vector" : "keyword"}</span>}
           {status && <span className="chip">tts {status.voice?.voicestudio === "up" ? "jarvis" : "piper"}</span>}
           {status && <span className="chip">tools {status.tools?.length}</span>}

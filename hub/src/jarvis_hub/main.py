@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,7 +63,13 @@ async def lifespan(app: FastAPI):
     st.gate = ApprovalGate(st.bus, s.approval_timeout_s)
     st.tools = ToolRegistry()
     st.llm = LLMClient(s.llm_base_url, s.llm_api_key.get_secret_value(), s.llm_model,
-                       s.llm_timeout_s, s.llm_extra())
+                       s.llm_timeout_s, s.llm_extra(), s.llm_per_model())
+    # the model picked in the HUD survives restarts (only if still allowed)
+    st.llm_choice_file = Path(s.hub_db_path).with_name("llm_model.txt")
+    if st.llm_choice_file.exists():
+        saved = st.llm_choice_file.read_text().strip()
+        if saved in s.llm_choices():
+            st.llm.model = saved
     embedder = LLMClient(s.embed_base_url, s.llm_api_key.get_secret_value(), s.embed_model)
     st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
     st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url)

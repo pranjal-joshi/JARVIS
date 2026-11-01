@@ -798,3 +798,20 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
 /* mic button: icon centred exactly (no glyph baseline offset) */
 .mic { line-height: 0; }
 .mic svg { display: block; flex: none; filter: drop-shadow(0 0 4px currentColor); }
+
+/* header model picker: looks like the other chips */
+.model-pick { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.model-pick select {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dashed var(--cyan-dim);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.model-pick select:focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; }
+.model-pick select option { background: #04070a; color: var(--cyan); }
+.model-pick.busy { color: var(--amber); border-color: rgba(255, 179, 71, 0.6); }

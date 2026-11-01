@@ -1,5 +1,7 @@
 """Hub endpoints for the UI and phone: approvals, audit, knowledge base, voice, status."""
 
+import asyncio
+import logging
 import time
 from datetime import date
 
@@ -15,6 +17,7 @@ from jarvis_hub.voice.service import VoiceError
 from jarvis_hub.voice.speakable import to_speech
 
 router = APIRouter(prefix="/v1")
+log = logging.getLogger(__name__)
 
 
 def require_approver(source: Source = Depends(require_source)) -> Source:
@@ -124,7 +127,7 @@ async def status(request: Request, _: Source = Depends(require_source)) -> dict:
     s = request.app.state
     return {
         "time": time.time(),
-        "llm": {"model": s.settings.llm_model, "up": await s.llm.ping()} if s.llm else None,
+        "llm": {"model": s.llm.model, "up": await s.llm.ping()} if s.llm else None,
         "mcp": s.tools.status,
         "tools": s.tools.describe(),
         "kb": {"graph": s.kb_graph.name, "vector": s.kb_index.vector_ready,
@@ -132,3 +135,33 @@ async def status(request: Request, _: Source = Depends(require_source)) -> dict:
         "voice": await s.voice.status(),
         "pending_approvals": len(s.gate.pending()),
     }
+
+
+# ---------- model choice ----------
+class ModelBody(BaseModel):
+    model: str
+
+
+@router.get("/llm")
+async def llm_get(request: Request, _: Source = Depends(require_source)) -> dict:
+    s = request.app.state
+    return {"model": s.llm.model, "models": s.settings.llm_choices()}
+
+
+@router.post("/llm")
+async def llm_set(body: ModelBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    s = request.app.state
+    if body.model not in s.settings.llm_choices():
+        raise HTTPException(400, "model not in LLM_MODELS")
+    s.llm.model = body.model
+    s.llm_choice_file.write_text(body.model)
+    log.info("LLM switched to %s", body.model)
+
+    async def warm() -> None:  # load it now, so the next reply doesn't pay the load time
+        try:
+            await s.llm.chat([{"role": "user", "content": "ok"}])
+        except Exception as e:
+            log.info("warm-up of %s failed: %s", body.model, e)
+
+    asyncio.create_task(warm())
+    return {"model": s.llm.model, "models": s.settings.llm_choices()}

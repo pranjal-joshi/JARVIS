@@ -30,9 +30,13 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://ollama:11434/v1"
     llm_api_key: SecretStr = SecretStr("ollama")
     llm_model: str = "qwen3.5:4b"
+    # models the HUD may switch between at runtime (comma list); llm_model is always included
+    llm_models: str = ""
     llm_timeout_s: float = 180
     # JSON merged into every chat request, e.g. {"reasoning_effort": "none"}
     llm_extra_body: str = "{}"
+    # per-model overrides of llm_extra_body, JSON {"model": {...}} (e.g. thinking on for one model)
+    llm_model_extra: str = "{}"
     approval_timeout_s: float = 90
 
     mcp_config: str = "../mcp/servers.yaml"
@@ -78,6 +82,13 @@ class Settings(BaseSettings):
 
     def llm_extra(self) -> dict:
         return json.loads(self.llm_extra_body or "{}")
+
+    def llm_per_model(self) -> dict:
+        return json.loads(self.llm_model_extra or "{}")
+
+    def llm_choices(self) -> list[str]:
+        extra = [m.strip() for m in self.llm_models.split(",") if m.strip()]
+        return list(dict.fromkeys([self.llm_model, *extra]))
 
 
 @lru_cache
