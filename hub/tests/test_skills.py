@@ -56,3 +56,36 @@ def test_timer_event_triggers_timer_skill(tmp_path):
 
     asyncio.run(scenario())
     assert len(agent.prompts) == 1
+
+
+def test_new_phone_notification_and_ringing_become_events(tmp_path):
+    g = LogseqGraph(str(tmp_path / "kb"))
+    eng = SkillEngine(g, EventBus(), FakeAgent(), Settings(), tmp_path / "skills.json")
+    seen = []
+    eng.emit = lambda kind, text, data=None: seen.append((kind, text))
+    note = {"key": "k1", "app": "WhatsApp", "title": "Asha", "text": "hi", "pkg": "com.whatsapp", "when": 1}
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, phones):
+            self._p = phones
+
+        def json(self):
+            return {"result": self._p}
+
+    class Client:
+        def __init__(self, rounds):
+            self.rounds = rounds
+
+        async def post(self, *a, **k):
+            return Resp(self.rounds.pop(0))
+
+    idle, ring = {"state": "idle", "number": ""}, {"state": "ringing", "number": "+911234"}
+    c = Client([[{"serial": "s", "model": "Pixel", "notifications": [note], "call": idle}],  # primes
+                [{"serial": "s", "model": "Pixel", "notifications": [note, {**note, "key": "k2", "text": "yo"}],
+                  "call": ring}]])
+    asyncio.run(eng._watch_phones(c, "u", "t"))
+    assert seen == []
+    asyncio.run(eng._watch_phones(c, "u", "t"))
+    assert seen == [("notification", "WhatsApp: Asha — yo"), ("call_incoming", "+911234 on Pixel")]

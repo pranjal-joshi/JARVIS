@@ -95,3 +95,23 @@ with the one-time code, and adb connects to it. Then press **allow** so JARVIS m
 `data/adb-allow.json`, alongside `DEVICE_ADB_ALLOW`). Repeat for each phone; all stay connected at
 once, and every `adb_*` tool takes a `device` (model or serial) when more than one is allowed.
 Pairing and allowing are HUD-only: the model has no tool for them.
+
+## Messages, calls and notifications
+
+No app on the phone and no root: the bridge uses `adb shell` (content providers for SMS, call log
+and contacts; `dumpsys notification` for notifications; intents plus a UI dump to press **Send**).
+
+| Tool | What | Approval |
+|---|---|---|
+| `adb_notifications` | recent notifications, any app (WhatsApp, Messages, Gmail...), filter by app | no |
+| `adb_sms_read`, `adb_call_log`, `adb_contacts` | inbox, recent calls, a contact's number | no |
+| `adb_call_answer`, `adb_call_end` | answer / hang up | no |
+| `adb_sms_send`, `adb_whatsapp_send`, `adb_call` | send / call a number or contact name | yes, each time |
+
+Sending needs the phone unlocked (the bridge refuses when it sees the lock screen) and the screen
+on; it opens the chat with the text filled in and presses Send. If it can't find Send (an unusual
+SMS app, a WhatsApp update), it says so and leaves the message ready on the phone. A contact name
+must match exactly one number, otherwise you get the matches to choose from.
+
+Some phones (Xiaomi/MIUI, some Samsung builds) block `content query` for SMS or the call log from
+adb; those tools then return the phone's error. Notifications still work there.

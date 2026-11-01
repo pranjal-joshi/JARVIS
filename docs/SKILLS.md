@@ -14,6 +14,8 @@ match:: Pixel
 |---|---|---|
 | `device_joined` / `device_left` | an Android device connects / disconnects over ADB (polled every 10 s via the device bridge) | model and serial |
 | `timer_done` | a `set_timer` timer ends | the timer label |
+| `notification` | a new notification on an allowed phone (WhatsApp, SMS, mail, any app; polled every 10 s) | "App: title — text" |
+| `call_incoming` | an allowed phone starts ringing | caller number and phone model |
 | `schedule` | `schedule:: 07:30` (daily) or `schedule:: every 30m` / `every 2h` | – |
 
 HUD header → **skills**: every skill page with its trigger, **enable** / **on**, and **run** (test it now).

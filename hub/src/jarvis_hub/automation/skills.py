@@ -7,7 +7,8 @@ are the instructions JARVIS follows, e.g. page `skills/Phone joined`:
     match:: Pixel
     - Tell me the phone's battery level and open Spotify on it.
 
-Triggers: device_joined, device_left (Android over ADB), timer_done, schedule.
+Triggers: device_joined, device_left (Android over ADB), timer_done, schedule, notification (any new phone
+notification: WhatsApp, SMS, mail...), call_incoming.
 `match::` (optional) must appear in the event text (device model/serial, timer label).
 `schedule::` for trigger schedule: a daily time like `07:30`, or an interval like `every 30m` / `every 2h`.
 
@@ -35,7 +36,7 @@ from jarvis_hub.kb.graph import LogseqGraph, Page
 
 log = logging.getLogger(__name__)
 NS = "skills/"
-TRIGGERS = {"device_joined", "device_left", "timer_done", "schedule"}
+TRIGGERS = {"device_joined", "device_left", "timer_done", "schedule", "notification", "call_incoming"}
 EVERY = re.compile(r"^every\s+(\d+)\s*([mh])$", re.I)
 DAILY = re.compile(r"^(\d{1,2}):(\d{2})$")
 RUN_SOURCE = Source.WEB  # results show on the HUD; approvals go to the HUD/phone as usual
@@ -52,6 +53,8 @@ class SkillEngine:
         self.enabled: dict[str, str] = self._load()  # skill name (lower) -> pinned sha256
         self.last_run: dict[str, float] = {}
         self.devices: dict[str, dict] | None = None  # serial -> device, None until first poll
+        self.seen_notes: dict[str, set[str]] = {}  # serial -> notification keys already reported
+        self.ringing: dict[str, bool] = {}
         self.recent: list[dict] = []  # recent events, newest first, for the HUD
         self._tasks: list[asyncio.Task] = []
         self._running: set[str] = set()
@@ -158,9 +161,31 @@ class SkillEngine:
                                 d = self.devices[k]
                                 self.emit("device_left", f"{d.get('model') or d['id']} ({k})", d)
                         self.devices = now
+                    if self.devices:
+                        await self._watch_phones(c, url, token)
                 except (httpx.HTTPError, KeyError, ValueError):
                     pass  # bridge down: try again next round
                 await asyncio.sleep(10)
+
+    async def _watch_phones(self, c: httpx.AsyncClient, url: str, token: str) -> None:
+        """New notifications and incoming calls on allowed phones become hook events."""
+        r = await c.post(url, json={"action": "adb_watch"}, headers={"Authorization": f"Bearer {token}"})
+        if r.status_code != 200:
+            return
+        for ph in r.json()["result"]:
+            serial, notes = ph["serial"], ph["notifications"]
+            keys = {n["key"] + n["text"] for n in notes}
+            if serial in self.seen_notes:  # the first look at a phone only primes what's already there
+                for n in notes:
+                    if n["key"] + n["text"] not in self.seen_notes[serial]:
+                        self.emit("notification", (f"{n['app']}: {n['title']}" + (f" — {n['text']}" if n["text"] else ""))[:300],
+                                  {**n, "device": ph["model"]})
+            self.seen_notes[serial] = keys
+            ringing = ph["call"]["state"] == "ringing"
+            if ringing and not self.ringing.get(serial):
+                self.emit("call_incoming", f"{ph['call']['number'] or 'unknown number'} on {ph['model']}",
+                          {"number": ph["call"]["number"], "device": ph["model"]})
+            self.ringing[serial] = ringing
 
     async def _watch_schedules(self) -> None:
         while True:

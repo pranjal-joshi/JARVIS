@@ -27,6 +27,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from android_comms import Comms
+
 ROOT = Path(__file__).resolve().parent.parent
 log = logging.getLogger("device-bridge")
 
@@ -368,11 +370,80 @@ def adb_allow(a: dict) -> str:
     return f"{serial} {'allowed' if a.get('allowed', True) else 'no longer allowed'}."
 
 
+# ---------------------------------------------------------------- calls, messages, notifications
+comms = Comms(adb, ActionError)
+
+
+def _when(ts: int) -> str:
+    return time.strftime("%d %b %H:%M", time.localtime(ts)) if ts else "?"
+
+
+def adb_notifications(a: dict) -> str:
+    items = comms.notifications(_device(a), str(a.get("app") or ""), int(a.get("limit") or 15))
+    if not items:
+        return "No notifications."
+    return "\n".join(f"[{_when(n['when'])}] {n['app']}: {n['title']}" + (f" — {n['text']}" if n["text"] else "") for n in items)
+
+
+def adb_sms_read(a: dict) -> str:
+    rows = comms.sms(_device(a), str(a.get("sender") or ""), int(a.get("limit") or 10))
+    return "\n".join(f"[{_when(r['when'])}] {'(unread) ' if r['unread'] else ''}{r['from']}: {r['text']}"
+                     for r in rows) or "No messages."
+
+
+def adb_call_log(a: dict) -> str:
+    rows = comms.calls(_device(a), int(a.get("limit") or 10))
+    return "\n".join(f"[{_when(r['when'])}] {r['kind']} {r['name'] or r['number']}"
+                     + (f" ({r['seconds']} s)" if r["seconds"] else "") for r in rows) or "No calls."
+
+
+def adb_contacts(a: dict) -> str:
+    hits = comms.contacts(_device(a), str(a.get("name", "")))
+    return "\n".join(f"{h['name']}: {h['number']}" for h in hits) or "No matching contacts."
+
+
+def adb_sms_send(a: dict) -> str:
+    return comms.send_sms(_device(a), str(a.get("to", "")), str(a.get("text", ""))[:1000])
+
+
+def adb_whatsapp_send(a: dict) -> str:
+    return comms.send_whatsapp(_device(a), str(a.get("to", "")), str(a.get("text", ""))[:2000],
+                               bool(a.get("business")))
+
+
+def adb_call(a: dict) -> str:
+    return comms.call(_device(a), str(a.get("to", "")))
+
+
+def adb_call_answer(a: dict) -> str:
+    return comms.call_key(_device(a), "answer")
+
+
+def adb_call_end(a: dict) -> str:
+    return comms.call_key(_device(a), "end")
+
+
+def adb_watch(_: dict) -> list[dict]:
+    """For the hub's hooks: each allowed device's current notifications and call state."""
+    out = []
+    for d in _devices():
+        if d["state"] != "device" or not d["allowed"]:
+            continue
+        try:
+            out.append({"serial": d["serial"], "model": d["model"],
+                        "notifications": comms.notifications(d["id"], limit=30), "call": comms.call_state(d["id"])})
+        except (ActionError, subprocess.TimeoutExpired):
+            continue
+    return out
+
+
 ACTIONS = {f.__name__: f for f in (
     win_info, win_media, win_open, win_lock, win_screenshot,
     adb_devices, adb_info, adb_screenshot, adb_open_app, adb_key, adb_tap, adb_type,
     adb_shell, adb_install, adb_uninstall, adb_connect,
-    adb_pair_start, adb_pair_status, adb_list, adb_allow)}
+    adb_pair_start, adb_pair_status, adb_list, adb_allow,
+    adb_notifications, adb_sms_read, adb_call_log, adb_contacts, adb_sms_send, adb_whatsapp_send,
+    adb_call, adb_call_answer, adb_call_end, adb_watch)}
 
 
 class Handler(BaseHTTPRequestHandler):

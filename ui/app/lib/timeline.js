@@ -41,6 +41,15 @@ export function describe(tool = "", args = {}) {
     case "list_timers": return { glyph: "◴", title: "TIMERS", detail: "running" };
     case "cancel_timer": return { glyph: "◴", title: "TIMER CANCEL", detail: clip(a.label) };
     case "kb_forget": return { glyph: "✖", title: "MEMORY ERASE", detail: clip(a.page) };
+    case "adb_notifications": return { glyph: "◉", title: "NOTIFICATIONS", detail: clip(a.app || "all apps") };
+    case "adb_sms_read": return { glyph: "✉", title: "SMS READ", detail: clip(a.sender || "inbox") };
+    case "adb_call_log": return { glyph: "☏", title: "CALL LOG", detail: "recent calls" };
+    case "adb_contacts": return { glyph: "☏", title: "CONTACT LOOKUP", detail: clip(a.name) };
+    case "adb_sms_send": return { glyph: "✉", title: "SMS SEND", detail: clip(`${a.to}: ${a.text}`) };
+    case "adb_whatsapp_send": return { glyph: "✉", title: "WHATSAPP SEND", detail: clip(`${a.to}: ${a.text}`) };
+    case "adb_call": return { glyph: "☏", title: "CALL", detail: clip(a.to) };
+    case "adb_call_answer": return { glyph: "☏", title: "ANSWER CALL", detail: "" };
+    case "adb_call_end": return { glyph: "☏", title: "HANG UP", detail: "" };
     case "kb_clear_memory": return { glyph: "✖", title: "MEMORY WIPE", detail: "all jarvis/ pages" };
     case "kb_delete_page": return { glyph: "✖", title: "PAGE DELETE", detail: clip(a.page) };
     case "kb_delete_item": return { glyph: "✖", title: "ITEM DELETE", detail: clip(`${a.page}: ${a.match}`) };
