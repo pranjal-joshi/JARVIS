@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     expert_bridge_token: SecretStr = SecretStr("")
     expert_default_engine: str = "claude"
     expert_timeout_s: float = 170
+    # web search (Firecrawl, free plan): empty key = web_search tool off
+    firecrawl_api_key: SecretStr = SecretStr("")
+    web_search_approval: bool = True  # the query leaves this machine: ask each time unless set false
 
     def token_sources(self) -> dict[str, Source]:
         """Map each configured bearer token to the source it may speak for.

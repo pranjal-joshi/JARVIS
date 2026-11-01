@@ -794,3 +794,7 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   }
 }
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+/* mic button: icon centred exactly (no glyph baseline offset) */
+.mic { line-height: 0; }
+.mic svg { display: block; flex: none; filter: drop-shadow(0 0 4px currentColor); }

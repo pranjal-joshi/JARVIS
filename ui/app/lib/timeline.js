@@ -30,6 +30,7 @@ export function describe(tool = "", args = {}) {
     case "kb_remember": return { glyph: "✎", title: "MEMORY WRITE", detail: clip(a.fact) };
     case "kb_journal": return { glyph: "✎", title: "LOG ENTRY", detail: clip(a.text) };
     case "kb_append_to_page": return { glyph: "✎", title: "PAGE EDIT", detail: clip(a.page) };
+    case "web_search": return { glyph: "⌖", title: "NET SWEEP", detail: quoted(a.query) };
     case "ask_expert":
       return { glyph: "⟁", title: `EXPERT UPLINK · ${a.engine === "opencode" ? "OPENCODE" : "CLAUDE"}`, detail: quoted(a.question) };
   }
@@ -58,6 +59,10 @@ export function insight(tool, status, preview = "") {
     return n ? `${n} open` : "clear";
   }
   if (tool?.startsWith("kb_") && /remember|journal|append/.test(tool)) return "saved";
+  if (tool === "web_search") {
+    const n = (String(preview).match(/^- /gm) || []).length;
+    return n ? `${n} sources` : "no signal";
+  }
   if (tool === "ask_expert") {
     const s = String(preview).match(/\(([\d.]+) s\)/);
     return s ? `answered · ${Math.round(+s[1])}s` : "answered";

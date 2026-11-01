@@ -51,8 +51,9 @@ TOKEN = CFG.get("EXPERT_BRIDGE_TOKEN", "")
 PORT = int(CFG.get("EXPERT_BRIDGE_PORT", "8790"))
 TIMEOUT = int(CFG.get("EXPERT_TIMEOUT_S", "150"))
 ENGINES = {
-    "claude": {"model": CFG.get("EXPERT_CLAUDE_MODEL", "")},
-    "opencode": {"model": CFG.get("EXPERT_OPENCODE_MODEL", "opencode/big-pickle")},
+    "claude": {"model": CFG.get("EXPERT_CLAUDE_MODEL", ""), "effort": CFG.get("EXPERT_CLAUDE_EFFORT", "")},
+    "opencode": {"model": CFG.get("EXPERT_OPENCODE_MODEL", "opencode/big-pickle"),
+                 "effort": CFG.get("EXPERT_OPENCODE_VARIANT", "")},
 }
 DEFAULT_ENGINE = CFG.get("EXPERT_DEFAULT_ENGINE", "claude")
 
@@ -85,11 +86,13 @@ def _exe(name: str) -> str:
     return path
 
 
-def run_claude(prompt: str, model: str) -> tuple[str, str]:
+def run_claude(prompt: str, model: str, effort: str = "") -> tuple[str, str]:
     cmd = [_exe("claude"), "-p", prompt, "--tools", "", "--strict-mcp-config", "--no-session-persistence",
            "--permission-mode", "dontAsk", "--output-format", "json", "--append-system-prompt", SYSTEM]
     if model:
         cmd += ["--model", model]
+    if effort:  # low, medium, high, xhigh, max
+        cmd += ["--effort", effort]
     p = subprocess.run(cmd, cwd=SANDBOX, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=TIMEOUT)
     try:
@@ -102,9 +105,11 @@ def run_claude(prompt: str, model: str) -> tuple[str, str]:
     return str(out.get("result", "")).strip(), used
 
 
-def run_opencode(prompt: str, model: str) -> tuple[str, str]:
+def run_opencode(prompt: str, model: str, effort: str = "") -> tuple[str, str]:
     cmd = [_exe("opencode"), "run", "--pure", "--print-logs", "--log-level", "ERROR", "-m", model,
            f"{SYSTEM}\n\n{prompt}"]
+    if effort:  # provider-specific reasoning variant, e.g. minimal, low, high
+        cmd[-1:-1] = ["--variant", effort]
     p = subprocess.Popen(cmd, cwd=SANDBOX, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     err: list[str] = []
@@ -144,7 +149,7 @@ def ask(question: str, context: str, engine: str) -> dict:
         raise EngineError("the expert is busy with another question")
     try:
         start = time.monotonic()
-        answer, model = RUNNERS[engine](prompt, ENGINES[engine]["model"])
+        answer, model = RUNNERS[engine](prompt, ENGINES[engine]["model"], ENGINES[engine]["effort"])
         secs = round(time.monotonic() - start, 1)
     finally:
         _busy.release()
@@ -173,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorised():
             return self._send(401, {"detail": "unauthorised"})
         self._send(200, {"status": "ok", "default": DEFAULT_ENGINE,
-                         "engines": {k: {"installed": bool(shutil.which(k)), "model": v["model"] or "default"}
+                         "engines": {k: {"installed": bool(shutil.which(k)), "model": v["model"] or "default", "effort": v["effort"] or "default"}
                                      for k, v in ENGINES.items()}})
 
     def do_POST(self) -> None:

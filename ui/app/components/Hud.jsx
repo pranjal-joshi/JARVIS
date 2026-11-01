@@ -107,6 +107,18 @@ function Message({ m, latest }) {
   );
 }
 
+// line icons, drawn on a 24px grid so they sit dead centre in the round button
+const MicIcon = () => (
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor"
+    strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" />
+  </svg>
+);
+const StopIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor" /></svg>
+);
+
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -309,13 +321,23 @@ export default function Hud() {
       }
       return send(text);
     }
+    const say_ = (text) => setMessages((m) => [...m, { role: "assistant", text }]);
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      // browsers only allow the mic on https:// or localhost
+      say_("I can't hear you on this connection, sir. Browsers only allow the microphone over HTTPS; "
+        + "open the https:// address instead, or type.");
+      return;
+    }
     try {
       const rec = await startRecording();
       recording.current = rec;
       setAnalyser(rec.analyser);
       setState("listening");
-    } catch {
-      setState("error");
+    } catch (e) {
+      const denied = e?.name === "NotAllowedError" || e?.name === "SecurityError";
+      say_(denied ? "The microphone is blocked for this page, sir. Allow it in the browser's site settings."
+        : "I couldn't reach a microphone, sir.");
+      setState("idle");
     }
   };
 
@@ -414,7 +436,7 @@ export default function Hud() {
         <form className="input reveal" style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
           <button type="button" className={`mic ${state === "listening" ? "on" : ""}`} onClick={toggleMic}
             aria-label={state === "listening" ? "Stop and send" : "Speak"} aria-pressed={state === "listening"}>
-            {state === "listening" ? "■" : "◉"}
+            {state === "listening" ? <StopIcon /> : <MicIcon />}
           </button>
           <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Speak or type, sir…"
             aria-label="Message JARVIS" autoComplete="off" />
