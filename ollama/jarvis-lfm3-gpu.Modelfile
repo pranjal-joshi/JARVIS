@@ -1,0 +1,5 @@
+# LiquidAI LFM3-1.7B (LFM Open License v1.0), AtomicChat GGUF at Q4_K_M (~1.1 GB), every layer on the GPU.
+# Ollama's auto-fit puts only ~42% of it on a 2 GB MX550; forcing all layers fits like jarvis-2b-gpu.
+# Native tool calling works on ollama 0.40.13 (architecture lfm3).
+FROM hf.co/AtomicChat/LFM3-1.7B-GGUF:AD-Q4_K_M
+PARAMETER num_gpu 99

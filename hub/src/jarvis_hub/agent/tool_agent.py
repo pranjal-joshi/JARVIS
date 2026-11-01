@@ -70,7 +70,7 @@ class ToolAgent:
                     continue
                 return self._reply(bus, source, request_id, text or "Done, sir.")
             convo.append({"role": "assistant", "content": msg.get("content") or "",
-                          "tool_calls": calls})
+                          "tool_calls": calls, **({"_claude": msg["_claude"]} if msg.get("_claude") else {})})
             final = None
             for call in calls:
                 result = await self._run_tool(call, source, request_id, bus)

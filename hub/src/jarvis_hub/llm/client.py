@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import Callable
 
+import anthropic
 import httpx
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ class LLMClient:
         self.model = model
         self._extra = extra_body or {}
         self._per_model = per_model or {}  # model -> extra fields overriding extra_body
+        self._claude = None  # ClaudeChat, set by use_claude(); used while self.model is a Claude id
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -30,6 +32,13 @@ class LLMClient:
                    on_text: Callable[[str], None] | None = None) -> dict:
         """Return the assistant message dict (content and/or tool_calls).
         With on_text, the reply is streamed and on_text gets the content so far as it grows."""
+        if self.model.startswith("claude-"):
+            if self._claude is None:
+                raise LLMError("a Claude model is selected but ANTHROPIC_API_KEY is not set")
+            try:
+                return await self._claude.chat(self.model, messages, tools, on_text)
+            except anthropic.APIError as e:
+                raise LLMError(f"Claude request failed: {type(e).__name__}: {getattr(e, 'message', e)}") from e
         body = {"model": self.model, "messages": messages, **self._extra, **self._per_model.get(self.model, {})}
         if tools:
             body["tools"] = tools
@@ -87,7 +96,13 @@ class LLMClient:
         data = sorted(r.json()["data"], key=lambda d: d["index"])
         return [d["embedding"] for d in data]
 
+    def use_claude(self, api_key: str, effort: str) -> None:
+        from jarvis_hub.llm.claude import ClaudeChat
+        self._claude = ClaudeChat(api_key, effort)
+
     async def ping(self) -> bool:
+        if self.model.startswith("claude-"):
+            return self._claude is not None
         try:
             r = await self._http.get("/models", timeout=5)
             return r.status_code == 200

@@ -25,6 +25,12 @@ const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explor
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
 
+// Model picker names: where each model runs matters (a cloud model sees the conversation).
+const MODEL_NAMES = { "claude-haiku-5-5": "Haiku 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-opus-5-5": "Opus 5.5" };
+const modelLabel = (m) => (m.startsWith("claude-")
+  ? `${MODEL_NAMES[m] || m} · cloud`
+  : `${m.replace(/^hf\.co\/[^/]+\//, "").replace(/-GGUF:.*$/i, "")} · local`);
+
 // Pages the user attached are sent with the question, marked as their own notes.
 const withContext = (text, pages) => (pages.length
   ? pages.map((p) => `[Note from my knowledge base: "${p.name}"]\n${p.text.slice(0, 3000)}`).join("\n\n")
@@ -662,9 +668,9 @@ export default function Hud() {
           {models.length > 1 && (
             <label className={`chip model-pick${switching ? " busy" : ""}`} title="Language model">
               llm
-              <select value={status.llm?.model || ""} disabled={switching} aria-label="Language model"
+              <select value={status?.llm?.model || ""} disabled={switching} aria-label="Language model"
                 onChange={(e) => switchModel(e.target.value)}>
-                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                {models.map((m) => <option key={m} value={m}>{modelLabel(m)}</option>)}
               </select>
             </label>
           )}

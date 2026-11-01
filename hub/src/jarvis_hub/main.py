@@ -65,8 +65,10 @@ async def lifespan(app: FastAPI):
     st.audit = AuditStore(s.hub_db_path)
     st.gate = ApprovalGate(st.bus, s.approval_timeout_s)
     st.tools = ToolRegistry()
-    st.llm = LLMClient(s.llm_base_url, s.llm_api_key.get_secret_value(), s.llm_model,
+    st.llm = LLMClient(s.llm_base_url, s.llm_api_key.get_secret_value(), s.default_llm(),
                        s.llm_timeout_s, s.llm_extra(), s.llm_per_model())
+    if s.claude_ready():
+        st.llm.use_claude(s.anthropic_api_key.get_secret_value(), s.claude_effort)
     # the model picked in the HUD survives restarts (only if still allowed)
     st.llm_choice_file = Path(s.hub_db_path).with_name("llm_model.txt")
     if st.llm_choice_file.exists():

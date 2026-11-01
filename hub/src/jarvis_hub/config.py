@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # per-model overrides of llm_extra_body, JSON {"model": {...}} (e.g. thinking on for one model)
     llm_model_extra: str = "{}"
     approval_timeout_s: float = 90
+    # Claude models (ids starting "claude-") go to the Anthropic API instead of llm_base_url.
+    # Empty key = Claude models are hidden from the model picker and never used.
+    anthropic_api_key: SecretStr = SecretStr("")
+    claude_effort: str = "low"  # low keeps spoken replies quick; medium/high think longer
     # risk levels that wait for approval (comma list of read, write, external, destructive);
     # everything else runs straight away and is audited
     approval_risks: str = "destructive,external"
@@ -96,9 +100,18 @@ class Settings(BaseSettings):
     def llm_per_model(self) -> dict:
         return json.loads(self.llm_model_extra or "{}")
 
+    def claude_ready(self) -> bool:
+        return bool(self.anthropic_api_key.get_secret_value())
+
     def llm_choices(self) -> list[str]:
         extra = [m.strip() for m in self.llm_models.split(",") if m.strip()]
-        return list(dict.fromkeys([self.llm_model, *extra]))
+        models = list(dict.fromkeys([self.llm_model, *extra]))
+        return [m for m in models if not m.startswith("claude-") or self.claude_ready()]
+
+    def default_llm(self) -> str:
+        """LLM_MODEL, or the first local choice when it names Claude but no API key is set."""
+        choices = self.llm_choices()
+        return self.llm_model if self.llm_model in choices else (choices[0] if choices else self.llm_model)
 
 
 @lru_cache
