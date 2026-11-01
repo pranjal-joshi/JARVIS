@@ -10,7 +10,7 @@ from typing import Literal
 from jarvis_hub.config import Source
 
 EventType = Literal[
-    "thinking", "kb_retrieved", "tool_call", "tool_result", "reply", "approval_request", "timer"
+    "thinking", "kb_retrieved", "tool_call", "tool_result", "reply", "approval_request", "approval_resolved", "timer"
 ]
 
 

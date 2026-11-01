@@ -71,6 +71,9 @@ class ApprovalGate:
             return Decision(False, "timeout")
         finally:
             self._pending.pop(p.id, None)
+            # decided, timed out or cancelled: approver screens drop the card
+            for approver in APPROVER_SOURCES:
+                self._bus.publish(Event("approval_resolved", approver, request_id, {"approval_id": p.id}))
 
     def decide(self, approval_id: str, approved: bool, by: Source) -> bool:
         if by not in APPROVER_SOURCES:

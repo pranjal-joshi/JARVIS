@@ -372,6 +372,8 @@ export default function Hud() {
             kbTimer.current = setTimeout(() => setKbActive(false), 9000);
             if (kb.kind === "write" && kb.status === "ok") setKbVersion((v) => v + 1);
           }
+          if (ev.type === "approval_resolved")
+            setApprovals((a) => a.filter((x) => x.approval_id !== ev.data.approval_id));
           if (ev.type === "approval_request") {
             setApprovals((a) => (a.some((x) => x.approval_id === ev.data.approval_id) ? a : [...a, ev.data]));
             setTab("talk"); // phone: an approval card always comes to the front
