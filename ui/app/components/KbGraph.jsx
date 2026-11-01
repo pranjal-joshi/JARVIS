@@ -14,6 +14,7 @@ const C = {
   read: "#7fe7ff",
   write: "#ffb347",
   link: "rgba(127,231,255,0.16)",
+  select: "#eafcff",
 };
 const LIT_MS = 9000; // a touched page stays lit this long, then fades to ambient
 
@@ -61,8 +62,11 @@ function core() {
 const baseColor = (n) => (n.journal ? C.journal : n.jarvis ? C.jarvis : C.page);
 const baseSize = (n) => 10 + Math.sqrt(n.blocks || 0) * 3.5;
 
-export default function KbGraph({ pulse, active, version, onStats }) {
+export default function KbGraph({ pulse, active, version, onStats, interactive = false, selected = null, onPick }) {
   const host = useRef(null);
+  // interactive (explorer) mode: click picks a page, nodes drag, the camera is the user's
+  const live = useRef({ selected, onPick });
+  live.current = { selected, onPick };
   const api = useRef(null); // { graph, lit, reduced, flyTo, refreshLinks, load }
 
   // mount the renderer once
@@ -83,7 +87,7 @@ export default function KbGraph({ pulse, active, version, onStats }) {
     })
       .backgroundColor("rgba(0,0,0,0)")
       .showNavInfo(false)
-      .enableNodeDrag(false)
+      .enableNodeDrag(interactive)
       .nodeLabel((n) => `<div class="kb-tip"><b>${esc(n.label)}</b>${n.blocks ? `<span>${n.blocks} blocks</span>` : ""}</div>`)
       .nodeThreeObject((n) => {
         const sprite = (map, opacity, additive) => new Sprite(new SpriteMaterial({
@@ -130,8 +134,13 @@ export default function KbGraph({ pulse, active, version, onStats }) {
     graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     graph.scene().fog = new FogExp2(0x04070a, 0.0006);
     // compact layout: small KB, small panel
-    graph.d3Force("charge").strength(-28).distanceMax(90);
-    graph.d3Force("link").distance(26);
+    graph.d3Force("charge").strength(interactive ? -60 : -28).distanceMax(interactive ? 180 : 90);
+    graph.d3Force("link").distance(interactive ? 40 : 26);
+    if (interactive) {
+      graph.onNodeClick((n) => { live.current.onPick?.(n); flyTo([n.id], 900); controls.autoRotate = false; })
+        .onNodeHover((n) => { el.style.cursor = n ? "pointer" : "grab"; })
+        .onBackgroundClick(() => live.current.onPick?.(null));
+    }
     if (reduced) graph.warmupTicks(150).cooldownTicks(0); // static layout, computed up front
     else graph.cooldownTime(6000).d3VelocityDecay(0.3);
 
@@ -139,7 +148,8 @@ export default function KbGraph({ pulse, active, version, onStats }) {
     controls.autoRotate = !reduced;
     controls.autoRotateSpeed = 0.35;
     controls.enableDamping = true;
-    if (narrow) controls.enabled = false; // let touch scroll the stacked page
+    if (narrow && !interactive) controls.enabled = false; // let touch scroll the stacked page
+    if (interactive) controls.addEventListener("start", () => { controls.autoRotate = false; state.busy = true; });
 
     // refit once the layout settles, unless we're focused on touched pages
     const state = { busy: false };
@@ -179,6 +189,7 @@ export default function KbGraph({ pulse, active, version, onStats }) {
         let target = baseColor(n);
         let scale = sz;
         let op = 0.45;
+        const picked = n.id === live.current.selected;
         n.__tag?.classList.toggle("lit", !!L);
         n.__tag?.classList.toggle("write", L?.kind === "write");
         if (L) {
@@ -189,9 +200,14 @@ export default function KbGraph({ pulse, active, version, onStats }) {
           const beat = reduced ? 0 : L.kind === "write" ? Math.abs(Math.sin(t * 5)) * 0.5 : Math.sin(t * 3) * 0.2;
           scale = sz * (1 + (1.1 + beat) * fade);
           op = 0.55 + 0.45 * fade;
+        } else if (picked) {
+          target = C.select;
+          scale = sz * (1.9 + (reduced ? 0 : 0.15 * Math.sin(now / 240)));
+          op = 0.95;
         } else if (!reduced) {
           op = 0.5 + 0.08 * Math.sin(now / 900 + sz);
         }
+        n.__tag?.classList.toggle("picked", picked);
         s.material.color.lerp(tmp.set(target), reduced ? 1 : 0.12);
         n.__core?.material.color.copy(s.material.color);
         s.material.opacity += (op - s.material.opacity) * (reduced ? 1 : 0.15);
@@ -240,7 +256,17 @@ export default function KbGraph({ pulse, active, version, onStats }) {
       el.replaceChildren();
       api.current = null;
     };
-  }, [onStats]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onStats, interactive]);
+
+  // explorer: a page picked from the list (or a link) flies the camera to it too
+  useEffect(() => {
+    const a = api.current;
+    if (!a || !interactive || !selected) return;
+    a.controls.autoRotate = false;
+    a.state.busy = true;
+    a.flyTo([selected], 900);
+  }, [selected, interactive]);
 
   // refetch after writes so new pages appear
   useEffect(() => {
@@ -278,5 +304,5 @@ export default function KbGraph({ pulse, active, version, onStats }) {
     a.controls.autoRotate = !a.reduced;
   }, [active]);
 
-  return <div ref={host} className="kb-canvas" />;
+  return <div ref={host} className={`kb-canvas${interactive ? " interactive" : ""}`} />;
 }

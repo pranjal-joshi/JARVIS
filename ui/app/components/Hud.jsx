@@ -17,7 +17,16 @@ const KbGraph = dynamic(() => import("./KbGraph"), {
   loading: () => <div className="kb-canvas kb-loading">initialising graph…</div>,
 });
 
+const KbExplorer = dynamic(() => import("./KbExplorer"), { ssr: false });
+const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explorer
+
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
+
+// Pages the user attached are sent with the question, marked as their own notes.
+const withContext = (text, pages) => (pages.length
+  ? pages.map((p) => `[Note from my knowledge base: "${p.name}"]\n${p.text.slice(0, 3000)}`).join("\n\n")
+    + `\n\n[My question]\n${text}`
+  : text);
 
 // Server-sent events from a fetch body, one parsed JSON object per `data:` line.
 async function* sse(body) {
@@ -145,7 +154,10 @@ function Message({ m, latest }) {
   return (
     <div className={`msg ${m.role}`}>
       <span className="who">{m.role === "user" ? "YOU" : "JARVIS"}</span>
-      <div className="text"><RichText text={text} /></div>
+      <div className="text">
+        {m.pages?.length > 0 && <div className="msg-ctx">{m.pages.map((n) => <span key={n}>◈ {n}</span>)}</div>}
+        <RichText text={text} />
+      </div>
     </div>
   );
 }
@@ -184,6 +196,23 @@ export default function Hud() {
   const [kbPulse, setKbPulse] = useState(null);
   const [kbActive, setKbActive] = useState(false);
   const [kbVersion, setKbVersion] = useState(0);
+  const [kbView, setKbView] = useState("normal"); // normal | min | max
+  const [context, setContext] = useState([]); // [{ name, text }] attached to the next question
+  const addContext = useCallback((p) => setContext((c) => (
+    c.some((x) => x.name.toLowerCase() === p.name.toLowerCase()) ? c : [...c, p].slice(-4))), []);
+  const closeKb = useCallback(() => setKbView("normal"), []);
+  const [dropping, setDropping] = useState(false);
+  const dropPage = async (e) => {
+    e.preventDefault();
+    setDropping(false);
+    const name = e.dataTransfer.getData(PAGE_MIME);
+    if (!name) return;
+    const r = await api(`kb/page?name=${encodeURIComponent(name)}`).catch(() => null);
+    if (r?.ok) {
+      const pg = await r.json();
+      addContext({ name: pg.name, text: pg.blocks.map((b) => `- ${b}`).join("\n") });
+    }
+  };
   const [kbStats, setKbStats] = useState(null);
   const kbTimer = useRef(null);
   const [consoleLines, setConsoleLines] = useState([]);
@@ -376,7 +405,10 @@ export default function Hud() {
     if (!text.trim()) return;
     const mine = ++turn.current;
     stopAudio(); // a new question cuts the previous answer short
-    const history = [...messages, { role: "user", text }];
+    const attached = context;
+    const history = [...messages, { role: "user", text, sent: withContext(text, attached),
+      pages: attached.map((p) => p.name) }];
+    setContext([]);
     setMessages(history);
     setInput("");
     setState("thinking");
@@ -394,7 +426,7 @@ export default function Hud() {
         body: JSON.stringify({
           model: "jarvis",
           stream: true,
-          messages: history.slice(-12).map((m) => ({ role: m.role, content: m.text })),
+          messages: history.slice(-12).map((m) => ({ role: m.role, content: m.sent || m.text })),
         }),
       });
       if (!r.ok || !r.body) {
@@ -558,6 +590,8 @@ export default function Hud() {
   };
 
   return (
+    <>
+    {kbView === "max" && <KbExplorer version={kbVersion} context={context} onAdd={addContext} onClose={closeKb} />}
     <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
         <h1 className={link === "online" ? "" : "offline"} title={`hub link ${link}`}>J.A.R.V.I.S.</h1>
@@ -670,9 +704,22 @@ export default function Hud() {
           {messages.map((m, i) => <Message key={i} m={m} latest={i === messages.length - 1} />)}
         </div>
         {/* the beam animates its own wrapper, so the entrance animation sits on the form */}
+        {context.length > 0 && (
+          <div className="ctx-chips" aria-label="Pages attached to your next question">
+            {context.map((c) => (
+              <span key={c.name} className="ctx-chip">◈ {c.name}
+                <button type="button" aria-label={`Remove ${c.name}`}
+                  onClick={() => setContext((x) => x.filter((y) => y !== c))}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
         <BorderBeam className="input-wrap" size="md" colorVariant="colorful" strength={0.7}
           theme="dark" duration={state === "thinking" ? 1 : 1.96}>
-        <form className="input reveal" style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
+        <form className={`input reveal${dropping ? " dropping" : ""}`} style={{ "--i": 4 }}
+          onSubmit={(e) => { e.preventDefault(); send(input); }}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(PAGE_MIME)) { e.preventDefault(); setDropping(true); } }}
+          onDragLeave={() => setDropping(false)} onDrop={dropPage}>
           <button type="button" className={`mic ${state === "listening" ? "on" : ""}`} onClick={toggleMic}
             aria-label={state === "listening" ? "Stop and send" : "Speak"} aria-pressed={state === "listening"}>
             {state === "listening" ? <StopIcon /> : <MicIcon />}
@@ -686,16 +733,26 @@ export default function Hud() {
       </section>
 
       <div className="side reveal" style={{ "--i": 3 }}>
-      <section className={`panel kb ${shown.kb ? "active" : ""} ${kbPulse?.kind === "write" && shown.kb ? "write" : ""}${shown.focus === "kb" ? " focused" : ""}`}
+      <section className={`panel kb ${shown.kb ? "active" : ""} ${kbPulse?.kind === "write" && shown.kb ? "write" : ""}${shown.focus === "kb" ? " focused" : ""}${kbView === "min" ? " minimized" : ""}`}
         aria-label="Knowledge graph">
-        <h2 {...headProps(pinned === "kb", () => togglePin("kb"), "knowledge graph")}>
-          Knowledge graph
-          <span className="kb-state">
-            {kbActive ? (kbPulse?.kind === "write" ? "writing" : "recall") : kbStats ? `${kbStats.pages} pages` : ""}
-            <b className="expand" aria-hidden="true" />
-          </span>
-        </h2>
-        <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />
+        <div className="kb-head">
+          <h2 {...headProps(pinned === "kb", () => togglePin("kb"), "knowledge graph")}>
+            Knowledge graph
+            <span className="kb-state">
+              {kbActive ? (kbPulse?.kind === "write" ? "writing" : "recall") : kbStats ? `${kbStats.pages} pages` : ""}
+              <b className="expand" aria-hidden="true" />
+            </span>
+          </h2>
+          <div className="win-btns">
+            <button type="button" onClick={() => setKbView((v) => (v === "min" ? "normal" : "min"))}
+              title={kbView === "min" ? "Restore" : "Minimise"} aria-label={kbView === "min" ? "Restore knowledge graph" : "Minimise knowledge graph"}>
+              {kbView === "min" ? "▢" : "–"}
+            </button>
+            <button type="button" onClick={() => setKbView("max")} title="Explore: read pages, add them to chat"
+              aria-label="Open the knowledge graph explorer">⤢</button>
+          </div>
+        </div>
+        {kbView === "normal" && <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />}
         {kbActive && kbPulse?.pages?.length > 0 && (
           <div className="kb-touched" aria-live="polite">
             {kbPulse.kind === "write" ? "✎ " : "◈ "}{[...new Set(kbPulse.pages)].slice(0, 4).join(" · ")}
@@ -732,5 +789,6 @@ export default function Hud() {
         ))}
       </nav>
     </div>
+    </>
   );
 }

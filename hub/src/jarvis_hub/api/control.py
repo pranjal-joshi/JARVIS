@@ -69,6 +69,17 @@ async def kb_memory(request: Request, limit: int = 20,
     return recent_memory(request.app.state.kb_graph, min(limit, 100))
 
 
+@router.get("/kb/page")
+async def kb_page(name: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    g = request.app.state.kb_graph
+    page = g.page(name)
+    if page is None:
+        raise HTTPException(404, "no such page")
+    return {"name": page.name, "journal": page.is_journal, "link": g.deep_link(page.name),
+            "blocks": [b.text for b in page.blocks][:400],
+            "links": sorted({l for b in page.blocks for l in b.links})}
+
+
 @router.get("/kb/tasks")
 async def kb_tasks(request: Request, _: Source = Depends(require_source)) -> list:
     return [t.__dict__ for t in request.app.state.kb_graph.tasks()]

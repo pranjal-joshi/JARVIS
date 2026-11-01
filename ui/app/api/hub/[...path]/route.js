@@ -7,7 +7,7 @@ const ALLOWED = [
   /^audit$/,
   /^status$/,
   /^llm$/,
-  /^kb\/(search|graph|memory|tasks|sync|daily-summary)$/,
+  /^kb\/(search|graph|memory|tasks|sync|daily-summary|page)$/,
   /^audio\/(transcriptions|speech)$/,
 ];
 
