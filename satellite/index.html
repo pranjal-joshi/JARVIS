@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Satellite Emulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #04070a; --panel: rgba(8, 20, 28, 0.62); --edge: rgba(127, 231, 255, 0.22);
+    --cyan: #7fe7ff; --cyan-dim: rgba(127, 231, 255, 0.35); --cyan-faint: rgba(127, 231, 255, 0.08);
+    --amber: #ffb347; --red: #ff5c5c; --violet: #b48bff; --green: #6dffa8; --text: #cdeff7;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace; --display: "Chakra Petch", var(--mono);
+    --led: var(--cyan-faint);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% 30%, #0a1720 0%, var(--bg) 70%); color: var(--text);
+    font: 13px/1.5 var(--mono); display: grid; place-items: center; padding: 16px;
+  }
+  main { width: min(920px, 100%); display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  h1 { grid-column: 1 / -1; margin: 0; font: 600 18px var(--display); letter-spacing: 0.3em; color: var(--cyan); }
+  h1 small { font: 11px var(--mono); letter-spacing: 0.1em; opacity: 0.55; margin-left: 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 16px; }
+  h2 { margin: 0 0 10px; font: 600 11px var(--display); letter-spacing: 0.25em; color: var(--cyan-dim); text-transform: uppercase; }
+
+  /* the device: a puck with a 12-LED ring and one button, like a Voice PE */
+  .device { display: grid; justify-items: center; gap: 14px; }
+  .puck {
+    position: relative; width: 240px; height: 240px; border-radius: 50%;
+    background: radial-gradient(circle at 50% 40%, #12222c, #070d12 70%);
+    box-shadow: inset 0 0 0 1px var(--edge), 0 20px 50px rgba(0, 0, 0, 0.6);
+  }
+  .led {
+    position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px; border-radius: 50%;
+    background: var(--led); transition: background 160ms, box-shadow 160ms;
+  }
+  .btn {
+    position: absolute; inset: 62px; border-radius: 50%; border: 1px solid var(--edge); cursor: pointer;
+    background: radial-gradient(circle at 50% 35%, #183040, #0a141b); color: var(--cyan);
+    font: 600 11px var(--display); letter-spacing: 0.2em; touch-action: none;
+  }
+  .btn:active, .btn.down { background: radial-gradient(circle at 50% 45%, #1d3a4d, #0b1820); }
+  .btn:focus-visible { outline: 1px solid var(--cyan); outline-offset: 4px; }
+  .state { font: 600 13px var(--display); letter-spacing: 0.3em; text-transform: uppercase; }
+  .hint { font-size: 11px; opacity: 0.55; text-align: center; }
+  form { display: flex; gap: 8px; width: 100%; }
+  input[type=text] { flex: 1; min-width: 0; background: #050b0f; border: 1px solid var(--edge); border-radius: 6px;
+    color: var(--text); font: inherit; padding: 8px 10px; }
+  input[type=text]:focus { outline: none; border-color: var(--cyan-dim); }
+  button.plain { background: transparent; border: 1px solid var(--edge); border-radius: 6px; color: var(--cyan);
+    font: 600 11px var(--display); letter-spacing: 0.15em; padding: 0 12px; cursor: pointer; }
+  button.plain:hover { background: var(--cyan-faint); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; width: 100%; font-size: 11px; }
+  .row select { flex: 1; min-width: 0; }
+  .row label { opacity: 0.7; }
+  select { background: #050b0f; color: var(--text); border: 1px solid var(--edge); border-radius: 6px; font: inherit; padding: 4px 6px; }
+
+  .log { display: grid; gap: 8px; max-height: 70vh; overflow: auto; }
+  .ev { display: grid; grid-template-columns: 76px 1fr; gap: 10px; animation: in 240ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .ev .t { opacity: 0.45; font-size: 11px; }
+  .ev b { font: 600 10px var(--display); letter-spacing: 0.2em; margin-right: 6px; }
+  .ev.wake b { color: var(--violet); } .ev.stt b { color: var(--cyan); } .ev.reply b { color: var(--green); }
+  .ev.tts b { color: var(--amber); } .ev.err b { color: var(--red); }
+  .empty { opacity: 0.45; }
+  @keyframes in { from { opacity: 0; transform: translateY(4px); } }
+  @media (prefers-reduced-motion: reduce) { .ev { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>SATELLITE <small id="name">emulated ESPHome voice satellite · source=satellite</small></h1>
+
+  <section class="panel device" aria-label="Satellite device">
+    <h2>Device</h2>
+    <div class="puck" id="puck">
+      <button class="btn" id="btn" type="button" aria-label="Hold to talk">HOLD<br>TO TALK</button>
+    </div>
+    <div class="state" id="state" aria-live="polite">idle</div>
+    <div class="hint">Hold the button (or Space) to talk. Or type what you'd say:</div>
+    <form id="say">
+      <input type="text" id="text" placeholder="e.g. what's the weather in Pune" aria-label="Spoken text" autocomplete="off">
+      <button class="plain" type="submit">SAY</button>
+    </form>
+    <div class="row">
+      <label for="out">Output</label>
+      <select id="out">
+        <option value="speaker">Satellite speaker (this page)</option>
+        <option value="sendspin" disabled>Sendspin player (hub not serving yet)</option>
+      </select>
+      <label><input type="checkbox" id="mute"> mute</label>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Event log">
+    <h2>Pipeline</h2>
+    <div class="log" id="log"><div class="empty">Waiting for a wake… hold the button to start.</div></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COLORS = { idle: "rgba(127,231,255,0.08)", listening: "#b48bff", thinking: "#7fe7ff",
+                 replying: "#6dffa8", error: "#ff5c5c" };
+const N = 12;
+const leds = [...Array(N)].map((_, i) => {
+  const d = document.createElement("div");
+  d.className = "led";
+  const a = (i / N) * Math.PI * 2 - Math.PI / 2;
+  d.style.transform = `translate(${Math.cos(a) * 100}px, ${Math.sin(a) * 100}px)`;
+  $("puck").appendChild(d);
+  return d;
+});
+
+// ---- LED ring: ESPHome-style per-state animation ----
+let state = "idle", level = 0;
+function setState(s) { state = s; $("state").textContent = s; }
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+(function ring(t) {
+  const c = COLORS[state];
+  leds.forEach((l, i) => {
+    let on = 0;
+    if (state === "listening") on = 0.35 + Math.min(1, level * 4) * 0.65;
+    else if (state === "thinking") on = reduce ? 0.8 : ((i - t / 70) % N + N) % N < 3 ? 1 : 0.15;
+    else if (state === "replying") on = reduce ? 0.9 : 0.5 + 0.5 * Math.sin(t / 180 + i * 0.5) * Math.min(1, level * 6 + 0.3);
+    else if (state === "error") on = Math.floor(t / 250) % 2 ? 1 : 0.2;
+    l.style.background = on ? c : "var(--led)";
+    l.style.opacity = state === "idle" ? 1 : on;
+    l.style.boxShadow = on > 0.5 ? `0 0 12px ${c}` : "none";
+  });
+  requestAnimationFrame(ring);
+})(0);
+
+function log(kind, label, text) {
+  const box = $("log");
+  box.querySelector(".empty")?.remove();
+  const d = document.createElement("div");
+  d.className = `ev ${kind}`;
+  d.innerHTML = `<span class="t">${new Date().toLocaleTimeString()}</span><span><b>${label}</b></span>`;
+  d.lastChild.append(text);
+  box.prepend(d);
+}
+
+// ---- mic: record, then 16 kHz mono WAV (what the hub's Whisper path takes) ----
+let rec = null;
+async function startRec() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+  const ctx = new AudioContext();
+  const an = ctx.createAnalyser(); an.fftSize = 256;
+  ctx.createMediaStreamSource(stream).connect(an);
+  const buf = new Uint8Array(an.fftSize);
+  const meter = setInterval(() => { an.getByteTimeDomainData(buf); level = Math.max(...buf.map((v) => Math.abs(v - 128))) / 128; }, 50);
+  const mr = new MediaRecorder(stream); const chunks = [];
+  mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  mr.start();
+  return { async stop() {
+    const done = new Promise((r) => (mr.onstop = r)); mr.stop(); await done;
+    clearInterval(meter); level = 0; stream.getTracks().forEach((t) => t.stop());
+    const decoded = await ctx.decodeAudioData(await new Blob(chunks).arrayBuffer()); ctx.close();
+    const rate = 16000, off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+    const s = off.createBufferSource(); s.buffer = decoded; s.connect(off.destination); s.start();
+    const pcm = (await off.startRendering()).getChannelData(0);
+    const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+    const str = (o, x) => [...x].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+    str(0, "RIFF"); out.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVEfmt "); out.setUint32(16, 16, true);
+    out.setUint16(20, 1, true); out.setUint16(22, 1, true); out.setUint32(24, rate, true); out.setUint32(28, rate * 2, true);
+    out.setUint16(32, 2, true); out.setUint16(34, 16, true); str(36, "data"); out.setUint32(40, pcm.length * 2, true);
+    pcm.forEach((v, i) => { const x = Math.max(-1, Math.min(1, v)); out.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); });
+    return new Blob([out.buffer], { type: "audio/wav" });
+  } };
+}
+
+// ---- speaker: sentences play in order as their audio arrives ----
+let turn = 0, playing = null;
+function stopAudio() { try { playing?.stop(); } catch {} playing = null; }
+async function play(blob, mine) {
+  const ctx = new AudioContext();
+  const b = await ctx.decodeAudioData(await blob.arrayBuffer());
+  if (mine !== turn) return ctx.close();
+  const src = ctx.createBufferSource(); src.buffer = b;
+  const an = ctx.createAnalyser(); an.fftSize = 256; const buf = new Uint8Array(256);
+  src.connect(an).connect(ctx.destination);
+  const meter = setInterval(() => { an.getByteTimeDomainData(buf); level = Math.max(...buf.map((v) => Math.abs(v - 128))) / 128; }, 50);
+  playing = src;
+  await new Promise((r) => { src.onended = r; src.start(); });
+  clearInterval(meter); level = 0; ctx.close();
+}
+function speaker(mine) {
+  let chain = Promise.resolve();
+  return {
+    add(text) {
+      if (!text.trim() || $("mute").checked) return;
+      const t0 = performance.now();
+      const audio = fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: text }) })
+        .then((r) => (r.ok && r.status !== 204 ? r.blob() : null)).catch(() => null);
+      chain = chain.then(async () => {
+        const blob = await audio;
+        if (!blob || mine !== turn) return;
+        log("tts", "TTS", `${text.trim()} (${Math.round(performance.now() - t0)} ms)`);
+        setState("replying");
+        await play(blob, mine);
+      });
+    },
+    done: () => chain,
+  };
+}
+function sentenceEnd(s) {
+  const re = /[.!?…]+["')\]]?\s+|\n\s*\n/g; let m;
+  while ((m = re.exec(s))) { const end = m.index + m[0].length; const head = s.slice(0, end);
+    if ((head.match(/```/g) || []).length % 2) continue; if (head.trim().length >= 12) return end; }
+  return 0;
+}
+
+// ---- one voice turn: text -> hub chat (streamed) -> spoken sentence by sentence ----
+let history = [];
+async function converse(text) {
+  const mine = ++turn; stopAudio();
+  log("stt", "HEARD", text);
+  history = [...history, { role: "user", content: text }].slice(-8);
+  setState("thinking");
+  const voice = speaker(mine);
+  let shown = "", pending = "", final = null;
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: history }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "", first = null;
+    outer: for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true }); let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i).replace(/^data:\s*/, ""); buf = buf.slice(i + 2);
+        if (line === "[DONE]") break outer;
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.jarvis?.reset) { shown = pending = ""; turn++; stopAudio(); continue; }
+        if (ev.jarvis?.final != null) final = ev.jarvis.final;
+        const piece = ev.choices?.[0]?.delta?.content; if (!piece) continue;
+        first ??= Math.round(performance.now() - t0);
+        shown += piece; pending += piece; let cut;
+        while ((cut = sentenceEnd(pending))) { voice.add(pending.slice(0, cut)); pending = pending.slice(cut); }
+      }
+    }
+    const reply = final ?? shown;
+    log("reply", "REPLY", `${reply}${first != null ? `  (first words ${first} ms)` : ""}`);
+    history = [...history, { role: "assistant", content: reply }];
+    if (!shown.trim()) voice.add(reply); else if (pending.trim()) voice.add(pending);
+    await voice.done();
+    if (mine === turn) setState("idle");
+  } catch (e) {
+    log("err", "ERROR", String(e.message || e)); setState("error");
+    setTimeout(() => mine === turn && setState("idle"), 2000);
+  }
+}
+
+// ---- push to talk ----
+async function down() {
+  if (rec) return;
+  turn++; stopAudio();
+  try { rec = await startRec(); } catch (e) { log("err", "MIC", "microphone blocked or missing"); return setState("error"); }
+  $("btn").classList.add("down"); log("wake", "WAKE", "button pressed: listening"); setState("listening");
+}
+async function up() {
+  if (!rec) return;
+  const r = rec; rec = null; $("btn").classList.remove("down"); setState("thinking");
+  const wav = await r.stop();
+  const fd = await fetch("/api/stt", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
+  const text = fd.ok ? (await fd.json()).text?.trim() : "";
+  if (!text) { log("err", "STT", fd.ok ? "heard nothing" : `speech-to-text failed (${fd.status})`); return setState("idle"); }
+  converse(text);
+}
+$("btn").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
+addEventListener("pointerup", up);
+addEventListener("keydown", (e) => { if (e.code === "Space" && document.activeElement?.tagName !== "INPUT" && !e.repeat) { e.preventDefault(); down(); } });
+addEventListener("keyup", (e) => { if (e.code === "Space" && document.activeElement?.tagName !== "INPUT") up(); });
+$("say").addEventListener("submit", (e) => {
+  e.preventDefault(); const t = $("text").value.trim(); if (!t) return;
+  $("text").value = ""; log("wake", "WAKE", "typed (as if spoken)"); converse(t);
+});
+fetch("/api/info").then((r) => r.json()).then((i) => { $("name").textContent = `${i.name} · source=satellite · hub ${i.hub}`; });
+</script>
+</body>
+</html>
