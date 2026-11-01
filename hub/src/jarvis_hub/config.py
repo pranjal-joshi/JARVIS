@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     expert_bridge_token: SecretStr = SecretStr("")
     expert_default_engine: str = "claude"
     expert_timeout_s: float = 170
+    # device bridge (bridge/device_bridge.py on the host): empty token = device tools off
+    device_bridge_url: str = "http://host.docker.internal:8791"
+    device_bridge_token: SecretStr = SecretStr("")
     # web search (Firecrawl, free plan): empty key = web_search tool off
     firecrawl_api_key: SecretStr = SecretStr("")
     web_search_approval: bool = True  # the query leaves this machine: ask each time unless set false

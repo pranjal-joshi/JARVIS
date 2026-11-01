@@ -17,6 +17,7 @@ from jarvis_hub.config import get_settings
 from jarvis_hub.events.bus import EventBus
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
+from jarvis_hub.devices.tools import register_device_tools
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
 from jarvis_hub.kb.tools import register_kb_tools, write_daily_summary
@@ -78,6 +79,8 @@ async def lifespan(app: FastAPI):
     register_utility_tools(st.tools, st.kb_graph, st.kb_index)
     if register_expert_tool(st.tools, s):
         log.info("ask_claude/ask_opencode enabled via %s", s.expert_bridge_url)
+    if register_device_tools(st.tools, s):
+        log.info("device tools enabled via %s", s.device_bridge_url)
     if register_web_search(st.tools, s):
         log.info("web_search enabled (approval %s)", "on" if s.web_search_approval else "off")
     await st.tools.load_mcp(s.mcp_config)

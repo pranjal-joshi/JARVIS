@@ -48,3 +48,41 @@ bridge stopped, `ask_expert` just reports that it isn't reachable.
   "Free usage limit reached" quickly instead of hanging.
 - Claude Code calls count against your Claude plan limits.
 - The PowerShell script variant was blocked by this laptop's security policy, so use the `uv run` line.
+
+# Device bridge (this laptop + Android over ADB)
+
+`device_bridge.py` gives the hub the `win_*` and `adb_*` tools. Same pattern as the expert bridge:
+host-only (127.0.0.1:8791), bearer token, standard library only.
+
+```
+uv run --no-project python bridge/device_bridge.py
+```
+
+Settings in `.env`: `DEVICE_BRIDGE_TOKEN`, `ADB_PATH` (portable platform-tools is fine),
+`DEVICE_ADB_ALLOW` (hardware serials JARVIS may touch), `DEVICE_WIN_APPS` (`name=target` apps it may open).
+
+## Pair a phone over Wi-Fi (Android 11+)
+
+The phone and laptop must be on the same LAN. ADB runs on the laptop; the hub only talks to the bridge.
+
+1. Phone: Settings → About phone → tap *Build number* 7 times (developer options).
+2. Phone: Developer options → **Wireless debugging** → on → **Pair device with pairing code**.
+   It shows `IP:PORT` and a 6-digit code (this pairing port is different from the connect port).
+3. Laptop: `adb pair 192.168.0.42:37123` and type the code. Pairing is remembered.
+4. Laptop: `adb connect 192.168.0.42:41567` with the `IP:PORT` shown on the main Wireless debugging screen.
+5. Ask JARVIS "list android devices" (or `adb devices -l` plus `adb -s <id> shell getprop ro.serialno`),
+   copy the device's **serial** into `DEVICE_ADB_ALLOW` in `.env`, restart the bridge.
+
+The connect port changes when wireless debugging restarts: re-run step 4 or ask JARVIS to
+"reconnect the phone at IP:PORT" (`adb_connect`). The allow-list uses the hardware serial, so it survives that.
+
+## Risk levels
+
+| Tools | Risk | Approval |
+|---|---|---|
+| `win_info`, `win_screenshot`, `adb_devices`, `adb_info`, `adb_screenshot` | read | no |
+| `win_media`, `win_open`, `win_lock`, `adb_open_app`, `adb_key`, `adb_connect` | write | no (audited) |
+| `adb_tap`, `adb_type`, `adb_shell`, `adb_install`, `adb_uninstall` | destructive | yes, each time |
+
+No Windows shell passthrough; apps open only from `DEVICE_WIN_APPS`; APKs install only from `data/apk/`.
+Screenshots land in `data/screenshots/` (git-ignored).
