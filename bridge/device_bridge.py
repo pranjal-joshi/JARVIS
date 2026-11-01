@@ -153,6 +153,28 @@ def adb(*args: str, serial: str | None = None, binary: bool = False, timeout: in
     return p.stdout if binary else p.stdout.decode("utf-8", "replace").strip()
 
 
+# Wireless devices that stop answering are dropped (adb disconnect) after DROP_AFTER failed checks in a
+# row, so a phone that left the Wi-Fi or turned debugging off doesn't linger as "offline". USB devices and
+# ones waiting on the phone's "Allow USB debugging?" prompt (unauthorized) are never dropped.
+DROP_AFTER = 2
+_misses: dict[str, int] = {}
+
+
+def _wireless(dev_id: str) -> bool:
+    return ":" in dev_id or "._adb-tls-connect." in dev_id
+
+
+def _unreachable(dev_id: str) -> None:
+    _misses[dev_id] = _misses.get(dev_id, 0) + 1
+    if _misses[dev_id] >= DROP_AFTER:
+        try:
+            adb("disconnect", dev_id, timeout=10)
+            log.info("action=adb_drop ok (unreachable)")
+        except (ActionError, subprocess.TimeoutExpired):
+            pass
+        _misses.pop(dev_id, None)
+
+
 def _devices() -> list[dict]:
     out = []
     for line in adb("devices", "-l").splitlines()[1:]:
@@ -163,9 +185,14 @@ def _devices() -> list[dict]:
              "model": next((p[6:] for p in parts if p.startswith("model:")), "")}
         if d["state"] == "device":
             try:
-                d["serial"] = adb("shell", "getprop", "ro.serialno", serial=d["id"])
-            except ActionError:
+                d["serial"] = adb("shell", "getprop", "ro.serialno", serial=d["id"], timeout=8)
+                _misses.pop(d["id"], None)
+            except (ActionError, subprocess.TimeoutExpired):
                 d["serial"] = ""
+                if _wireless(d["id"]):
+                    _unreachable(d["id"])
+        elif d["state"] == "offline" and _wireless(d["id"]):
+            _unreachable(d["id"])
         d["allowed"] = d.get("serial", "") in _allowed()
         out.append(d)
     return out
