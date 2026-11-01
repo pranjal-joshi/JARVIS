@@ -150,3 +150,38 @@ def test_write_runs_without_approval_by_default(parts):
     agent = ToolAgent(FakeLLM([call("ha__HassTurnOn", name="desk lamp"), say("Done, sir.")]), reg, gate, audit)
     assert asyncio.run(run(agent, bus)) == "Done, sir."
     assert calls and audit.recent()[0]["approved_by"] == "policy"
+
+
+def test_stream_filter_drops_think_and_tool_markup():
+    from jarvis_hub.agent.tool_agent import _speakable_stream
+    out = []
+    feed = _speakable_stream(out.append)
+    for full in ["<think>hm", "<think>hm</think> Good", "<think>hm</think> Good evening, <",
+                 "<think>hm</think> Good evening, <b>sir"]:
+        feed(full)
+    assert "".join(out) == "Good evening, <b>sir"
+    out.clear()
+    feed = _speakable_stream(out.append)
+    feed("Turning it on")
+    feed("Turning it on <tool_call>{...}")
+    feed("Turning it on <tool_call>{...} more")
+    assert "".join(out) == "Turning it on"
+
+
+def test_streamed_text_is_reset_when_a_tool_follows(parts):
+    bus, gate, audit, reg, _ = parts
+
+    class StreamLLM(FakeLLM):
+        async def chat(self, messages, tools=None, on_text=None):
+            msg = self.script.pop(0)
+            if on_text and msg.get("content"):
+                on_text(msg["content"])
+            return msg
+
+    first = call("ha__GetLiveContext")
+    first["content"] = "Let me check."
+    got = []
+    agent = ToolAgent(StreamLLM([first, say("It is off, sir.")]), reg, gate, audit)
+    reply = asyncio.run(agent.run(messages=[{"role": "user", "content": "lamp?"}], source=Source.WEB,
+                                  request_id="r1", bus=bus, on_text=got.append))
+    assert got == ["Let me check.", None, "It is off, sir."] and reply == "It is off, sir."

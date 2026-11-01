@@ -3,6 +3,7 @@ llama.cpp, vLLM or a cloud endpoint; nothing here is Ollama-specific."""
 
 import json
 import logging
+from collections.abc import Callable
 
 import httpx
 
@@ -25,12 +26,16 @@ class LLMClient:
             timeout=httpx.Timeout(timeout_s, connect=10),
         )
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
-        """Return the assistant message dict (content and/or tool_calls)."""
+    async def chat(self, messages: list[dict], tools: list[dict] | None = None,
+                   on_text: Callable[[str], None] | None = None) -> dict:
+        """Return the assistant message dict (content and/or tool_calls).
+        With on_text, the reply is streamed and on_text gets the content so far as it grows."""
         body = {"model": self.model, "messages": messages, **self._extra, **self._per_model.get(self.model, {})}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
+        if on_text is not None:
+            return await self._stream(body, on_text)
         try:
             r = await self._http.post("/chat/completions", json=body)
             r.raise_for_status()
@@ -42,6 +47,35 @@ class LLMClient:
             args = call.get("function", {}).get("arguments")
             if not isinstance(args, str):
                 call["function"]["arguments"] = json.dumps(args or {})
+        return msg
+
+    async def _stream(self, body: dict, on_text: Callable[[str], None]) -> dict:
+        content, calls = "", {}  # tool calls arrive in pieces keyed by index
+        try:
+            async with self._http.stream("POST", "/chat/completions", json={**body, "stream": True}) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:") or line.strip() == "data: [DONE]":
+                        continue
+                    choice = (json.loads(line[5:]).get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+                    for tc in delta.get("tool_calls") or []:
+                        c = calls.setdefault(tc.get("index", len(calls)), {
+                            "id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                        c["id"] = tc.get("id") or c["id"]
+                        fn = tc.get("function") or {}
+                        c["function"]["name"] += fn.get("name") or ""
+                        args = fn.get("arguments")
+                        c["function"]["arguments"] += args if isinstance(args, str) else json.dumps(args or {})
+                    if piece := delta.get("content"):
+                        content += piece
+                        if not calls:
+                            on_text(content)
+        except httpx.HTTPError as e:
+            raise LLMError(f"LLM request failed: {e}") from e
+        msg = {"role": "assistant", "content": content}
+        if calls:
+            msg["tool_calls"] = [calls[i] for i in sorted(calls)]
         return msg
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:

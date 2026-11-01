@@ -19,20 +19,60 @@ const KbGraph = dynamic(() => import("./KbGraph"), {
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
 
+// Server-sent events from a fetch body, one parsed JSON object per `data:` line.
+async function* sse(body) {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      for (const line of block.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const d = line.slice(5).trim();
+        if (d === "[DONE]") return;
+        try { yield JSON.parse(d); } catch { /* not JSON: skip */ }
+      }
+    }
+  }
+}
+
+// End of the first complete sentence in s (outside code fences), or 0 if none yet.
+function sentenceEnd(s) {
+  const re = /[.!?…]+["')\]]?\s+|\n\s*\n/g;
+  let m;
+  while ((m = re.exec(s))) {
+    const end = m.index + m[0].length;
+    const head = s.slice(0, end);
+    if ((head.match(/```/g) || []).length % 2) continue; // inside a code block
+    if (head.trim().length >= 12) return end;
+  }
+  return 0;
+}
+
 function useTypewriter(text, speed = 14) {
   const [shown, setShown] = useState("");
+  const prev = useRef({ text: "", i: 0 }); // a streamed reply grows: carry on typing, don't restart
   useEffect(() => {
     if (!text) {
       setShown("");
+      prev.current = { text: "", i: 0 };
       return;
     }
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       setShown(text);
       return;
     }
-    let i = 0;
+    let i = text.startsWith(prev.current.text) ? prev.current.i : 0;
+    prev.current = { text, i };
     const id = setInterval(() => {
       i += 2;
+      prev.current.i = Math.min(i, text.length);
       setShown(text.slice(0, i));
       if (i >= text.length) clearInterval(id);
     }, speed);
@@ -139,6 +179,7 @@ export default function Hud() {
   const [switching, setSwitching] = useState(false);
   const [link, setLink] = useState("connecting");
   const [speak, setSpeak] = useState(true);
+  const speakRef = useRef(null); // lets the long-lived event handler speak (timer alerts)
   const [leaving, setLeaving] = useState(() => new Set());
   const [kbPulse, setKbPulse] = useState(null);
   const [kbActive, setKbActive] = useState(false);
@@ -274,6 +315,12 @@ export default function Hud() {
           if (ev.type === "thinking") setState("thinking");
           if (ev.type === "tool_call" && ev.data.risk && ev.data.risk !== "read") flash("orange");
           if (ev.type === "approval_request") { flash("orange"); chime(); }
+          if (ev.type === "timer") {
+            chime();
+            const line = `Your ${ev.data.label || "timer"} timer is done, sir.`;
+            setMessages((m) => [...m, { role: "assistant", text: line }]);
+            if (speakRef.current) speakRef.current(line);
+          }
           if (ev.type === "tool_result") flash(ev.data.status === "ok" ? "green" : "red");
           if (ev.type === "tool_call")
             push({ ts: ev.ts, req: ev.request_id, tool: ev.data.tool, args: ev.data.arguments, risk: ev.data.risk,
@@ -333,25 +380,95 @@ export default function Hud() {
     setMessages(history);
     setInput("");
     setState("thinking");
+    // The reply streams in: text shows as it arrives and each finished sentence is sent to TTS
+    // straight away, so JARVIS starts talking while the rest is still being written.
+    const voice = speak ? speaker(mine) : null;
+    let shown = "", pending = "", final = null, added = false;
+    const show = (text) => setMessages((m) => (added
+      ? [...m.slice(0, -1), { role: "assistant", text }]
+      : (added = true, [...m, { role: "assistant", text }])));
     try {
       const r = await api("chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "jarvis",
+          stream: true,
           messages: history.slice(-12).map((m) => ({ role: m.role, content: m.text })),
         }),
       });
-      const body = await r.json();
-      const reply = body.choices?.[0]?.message?.content || body.detail || "No reply.";
-      setMessages((m) => [...m, { role: "assistant", text: reply }]);
+      if (!r.ok || !r.body) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${r.status}`);
+      }
+      for await (const ev of sse(r.body)) {
+        if (ev.jarvis?.reset) { // the model talked, then decided to use a tool: drop that
+          shown = pending = "";
+          voice?.reset();
+          continue;
+        }
+        if (ev.jarvis?.final != null) final = ev.jarvis.final;
+        const piece = ev.choices?.[0]?.delta?.content;
+        if (!piece) continue;
+        shown += piece;
+        show(shown);
+        if (voice && mine === turn.current) {
+          pending += piece;
+          let cut;
+          while ((cut = sentenceEnd(pending))) {
+            voice.add(pending.slice(0, cut));
+            pending = pending.slice(cut);
+          }
+        }
+      }
+      const reply = final ?? (shown || "No reply.");
+      show(reply);
       refreshMemory();
       if (mine !== turn.current) return; // superseded: shown, not spoken
-      if (speak) await say(reply, mine);
+      if (voice) {
+        if (!shown.trim()) voice.add(reply); // a tool's own answer arrives whole
+        else if (pending.trim()) voice.add(pending);
+        await voice.done();
+      }
       if (mine === turn.current) setState("idle");
-    } catch {
+    } catch (e) {
+      if (!added && e?.message) show(e.message);
       if (mine === turn.current) setState("error");
     }
+  };
+
+  // Plays sentences in order as their audio arrives; TTS requests run ahead in parallel.
+  const speaker = (mine) => {
+    let chain = Promise.resolve();
+    let gen = 0;
+    let budget = 600; // characters: a runaway answer is shown in full but not read out in full
+    return {
+      add(text) {
+        if (budget <= 0 || !text.trim()) return;
+        budget -= text.length;
+        const g = gen;
+        const audio = api("audio/speech", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ input: text }),
+        }).then((r) => (r.ok && r.status !== 204 ? r.blob() : null)).catch(() => null);
+        chain = chain.then(async () => {
+          const blob = await audio;
+          if (!blob || g !== gen || mine !== turn.current) return;
+          setState("speaking");
+          await playAudio(blob, setAnalyser);
+        });
+      },
+      reset() {
+        gen++;
+        budget = 600;
+        stopAudio();
+      },
+      async done() {
+        await chain;
+        if (mine === turn.current) setAnalyser(null);
+      },
+    };
   };
 
   const say = async (text, mine) => {
@@ -365,6 +482,11 @@ export default function Hud() {
     await playAudio(await r.blob(), setAnalyser);
     if (mine === turn.current) setAnalyser(null);
   };
+  speakRef.current = speak ? (text) => {
+    const mine = ++turn.current;
+    stopAudio();
+    say(text, mine).then(() => mine === turn.current && setState("idle"));
+  } : null;
 
   const toggleMic = async () => {
     if (recording.current) {

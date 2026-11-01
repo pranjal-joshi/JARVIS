@@ -3,6 +3,7 @@ with every call passing the approval gate and landing in the audit log."""
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 
 from jarvis_hub.approval.gate import ApprovalGate, Risk
@@ -29,7 +30,9 @@ class ToolAgent:
         self.ask_for = ask_for  # risk levels that wait for a human; the rest run and are audited
 
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
-                  bus: EventBus) -> str:
+                  bus: EventBus, on_text: Callable[[str], None] | None = None) -> str:
+        """on_text, if given, receives the reply as it is generated (new text only). The returned
+        string is still the full, final reply; a tool-produced answer is never streamed."""
         # Client-supplied system prompts are dropped: the persona and rules are ours.
         convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)
                   + f"\nCurrent local time: {datetime.now():%A %d %B %Y, %H:%M}."}]
@@ -39,13 +42,19 @@ class ToolAgent:
         bus.publish(Event("thinking", source, request_id, {"step": 0}))
         faked = False
         for step in range(MAX_STEPS):
+            streamed = []
             try:
-                msg = await self.llm.chat(convo, schemas)
+                msg = await (self.llm.chat(convo, schemas, on_text=_speakable_stream(
+                    lambda t: (streamed.append(t), on_text(t))))
+                             if on_text else self.llm.chat(convo, schemas))
             except LLMError as e:
                 log.warning("%s", e)
                 return self._reply(bus, source, request_id,
                                    "My apologies, sir, the language model is not answering.")
             calls = msg.get("tool_calls") or []
+            if calls and streamed or (not calls and _fakes_tool_use(_strip_think(msg.get("content") or ""))
+                                      and streamed):
+                on_text(None)  # what streamed was not the answer after all: tell the client to drop it
             if not calls:
                 text = _strip_think(msg.get("content") or "").strip()
                 if _fakes_tool_use(text):
@@ -139,6 +148,29 @@ def _fakes_tool_use(text: str) -> bool:
     """True when a reply imitates tool markup instead of using the tools interface."""
     lowered = text.lower()
     return any(m in lowered for m in FAKE_TOOL_MARKERS)
+
+
+def _speakable_stream(emit: Callable[[str], None]) -> Callable[[str], None]:
+    """Wrap a text sink so it only sees reply text: no <think> blocks, nothing once the model starts
+    writing tool markup as text, and a trailing "<" held back until it's clearly not a tag."""
+    sent, dead = 0, False
+
+    def feed(full: str) -> None:
+        nonlocal sent, dead
+        if dead:
+            return
+        if any(m in full for m in FAKE_TOOL_MARKERS):
+            dead = True
+            return
+        if "<think>" in full and "</think>" not in full:
+            return
+        visible = _strip_think(full).lstrip()
+        if (lt := visible.rfind("<")) > -1 and lt >= len(visible) - 16 and ">" not in visible[lt:]:
+            visible = visible[:lt]
+        if len(visible) > sent:
+            emit(visible[sent:])
+            sent = len(visible)
+    return feed
 
 
 def _strip_think(text: str) -> str:
