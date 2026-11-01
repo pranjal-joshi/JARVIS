@@ -60,4 +60,4 @@ for q in medium high; do curl -L -o voice/piper/jarvis-$q.onnx $B/$q/jarvis-$q.o
 
 Then set `PIPER_VOICE=jarvis-medium` in `.env` and `docker compose up -d piper`.
 Measured on this laptop (CPU), one two-sentence line: `jarvis-medium` ~0.6 s, `jarvis-high` ~3.5 s,
-Kokoro `bm_george` ~3.7 s (`--profile kokoro`, not wired as an engine).
+Kokoro `bm_george` ~3.7 s (tried and removed: too slow on CPU).
