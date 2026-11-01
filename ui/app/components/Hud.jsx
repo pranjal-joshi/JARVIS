@@ -638,12 +638,14 @@ export default function Hud() {
         <div className="hero">
           <div className="orb-wrap" {...(pinned ? { role: "button", tabIndex: 0, title: "Back to JARVIS (Esc)",
             onClick: () => setPinned(null), onKeyDown: (e) => e.key === "Enter" && setPinned(null) } : {})}>
-            <Orb state={state} analyser={analyser} accent={accent} />
+            <Orb state={state} analyser={analyser} accent={accent} alert={approvals.length > 0} />
           </div>
           <div className="state" data-state={state}>
             <span aria-hidden="true">{stateLabel}</span>
             <span className="sr-only">{state}</span>
-            {shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${shown.focus === "kb" ? "knowledge graph" : "console"}`}</span>}
+            {approvals.length > 0
+              ? <span className="state-sub alert">awaiting your approval</span>
+              : shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${{ kb: "knowledge graph", memory: "memory", timeline: "timeline" }[shown.focus] || "console"}`}</span>}
           </div>
         </div>
         <div className="approvals">

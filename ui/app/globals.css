@@ -902,3 +902,5 @@ header { position: relative; z-index: 20; }
   border: 1px solid; border-radius: 4px; padding: 1px 0; }
 .gate.auto { color: var(--green, #6dffa8); border-color: rgba(109, 255, 168, 0.4); }
 .gate.ask { color: var(--amber); border-color: rgba(255, 179, 71, 0.5); }
+.state-sub.alert { color: var(--red); opacity: 1; animation: blink 1.2s var(--ease-sine) infinite; }
+@media (prefers-reduced-motion: reduce) { .state-sub.alert { animation: none; } }

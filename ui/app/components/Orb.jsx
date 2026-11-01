@@ -43,11 +43,11 @@ const TAU = Math.PI * 2;
 // slow-in, long soft landing (approximation of cubic-bezier(0.66, 0.07, 0.05, 1))
 const glide = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 
-export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
+export default function Orb({ state = "idle", analyser, accent, alert = false, size = 280 }) {
   const canvas = useRef(null);
   const core = useRef(null);
-  const live = useRef({ state, analyser, accent });
-  live.current = { state, analyser, accent };
+  const live = useRef({ state, analyser, accent, alert });
+  live.current = { state, analyser, accent, alert };
 
   useEffect(() => {
     const c = canvas.current;
@@ -78,7 +78,7 @@ export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
     const born = last;
 
     const draw = (now) => {
-      const { state: s, analyser: a, accent: acc } = live.current;
+      const { state: s, analyser: a, accent: acc, alert: warn } = live.current;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const move = reduced ? 0 : dt;
@@ -102,6 +102,11 @@ export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
           const w = age < ACCENT_HOLD_MS ? 1 : 1 - (age - ACCENT_HOLD_MS) / ACCENT_FADE_MS;
           target = target.map((v, i) => v + (ACCENTS[acc.color][i] - v) * w);
         }
+      }
+      // an approval is waiting: hold a slow red pulse until it is decided
+      if (warn) {
+        const w = reduced ? 1 : 0.7 + 0.3 * Math.sin(now / 260);
+        target = target.map((v, i) => v + (ACCENTS.red[i] - v) * w);
       }
       for (let i = 0; i < 3; i++) col[i] += (target[i] - col[i]) * k(6);
       const e = ENERGY[s] || ENERGY.idle;
