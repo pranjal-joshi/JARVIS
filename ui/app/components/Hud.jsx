@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { BorderBeam } from "border-beam";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
@@ -8,7 +9,7 @@ import RichText from "./RichText";
 import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
-import { chime, playAudio, startRecording } from "../lib/audio";
+import { chime, playAudio, startRecording, stopAudio } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
 const KbGraph = dynamic(() => import("./KbGraph"), {
@@ -150,15 +151,48 @@ export default function Hud() {
   const flash = (color) => setAccent({ color, at: Date.now() });
   const consoleTimer = useRef(null);
   const recording = useRef(null);
+  const turn = useRef(0); // newest question; older replies show but never speak over it
   const chatRef = useRef(null);
   const [tab, setTab] = useState("talk"); // phone layout: talk | activity | memory
   const stateLabel = useDecode(state.toUpperCase());
   // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
-  // docks aside. It returns to centre stage while listening or speaking.
+  // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
+  // playback ends; listening always brings the orb back to centre.
   const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
-  const auto = state === "listening" || state === "speaking" ? null : kbActive ? "kb" : consoleActive ? "console" : null;
+  const lastBusy = useRef(null);
+  const busy = kbActive ? "kb" : consoleActive ? "console" : null;
+  const holding = state === "thinking" || state === "speaking";
+  if (busy) lastBusy.current = busy;
+  else if (!holding) lastBusy.current = null;
+  const auto = state === "listening" ? null : busy || (holding ? lastBusy.current : null);
   const focus = pinned || auto;
+  // Layout changes (focus, panels growing) run as one view transition: the browser snapshots the
+  // old and new layout and animates them on the compositor, so the move stays at 60 fps instead of
+  // re-laying out the grid and resizing the WebGL graph on every frame.
+  const layoutKey = `${focus}|${kbActive}|${consoleActive}`;
+  const [shown, setShown] = useState({ focus, kb: kbActive, con: consoleActive });
+  useEffect(() => {
+    const next = { focus, kb: kbActive, con: consoleActive };
+    if (!document.startViewTransition || reducedMotion() || window.innerWidth <= 1000) return setShown(next);
+    const vt = document.startViewTransition(() => flushSync(() => setShown(next)));
+    // a hidden tab or a newer change skips the animation (the update still applies): not an error
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutKey]);
+  const newSession = () => {
+    turn.current++;
+    stopAudio();
+    recording.current?.stop().catch(() => {});
+    recording.current = null;
+    setAnalyser(null);
+    setMessages([]);
+    setConsoleLines([]);
+    setInput("");
+    setPinned(null);
+    setState("idle");
+  };
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && setPinned(null);
     window.addEventListener("keydown", onKey);
@@ -284,6 +318,8 @@ export default function Hud() {
 
   const send = async (text) => {
     if (!text.trim()) return;
+    const mine = ++turn.current;
+    stopAudio(); // a new question cuts the previous answer short
     const history = [...messages, { role: "user", text }];
     setMessages(history);
     setInput("");
@@ -301,23 +337,24 @@ export default function Hud() {
       const reply = body.choices?.[0]?.message?.content || body.detail || "No reply.";
       setMessages((m) => [...m, { role: "assistant", text: reply }]);
       refreshMemory();
-      if (speak) await say(reply);
-      setState("idle");
+      if (mine !== turn.current) return; // superseded: shown, not spoken
+      if (speak) await say(reply, mine);
+      if (mine === turn.current) setState("idle");
     } catch {
-      setState("error");
+      if (mine === turn.current) setState("error");
     }
   };
 
-  const say = async (text) => {
+  const say = async (text, mine) => {
     const r = await api("audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input: text }),
     });
-    if (!r.ok || r.status === 204) return; // 204: nothing worth saying aloud
+    if (!r.ok || r.status === 204 || mine !== turn.current) return; // 204: nothing worth saying aloud
     setState("speaking");
     await playAudio(await r.blob(), setAnalyser);
-    setAnalyser(null);
+    if (mine === turn.current) setAnalyser(null);
   };
 
   const toggleMic = async () => {
@@ -345,6 +382,8 @@ export default function Hud() {
         + "open the https:// address instead, or type.");
       return;
     }
+    turn.current++;
+    stopAudio();
     try {
       const rec = await startRecording();
       recording.current = rec;
@@ -388,10 +427,12 @@ export default function Hud() {
   };
 
   return (
-    <div className={`hud tab-${tab}${focus ? ` docked focus-${focus}` : ""}`}>
+    <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
         <h1>J.A.R.V.I.S.</h1>
         <div className="chips">
+          <button type="button" className="chip new-session" onClick={newSession}
+            title="Clear this conversation and start fresh (JARVIS forgets the chat; memory pages stay)">⟲ new session</button>
           <span className={`chip ${link}`}>link {link}</span>
           {status && (models.length > 1 ? (
             <label className={`chip model-pick${switching ? " busy" : ""}`} title="Language model">
@@ -410,7 +451,7 @@ export default function Hud() {
       </header>
 
       <div className="side left reveal" style={{ "--i": 2 }}>
-      <section className={`panel timeline${focus === "timeline" ? " focused" : ""}`}>
+      <section className={`panel timeline${shown.focus === "timeline" ? " focused" : ""}`}>
         <h2 {...headProps(pinned === "timeline", () => togglePin("timeline"), "action timeline")}>
           Action timeline<b className="expand" aria-hidden="true" />
         </h2>
@@ -440,7 +481,7 @@ export default function Hud() {
           {!timeline.length && <li className="empty">Standing by. No actions yet.</li>}
         </ul>
       </section>
-      <SystemConsole lines={consoleLines} active={consoleActive} focused={focus === "console"}
+      <SystemConsole lines={consoleLines} active={shown.con} focused={shown.focus === "console"}
         pinned={pinned === "console"} onToggle={() => togglePin("console")} />
       </div>
 
@@ -453,7 +494,7 @@ export default function Hud() {
           <div className="state" data-state={state}>
             <span aria-hidden="true">{stateLabel}</span>
             <span className="sr-only">{state}</span>
-            {focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${focus === "kb" ? "knowledge graph" : "console"}`}</span>}
+            {shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${shown.focus === "kb" ? "knowledge graph" : "console"}`}</span>}
           </div>
         </div>
         <div className="approvals">
@@ -494,7 +535,7 @@ export default function Hud() {
       </section>
 
       <div className="side reveal" style={{ "--i": 3 }}>
-      <section className={`panel kb ${kbActive ? "active" : ""} ${kbPulse?.kind === "write" && kbActive ? "write" : ""}${focus === "kb" ? " focused" : ""}`}
+      <section className={`panel kb ${shown.kb ? "active" : ""} ${kbPulse?.kind === "write" && shown.kb ? "write" : ""}${shown.focus === "kb" ? " focused" : ""}`}
         aria-label="Knowledge graph">
         <h2 {...headProps(pinned === "kb", () => togglePin("kb"), "knowledge graph")}>
           Knowledge graph
@@ -511,7 +552,7 @@ export default function Hud() {
         )}
       </section>
 
-      <section className={`panel memory${focus === "memory" ? " focused" : ""}`}>
+      <section className={`panel memory${shown.focus === "memory" ? " focused" : ""}`}>
         <h2 {...headProps(pinned === "memory", () => togglePin("memory"), "memory")}>
           JARVIS memory<b className="expand" aria-hidden="true" />
         </h2>

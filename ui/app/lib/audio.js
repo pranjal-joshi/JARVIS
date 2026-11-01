@@ -62,18 +62,42 @@ async function toWav16k(encoded, ctx) {
 }
 
 // Play a WAV/MP3 response and expose an analyser so the orb can react to it.
+// One reply speaks at a time: starting a new one (or stopAudio) fades out whatever is playing.
+let current = null; // { ctx, src, gain, done }
+
+export function stopAudio(fadeMs = 120) {
+  const c = current;
+  if (!c) return;
+  current = null;
+  try {
+    const t = c.ctx.currentTime;
+    c.gain.gain.setValueAtTime(c.gain.gain.value, t);
+    c.gain.gain.linearRampToValueAtTime(0, t + fadeMs / 1000);
+    c.src.stop(t + fadeMs / 1000);
+  } catch {
+    c.done();
+  }
+}
+
 export async function playAudio(blob, onAnalyser) {
+  stopAudio();
   const ctx = new AudioContext();
   const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
   const src = ctx.createBufferSource();
+  const gain = ctx.createGain();
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 256;
   src.buffer = buffer;
-  src.connect(analyser).connect(ctx.destination);
+  src.connect(gain).connect(analyser).connect(ctx.destination);
+  let done;
+  const ended = new Promise((r) => (done = r));
+  src.onended = done;
+  stopAudio(); // another reply may have started while this one decoded
+  current = { ctx, src, gain, done };
   onAnalyser?.(analyser);
-  const ended = new Promise((r) => (src.onended = r));
   src.start();
   await ended;
+  if (current?.src === src) current = null;
   ctx.close();
 }
 

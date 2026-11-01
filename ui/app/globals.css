@@ -495,8 +495,7 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   flex-direction: column;
   overflow: hidden;
   padding-bottom: 10px;
-  transition: flex-basis var(--dur-long) var(--ease-glide), border-color var(--dur-med) var(--ease-in-out),
-    box-shadow var(--dur-med) var(--ease-in-out), height var(--dur-long) var(--ease-glide);
+  transition: border-color var(--dur-med) var(--ease-in-out), box-shadow var(--dur-med) var(--ease-in-out);
 }
 .kb.active { flex-basis: 64%; border-color: var(--cyan-dim); box-shadow: inset 0 0 40px rgba(127, 231, 255, 0.08); }
 .kb.active.write { border-color: rgba(255, 179, 71, 0.6); box-shadow: inset 0 0 40px rgba(255, 179, 71, 0.1); }
@@ -579,8 +578,7 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   overflow: hidden;
   padding: 0;
   background: rgba(2, 6, 9, 0.88);
-  transition: flex-basis var(--dur-long) var(--ease-glide), border-color var(--dur-med) var(--ease-in-out),
-    box-shadow var(--dur-med) var(--ease-in-out);
+  transition: border-color var(--dur-med) var(--ease-in-out), box-shadow var(--dur-med) var(--ease-in-out);
 }
 .console.active { flex-basis: 52%; border-color: var(--cyan-dim); box-shadow: 0 0 24px rgba(127, 231, 255, 0.12); }
 .console h2 {
@@ -807,7 +805,6 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   .orb-wrap {
     width: min(280px, 100%);
     margin-left: calc((100% - min(280px, 100%)) / 2);
-    transition: width var(--dur-long) var(--ease-glide), margin-left var(--dur-long) var(--ease-glide);
   }
 }
 .state-sub {
@@ -840,10 +837,20 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
 .panel { transition: border-color var(--dur-med) var(--ease-in-out), box-shadow var(--dur-med) var(--ease-in-out); }
 .panel:hover { border-color: rgba(127, 231, 255, 0.4); }
 .panel.focused { border-color: var(--cyan-dim); box-shadow: inset 0 0 40px rgba(127, 231, 255, 0.07), 0 0 24px rgba(127, 231, 255, 0.08); }
-.side.left .timeline, .side .memory { transition: flex-basis var(--dur-long) var(--ease-glide), border-color var(--dur-med) var(--ease-in-out), box-shadow var(--dur-med) var(--ease-in-out); }
+/* layout moves (grid columns, panel sizes, orb dock) run as a view transition (Hud.jsx), composited
+   on the GPU; only colour/shadow changes transition in CSS */
+.orb-wrap { view-transition-name: hero-orb; }
+.timeline { view-transition-name: panel-timeline; }
+.console { view-transition-name: panel-console; }
+.kb { view-transition-name: panel-kb; }
+.memory { view-transition-name: panel-memory; }
+/* no full-page cross-fade: only the named pieces move */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-group(*) { animation-duration: 560ms; animation-timing-function: cubic-bezier(0.66, 0.07, 0.05, 1); }
+::view-transition-old(*), ::view-transition-new(*) { animation-duration: 560ms; height: 100%; object-fit: fill; }
+::view-transition-old(hero-orb), ::view-transition-new(hero-orb) { object-fit: contain; }
 
 @media (min-width: 1001px) {
-  .hud { transition: grid-template-columns var(--dur-long) var(--ease-glide); }
   .hud.focus-kb, .hud.focus-memory { grid-template-columns: 260px 1fr 42%; }
   .hud.focus-console, .hud.focus-timeline { grid-template-columns: 42% 1fr 260px; }
 
@@ -865,3 +872,6 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   .hud.focus-console .console { flex-basis: 66%; }
   .hud.focus-timeline .console { flex-basis: 18%; }
 }
+
+.new-session { cursor: pointer; font-family: var(--mono); }
+.new-session:hover, .new-session:focus-visible { color: var(--text); border-color: var(--cyan-dim); background: rgba(127, 231, 255, 0.08); outline: none; }
