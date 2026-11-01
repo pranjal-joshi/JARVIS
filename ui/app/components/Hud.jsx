@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { BorderBeam } from "border-beam";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
+import BootScreen from "./BootScreen";
 import RichText from "./RichText";
 import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
@@ -217,6 +218,10 @@ export default function Hud() {
     }
   };
   const [kbStats, setKbStats] = useState(null);
+  // start-up: each source reports ok / fail; the boot screen leaves once all have, or after 12 s
+  const [boot, setBoot] = useState({ hub: null, audit: null, memory: null, events: null, graph: null });
+  const mark = useCallback((k, v) => setBoot((b) => (b[k] === v ? b : { ...b, [k]: v })), []);
+  const [bootPhase, setBootPhase] = useState("on"); // on -> leaving -> off
   const kbTimer = useRef(null);
   const [consoleLines, setConsoleLines] = useState([]);
   const [consoleActive, setConsoleActive] = useState(false);
@@ -261,7 +266,9 @@ export default function Hud() {
   const [shown, setShown] = useState({ focus, kb: kbActive, con: consoleActive });
   useEffect(() => {
     const next = { focus, kb: kbActive, con: consoleActive };
-    if (!document.startViewTransition || reducedMotion() || window.innerWidth <= 1000) return setShown(next);
+    // no transition under the boot screen: its snapshots would paint above it
+    if (!document.startViewTransition || reducedMotion() || window.innerWidth <= 1000
+      || document.querySelector(".boot")) return setShown(next);
     const vt = document.startViewTransition(() => flushSync(() => setShown(next)));
     // a hidden tab or a newer change skips the animation (the update still applies): not an error
     vt.ready.catch(() => {});
@@ -311,27 +318,51 @@ export default function Hud() {
   };
 
   const refreshMemory = useCallback(async () => {
-    const r = await api("kb/memory?limit=15");
-    if (r.ok) setMemory(await r.json());
-  }, []);
+    const r = await api("kb/memory?limit=15").catch(() => null);
+    if (r?.ok) setMemory(await r.json());
+    mark("memory", r?.ok ? "ok" : "fail");
+  }, [mark]);
 
   // initial data
   useEffect(() => {
     (async () => {
-      const [a, s, p] = await Promise.all([api("audit?limit=30"), api("status"), api("approvals")]);
-      if (a.ok) {
-        const rows = await a.json();
-        const parse = (s) => { try { return JSON.parse(s || "{}"); } catch { return {}; } };
-        setTimeline(rows.map((r) => withId({ ts: r.ts, req: r.request_id, tool: r.tool, args: parse(r.arguments),
-          risk: r.risk, status: r.status, preview: r.result || "", source: r.source, by: r.approved_by })));
-      }
-      if (s.ok) setStatus(await s.json());
-      const l = await api("llm");
-      if (l.ok) setModels((await l.json()).models || []);
-      if (p.ok) setApprovals(await p.json());
-      refreshMemory();
+      const safe = (path) => api(path).catch(() => ({ ok: false }));
+      // each source reports on its own: the slow status check (it pings the LLM and voice) must not
+      // hold back the rest
+      const parse = (x) => { try { return JSON.parse(x || "{}"); } catch { return {}; } };
+      await Promise.all([
+        refreshMemory(),
+        safe("audit?limit=30").then(async (a) => {
+          mark("audit", a.ok ? "ok" : "fail");
+          if (a.ok) mark("hub", "ok"); // the hub answered: linked, even before the slower status check
+          if (!a.ok) return;
+          const rows = await a.json();
+          setTimeline(rows.map((r) => withId({ ts: r.ts, req: r.request_id, tool: r.tool, args: parse(r.arguments),
+            risk: r.risk, status: r.status, preview: r.result || "", source: r.source, by: r.approved_by })));
+        }),
+        safe("approvals").then(async (p) => p.ok && setApprovals(await p.json())),
+        safe("llm").then(async (l) => l.ok && setModels((await l.json()).models || [])),
+        safe("status").then(async (st) => {
+          if (st.ok) mark("hub", "ok");
+          if (st.ok) setStatus(await st.json());
+        }),
+      ]);
     })();
-  }, [refreshMemory]);
+  }, [refreshMemory, mark]);
+
+  useEffect(() => { if (link === "online") mark("events", "ok"); }, [link, mark]);
+  useEffect(() => { if (kbStats) mark("graph", "ok"); }, [kbStats, mark]);
+  useEffect(() => {
+    const ready = Object.values(boot).every((v) => v);
+    if (bootPhase !== "on") return;
+    const t = setTimeout(() => setBootPhase("leaving"), ready ? 450 : 12000);
+    return () => clearTimeout(t);
+  }, [boot, bootPhase]);
+  useEffect(() => {
+    if (bootPhase !== "leaving") return;
+    const t = setTimeout(() => setBootPhase("off"), reducedMotion() ? 0 : 700);
+    return () => clearTimeout(t);
+  }, [bootPhase]);
 
   // event stream (reconnects with a fresh one-time ticket)
   useEffect(() => {
@@ -612,6 +643,15 @@ export default function Hud() {
 
   return (
     <>
+    {bootPhase !== "off" && (
+      <BootScreen leaving={bootPhase === "leaving"} steps={[
+        { label: "Hub uplink", state: boot.hub },
+        { label: "Event stream", state: boot.events },
+        { label: "Action log", state: boot.audit },
+        { label: "Memory core", state: boot.memory },
+        { label: "Knowledge graph", state: boot.graph },
+      ]} />
+    )}
     {kbView === "max" && <KbExplorer version={kbVersion} context={context} onAdd={addContext} onClose={closeKb} />}
     <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
