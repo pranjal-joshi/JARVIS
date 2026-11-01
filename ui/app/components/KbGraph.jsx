@@ -4,7 +4,8 @@
 // from Hud.jsx. Pages touched by JARVIS light up: reads cyan, writes amber.
 import { useEffect, useRef } from "react";
 import ForceGraph3D from "3d-force-graph";
-import { AdditiveBlending, CanvasTexture, Color, FogExp2, Sprite, SpriteMaterial } from "three";
+import { AdditiveBlending, CanvasTexture, Color, FogExp2, Group, Sprite, SpriteMaterial } from "three";
+import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 
 const C = {
   page: "#9fd8ff",
@@ -19,21 +20,42 @@ const LIT_MS = 9000; // a touched page stays lit this long, then fades to ambien
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
 
+// Soft halo around each node.
 let glowTexture;
 function glow() {
   if (glowTexture) return glowTexture;
   const cv = document.createElement("canvas");
-  cv.width = cv.height = 64;
+  cv.width = cv.height = 128;
   const g = cv.getContext("2d");
-  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grad.addColorStop(0, "rgba(255,255,255,1)");
-  grad.addColorStop(0.18, "rgba(255,255,255,0.85)");
-  grad.addColorStop(0.45, "rgba(255,255,255,0.22)");
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,255,255,0.55)");
+  grad.addColorStop(0.3, "rgba(255,255,255,0.16)");
   grad.addColorStop(1, "rgba(255,255,255,0)");
   g.fillStyle = grad;
-  g.fillRect(0, 0, 64, 64);
+  g.fillRect(0, 0, 128, 128);
   glowTexture = new CanvasTexture(cv);
   return glowTexture;
+}
+
+// Crisp node core: solid disc with a thin bright rim, drawn at high resolution so it stays sharp.
+let coreTexture;
+function core() {
+  if (coreTexture) return coreTexture;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 128;
+  const g = cv.getContext("2d");
+  g.fillStyle = "rgba(255,255,255,0.9)";
+  g.beginPath();
+  g.arc(64, 64, 40, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "rgba(255,255,255,1)";
+  g.lineWidth = 6;
+  g.beginPath();
+  g.arc(64, 64, 54, 0, Math.PI * 2);
+  g.stroke();
+  coreTexture = new CanvasTexture(cv);
+  coreTexture.anisotropy = 4;
+  return coreTexture;
 }
 
 const baseColor = (n) => (n.journal ? C.journal : n.jarvis ? C.jarvis : C.page);
@@ -51,8 +73,12 @@ export default function KbGraph({ pulse, active, version, onStats }) {
     const lit = new Map(); // id -> { kind, at }
     let stopped = false;
 
+    // Page names as real DOM text (CSS2D) so they render sharp at any zoom.
+    const labels = new CSS2DRenderer();
+    labels.domElement.className = "kb-labels";
     const graph = new ForceGraph3D(el, {
       controlType: "orbit",
+      extraRenderers: [labels],
       rendererConfig: { alpha: true, antialias: true, powerPreference: "low-power" },
     })
       .backgroundColor("rgba(0,0,0,0)")
@@ -60,25 +86,33 @@ export default function KbGraph({ pulse, active, version, onStats }) {
       .enableNodeDrag(false)
       .nodeLabel((n) => `<div class="kb-tip"><b>${esc(n.label)}</b>${n.blocks ? `<span>${n.blocks} blocks</span>` : ""}</div>`)
       .nodeThreeObject((n) => {
-        const mat = new SpriteMaterial({
-          map: glow(),
-          color: new Color(baseColor(n)),
-          blending: AdditiveBlending,
-          transparent: true,
-          depthWrite: false,
-          opacity: 0.6,
-        });
-        const s = new Sprite(mat);
+        const sprite = (map, opacity, additive) => new Sprite(new SpriteMaterial({
+          map, color: new Color(baseColor(n)), transparent: true, depthWrite: false, opacity,
+          ...(additive ? { blending: AdditiveBlending } : {}),
+        }));
         const sz = baseSize(n);
-        s.scale.set(sz, sz, 1);
-        n.__glow = s;
-        return s;
+        const halo = sprite(glow(), 0.5, true);
+        halo.scale.set(sz, sz, 1);
+        const dot = sprite(core(), 0.95, false);
+        dot.scale.set(sz * 0.32, sz * 0.32, 1);
+        const tag = document.createElement("div");
+        tag.className = "kb-label";
+        tag.textContent = n.label;
+        const label = new CSS2DObject(tag);
+        label.position.set(0, -sz * 0.32, 0);
+        const group = new Group();
+        group.add(halo, dot, label);
+        n.__glow = halo;
+        n.__core = dot;
+        n.__tag = tag;
+        return group;
       })
       .linkColor((l) => {
         const k = litKind(l);
         return k ? (k === "write" ? "rgba(255,179,71,0.75)" : "rgba(127,231,255,0.7)") : C.link;
       })
-      .linkWidth((l) => (litKind(l) ? 0.6 : 0))
+      .linkWidth((l) => (litKind(l) ? 0.8 : 0))
+      .linkOpacity(0.55)
       .linkDirectionalParticles((l) => (litKind(l) && !reduced ? 3 : 0))
       .linkDirectionalParticleSpeed(0.007)
       .linkDirectionalParticleWidth(1.4)
@@ -93,8 +127,8 @@ export default function KbGraph({ pulse, active, version, onStats }) {
       return a?.kind === "write" || b?.kind === "write" ? "write" : "read";
     }
 
-    graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    graph.scene().fog = new FogExp2(0x04070a, 0.0012);
+    graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    graph.scene().fog = new FogExp2(0x04070a, 0.0006);
     // compact layout: small KB, small panel
     graph.d3Force("charge").strength(-28).distanceMax(90);
     graph.d3Force("link").distance(26);
@@ -144,7 +178,9 @@ export default function KbGraph({ pulse, active, version, onStats }) {
         const sz = baseSize(n);
         let target = baseColor(n);
         let scale = sz;
-        let op = 0.55;
+        let op = 0.45;
+        n.__tag?.classList.toggle("lit", !!L);
+        n.__tag?.classList.toggle("write", L?.kind === "write");
         if (L) {
           const t = (now - L.at) / 1000;
           if (now - L.at > LIT_MS) { lit.delete(n.id); expired = true; continue; }
@@ -157,6 +193,7 @@ export default function KbGraph({ pulse, active, version, onStats }) {
           op = 0.5 + 0.08 * Math.sin(now / 900 + sz);
         }
         s.material.color.lerp(tmp.set(target), reduced ? 1 : 0.12);
+        n.__core?.material.color.copy(s.material.color);
         s.material.opacity += (op - s.material.opacity) * (reduced ? 1 : 0.15);
         const cur = s.scale.x + (scale - s.scale.x) * (reduced ? 1 : 0.15);
         s.scale.set(cur, cur, 1);

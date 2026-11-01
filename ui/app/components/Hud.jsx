@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
+import SystemConsole, { asCommand } from "./SystemConsole";
 import { playAudio, startRecording } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
@@ -125,11 +126,22 @@ export default function Hud() {
   const [kbVersion, setKbVersion] = useState(0);
   const [kbStats, setKbStats] = useState(null);
   const kbTimer = useRef(null);
+  const [consoleLines, setConsoleLines] = useState([]);
+  const [consoleActive, setConsoleActive] = useState(false);
+  const consoleTimer = useRef(null);
   const recording = useRef(null);
   const chatEnd = useRef(null);
   const stateLabel = useDecode(state.toUpperCase());
 
   const push = (item) => setTimeline((t) => [withId(item), ...t].slice(0, 80));
+
+  // console: append lines, light the window up, let it settle after a few quiet seconds
+  const echo = (...lines) => {
+    setConsoleLines((c) => [...c, ...lines.map(withId)].slice(-120));
+    setConsoleActive(true);
+    clearTimeout(consoleTimer.current);
+    consoleTimer.current = setTimeout(() => setConsoleActive(false), 6000);
+  };
 
   const refreshMemory = useCallback(async () => {
     const r = await api("kb/memory?limit=15");
@@ -171,6 +183,12 @@ export default function Hud() {
           if (ev.type === "tool_call") push({ kind: "call", ts: ev.ts, tool: ev.data.tool, risk: ev.data.risk, args: ev.data.arguments });
           if (ev.type === "tool_result") push({ kind: "result", ts: ev.ts, tool: ev.data.tool, status: ev.data.status, preview: ev.data.preview });
           if (ev.type === "kb_retrieved") push({ kind: "kb", ts: ev.ts, pages: ev.data.pages });
+          if (ev.type === "tool_call") echo({ kind: "cmd", text: asCommand(ev.data.tool, ev.data.arguments), risk: ev.data.risk });
+          if (ev.type === "approval_request") echo({ kind: "wait" });
+          if (ev.type === "tool_result") {
+            const out = (ev.data.preview || "").split("\n").filter((l) => l.trim()).slice(0, 8).join("\n");
+            echo(...(out ? [{ kind: "out", text: out }] : []), { kind: "exit", status: ev.data.status });
+          }
           const kb = kbTouch(ev);
           if (kb) {
             setKbPulse((p) => ({ ...kb, seq: (p?.seq || 0) + 1 }));
@@ -196,6 +214,7 @@ export default function Hud() {
       stop = true;
       clearTimeout(retry);
       clearTimeout(kbTimer.current);
+      clearTimeout(consoleTimer.current);
       ws?.close();
     };
   }, []);
@@ -301,7 +320,8 @@ export default function Hud() {
         </div>
       </header>
 
-      <section className="panel timeline reveal" style={{ "--i": 2 }}>
+      <div className="side left reveal" style={{ "--i": 2 }}>
+      <section className="panel timeline">
         <h2>Action timeline</h2>
         <ul>
           {timeline.map((e, i) => (
@@ -316,6 +336,8 @@ export default function Hud() {
           {!timeline.length && <li className="empty">No actions yet.</li>}
         </ul>
       </section>
+      <SystemConsole lines={consoleLines} active={consoleActive} />
+      </div>
 
       <section className="core reveal" style={{ "--i": 1 }}>
         <div className="orb-wrap">
