@@ -59,6 +59,7 @@ DEFAULT_ENGINE = CFG.get("EXPERT_DEFAULT_ENGINE", "claude")
 
 SANDBOX = Path(tempfile.gettempdir()) / "jarvis-expert-sandbox"
 SANDBOX.mkdir(exist_ok=True)
+(SANDBOX / "cfg").mkdir(exist_ok=True)
 # opencode reads project config from the working folder: switch every tool and permission off.
 (SANDBOX / "opencode.json").write_text(json.dumps({
     "$schema": "https://opencode.ai/config.json",
@@ -105,32 +106,49 @@ def run_claude(prompt: str, model: str, effort: str = "") -> tuple[str, str]:
     return str(out.get("result", "")).strip(), used
 
 
+OPENCODE_LOG = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "opencode" / "log" / "opencode.log"
+
+
+def _new_opencode_error(offset: int) -> str:
+    """First provider error opencode logged after `offset`, or ""."""
+    try:
+        with OPENCODE_LOG.open("rb") as f:
+            f.seek(offset)
+            new = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    m = re.search(r'level=ERROR .*?error\.error="([^"]+)"', new)
+    return m.group(1) if m else ""
+
+
 def run_opencode(prompt: str, model: str, effort: str = "") -> tuple[str, str]:
-    cmd = [_exe("opencode"), "run", "--pure", "--print-logs", "--log-level", "ERROR", "-m", model,
-           f"{SYSTEM}\n\n{prompt}"]
+    # --title skips a ~30 s model call that names the session
+    cmd = [_exe("opencode"), "run", "--pure", "--title", "jarvis", "-m", model, f"{SYSTEM}\n\n{prompt}"]
     if effort:  # provider-specific reasoning variant, e.g. minimal, low, high
         cmd[-1:-1] = ["--variant", effort]
-    p = subprocess.Popen(cmd, cwd=SANDBOX, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
-    err: list[str] = []
-
-    def watch() -> None:
-        # opencode keeps retrying provider errors (e.g. free quota used up): fail fast instead
-        for line in p.stderr:
-            m = re.search(r'error\.error="([^"]+)"', line)
-            if m:
-                err.append(m.group(1))
-                p.kill()
-                return
-
-    threading.Thread(target=watch, daemon=True).start()
-    try:
-        out, _ = p.communicate(timeout=TIMEOUT)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        raise EngineError("opencode timed out")
-    if err:
-        raise EngineError(err[0][:300])
+    # Point the config dir at the sandbox so the user's global opencode config (and the MCP servers
+    # it starts) is not loaded. Credentials live in the data dir, which stays as it is.
+    env = {**os.environ, "XDG_CONFIG_HOME": str(SANDBOX / "cfg")}
+    # opencode never exits on a provider error (e.g. free quota used up) and, when piped, never prints
+    # it either: it only lands in its log file. Watch that file from here on and fail fast.
+    start = OPENCODE_LOG.stat().st_size if OPENCODE_LOG.exists() else 0
+    p = subprocess.Popen(cmd, cwd=SANDBOX, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+    out_parts: list[str] = []
+    reader = threading.Thread(target=lambda: out_parts.append(p.stdout.read()), daemon=True)
+    reader.start()
+    deadline = time.monotonic() + TIMEOUT
+    while p.poll() is None:
+        if time.monotonic() > deadline:
+            p.kill()
+            raise EngineError("opencode timed out")
+        err = _new_opencode_error(start)
+        if err:
+            p.kill()
+            raise EngineError(err[:300])
+        time.sleep(0.5)
+    reader.join(timeout=5)
+    out = "".join(out_parts)
     text = re.sub(r"\x1b\[[0-9;]*m", "", out)
     text = "\n".join(l for l in text.splitlines() if not l.startswith("> ")).strip()
     if not text:
