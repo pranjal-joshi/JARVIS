@@ -2,15 +2,20 @@
 
 import { useEffect, useRef } from "react";
 
-// Audio-reactive core orb on a 2D canvas. Phase 9 swaps this for an R3F/GLSL
-// version; the props (state, analyser) stay the same.
+// Audio-reactive core orb on a 2D canvas: a wireframe sphere that resonates with the voice,
+// inside rotating rings. Base colour is blue; `accent` flashes green (action done), orange
+// (write / awaiting approval) or red (fault) and then fades back. Phase 9 may swap this for R3F/GLSL.
+const BASE = [110, 210, 255];
 const COLORS = {
-  idle: [127, 231, 255],
+  idle: BASE,
   listening: [127, 231, 255],
-  thinking: [255, 179, 71],
-  speaking: [160, 240, 255],
+  thinking: BASE,
+  speaking: [150, 225, 255],
   error: [255, 92, 92],
 };
+const ACCENTS = { green: [60, 255, 110], orange: [255, 170, 60], red: [255, 92, 92] };
+const ACCENT_HOLD_MS = 1400;
+const ACCENT_FADE_MS = 1200;
 
 // per-state motion character: ring spin speed and breathing amplitude/rate
 const ENERGY = {
@@ -25,10 +30,59 @@ const TAU = Math.PI * 2;
 // slow-in, long soft landing (approximation of cubic-bezier(0.66, 0.07, 0.05, 1))
 const glide = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 
-export default function Orb({ state = "idle", analyser, size = 280 }) {
+// Wireframe sphere: latitude and longitude lines, rotated and projected orthographically.
+// Each latitude band is pushed outwards by one frequency band of the voice (resonance).
+const LATS = 9;
+const LONGS = 14;
+const STEPS = 40;
+function wireframe(ctx, { cx, r, rotY, tilt, bins, level, t, rgba, intro, reduced }) {
+  const ct = Math.cos(tilt);
+  const st = Math.sin(tilt);
+  const cy = Math.cos(rotY);
+  const sy = Math.sin(rotY);
+  const point = (theta, phi) => {
+    // displacement: voice bands by latitude, plus a slow travelling wave
+    const band = bins[Math.min(bins.length - 1, Math.floor(((phi / Math.PI) + 0.5) * 40))] / 255;
+    const wave = reduced ? 0 : Math.sin(theta * 3 + phi * 4 + t * 2.2) * (0.02 + level * 0.12);
+    const d = r * (1 + band * 0.28 * (0.4 + level) + wave);
+    let x = d * Math.cos(phi) * Math.cos(theta);
+    let y = d * Math.sin(phi);
+    let z = d * Math.cos(phi) * Math.sin(theta);
+    [x, z] = [x * cy - z * sy, x * sy + z * cy];
+    [y, z] = [y * ct - z * st, y * st + z * ct];
+    return [cx + x, cx + y, z / d];
+  };
+  const stroke = (pts) => {
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0, z0] = pts[i - 1];
+      const [x1, y1, z1] = pts[i];
+      const front = (z0 + z1) / 2; // -1 back .. 1 front
+      ctx.strokeStyle = rgba((0.12 + 0.55 * (front + 1) / 2 + level * 0.25) * intro);
+      ctx.lineWidth = front > 0 ? 1.1 : 0.7;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+  };
+  for (let j = 1; j < LATS; j++) {
+    const phi = -Math.PI / 2 + (j / LATS) * Math.PI;
+    const pts = [];
+    for (let i = 0; i <= STEPS; i++) pts.push(point((i / STEPS) * TAU, phi));
+    stroke(pts);
+  }
+  for (let i = 0; i < LONGS; i++) {
+    const theta = (i / LONGS) * TAU;
+    const pts = [];
+    for (let j = 0; j <= STEPS / 2; j++) pts.push(point(theta, -Math.PI / 2 + (j / (STEPS / 2)) * Math.PI));
+    stroke(pts);
+  }
+}
+
+export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
   const canvas = useRef(null);
-  const live = useRef({ state, analyser });
-  live.current = { state, analyser };
+  const live = useRef({ state, analyser, accent });
+  live.current = { state, analyser, accent };
 
   useEffect(() => {
     const c = canvas.current;
@@ -59,7 +113,7 @@ export default function Orb({ state = "idle", analyser, size = 280 }) {
     const born = last;
 
     const draw = (now) => {
-      const { state: s, analyser: a } = live.current;
+      const { state: s, analyser: a, accent: acc } = live.current;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const move = reduced ? 0 : dt;
@@ -75,8 +129,16 @@ export default function Orb({ state = "idle", analyser, size = 280 }) {
       // fast attack, slow release
       level += (raw - level) * (raw > level ? k(18) : k(5));
 
-      const target = COLORS[s] || COLORS.idle;
-      for (let i = 0; i < 3; i++) col[i] += (target[i] - col[i]) * k(5);
+      // accent flash (green/orange/red) holds, then hands back to the state colour
+      let target = COLORS[s] || COLORS.idle;
+      if (acc && ACCENTS[acc.color] && s !== "error") {
+        const age = Date.now() - acc.at;
+        if (age < ACCENT_HOLD_MS + ACCENT_FADE_MS) {
+          const w = age < ACCENT_HOLD_MS ? 1 : 1 - (age - ACCENT_HOLD_MS) / ACCENT_FADE_MS;
+          target = target.map((v, i) => v + (ACCENTS[acc.color][i] - v) * w);
+        }
+      }
+      for (let i = 0; i < 3; i++) col[i] += (target[i] - col[i]) * k(6);
       const e = ENERGY[s] || ENERGY.idle;
       spin += (e.spin - spin) * k(3);
       breathe += (e.breathe - breathe) * k(3);
@@ -193,22 +255,20 @@ export default function Orb({ state = "idle", analyser, size = 280 }) {
         }
       }
 
-      // core: lit sphere with a hot centre and a thin rim
-      ctx.globalCompositeOperation = "source-over";
-      const coreR = radius * 0.55;
-      const core = ctx.createRadialGradient(cx - coreR * 0.25, cx - coreR * 0.3, coreR * 0.05, cx, cx, coreR);
-      core.addColorStop(0, `rgba(255,255,255,${0.95 * intro})`);
-      core.addColorStop(0.35, rgba(0.95 * intro * flicker));
-      core.addColorStop(1, rgba(0.55 * intro * flicker));
-      ctx.fillStyle = core;
+      // core: resonating wireframe sphere with a faint inner glow
+      const coreR = radius * 0.78;
+      const inner = ctx.createRadialGradient(cx, cx, 0, cx, cx, coreR);
+      inner.addColorStop(0, rgba((0.28 + level * 0.4) * intro * flicker));
+      inner.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = inner;
       ctx.beginPath();
       ctx.arc(cx, cx, coreR, 0, TAU);
       ctx.fill();
-      ctx.strokeStyle = rgba(0.6 * intro);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(cx, cx, coreR + 3, 0, TAU);
-      ctx.stroke();
+      wireframe(ctx, {
+        cx, r: coreR, rotY: rot * 0.45, tilt: 0.35 + Math.sin(phase * 0.2) * 0.08, bins, level,
+        t: now / 1000, rgba: (al) => rgba(al * flicker), intro, reduced,
+      });
+      ctx.globalCompositeOperation = "source-over";
 
       if (errorFlash > 0) {
         ctx.fillStyle = `rgba(255,92,92,${errorFlash * 0.25})`;

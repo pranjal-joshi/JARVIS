@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
 import SystemConsole, { asCommand } from "./SystemConsole";
+import { SOURCE, ago, describe, insight } from "../lib/timeline";
 import { playAudio, startRecording } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
@@ -128,12 +129,28 @@ export default function Hud() {
   const kbTimer = useRef(null);
   const [consoleLines, setConsoleLines] = useState([]);
   const [consoleActive, setConsoleActive] = useState(false);
+  const [accent, setAccent] = useState(null); // orb colour flash: { color, at }
+  const flash = (color) => setAccent({ color, at: Date.now() });
   const consoleTimer = useRef(null);
   const recording = useRef(null);
   const chatEnd = useRef(null);
   const stateLabel = useDecode(state.toUpperCase());
 
   const push = (item) => setTimeline((t) => [withId(item), ...t].slice(0, 80));
+  // update the newest still-open row for this request + tool (a call and its result share one row)
+  const settle = (req, tool, patch) =>
+    setTimeline((t) => {
+      const i = t.findIndex((r) => r.req === req && (!tool || r.tool === tool) && (r.status === "running" || r.status === "pending"));
+      if (i < 0) return t;
+      const next = [...t];
+      next[i] = { ...next[i], ...patch };
+      return next;
+    });
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000), 15000);
+    return () => clearInterval(id);
+  }, []);
 
   // console: append lines, light the window up, let it settle after a few quiet seconds
   const echo = (...lines) => {
@@ -154,8 +171,9 @@ export default function Hud() {
       const [a, s, p] = await Promise.all([api("audit?limit=30"), api("status"), api("approvals")]);
       if (a.ok) {
         const rows = await a.json();
-        setTimeline(rows.map((r) => withId({ kind: "audit", ts: r.ts, tool: r.tool, risk: r.risk,
-          status: r.status, source: r.source, by: r.approved_by })));
+        const parse = (s) => { try { return JSON.parse(s || "{}"); } catch { return {}; } };
+        setTimeline(rows.map((r) => withId({ ts: r.ts, req: r.request_id, tool: r.tool, args: parse(r.arguments),
+          risk: r.risk, status: r.status, preview: r.result || "", source: r.source, by: r.approved_by })));
       }
       if (s.ok) setStatus(await s.json());
       if (p.ok) setApprovals(await p.json());
@@ -180,9 +198,16 @@ export default function Hud() {
           const ev = JSON.parse(e.data);
           if (ev.type === "subscribed") return setLink("online");
           if (ev.type === "thinking") setState("thinking");
-          if (ev.type === "tool_call") push({ kind: "call", ts: ev.ts, tool: ev.data.tool, risk: ev.data.risk, args: ev.data.arguments });
-          if (ev.type === "tool_result") push({ kind: "result", ts: ev.ts, tool: ev.data.tool, status: ev.data.status, preview: ev.data.preview });
-          if (ev.type === "kb_retrieved") push({ kind: "kb", ts: ev.ts, pages: ev.data.pages });
+          if (ev.type === "tool_call" && ev.data.risk && ev.data.risk !== "read") flash("orange");
+          if (ev.type === "approval_request") flash("orange");
+          if (ev.type === "tool_result") flash(ev.data.status === "ok" ? "green" : "red");
+          if (ev.type === "tool_call")
+            push({ ts: ev.ts, req: ev.request_id, tool: ev.data.tool, args: ev.data.arguments, risk: ev.data.risk,
+              status: "running", source: ev.source });
+          if (ev.type === "approval_request") settle(ev.request_id, ev.data.tool, { status: "pending" });
+          if (ev.type === "tool_result")
+            settle(ev.request_id, ev.data.tool, { status: ev.data.status, preview: ev.data.preview || "", done: ev.ts });
+          if (ev.type === "kb_retrieved") settle(ev.request_id, "kb_search", { pages: ev.data.pages });
           if (ev.type === "tool_call") echo({ kind: "cmd", text: asCommand(ev.data.tool, ev.data.arguments), risk: ev.data.risk });
           if (ev.type === "approval_request") echo({ kind: "wait" });
           if (ev.type === "tool_result") {
@@ -323,17 +348,30 @@ export default function Hud() {
       <div className="side left reveal" style={{ "--i": 2 }}>
       <section className="panel timeline">
         <h2>Action timeline</h2>
-        <ul>
-          {timeline.map((e, i) => (
-            <li key={e.id} className={`ev ${e.kind} ${e.risk || ""} ${e.status || ""}`} style={{ "--i": Math.min(i, 12) }}>
-              <time>{fmtTime(e.ts)}</time>
-              {e.kind === "kb" && <span>◈ recalled {e.pages.join(", ") || "nothing"}</span>}
-              {e.kind === "call" && <span>→ {e.tool} <em>{e.risk}</em></span>}
-              {e.kind === "result" && <span>← {e.tool} <em>{e.status}</em></span>}
-              {e.kind === "audit" && <span>{e.tool} <em>{e.status}</em> · {e.source}{e.by && e.by !== "policy" ? ` · ✓${e.by}` : ""}</span>}
-            </li>
-          ))}
-          {!timeline.length && <li className="empty">No actions yet.</li>}
+        <ul className="tl-list">
+          {timeline.map((e, i) => {
+            const d = describe(e.tool, e.args);
+            const write = e.risk && e.risk !== "read";
+            const title = [fmtTime(e.ts), e.tool, e.pages?.length ? `recalled: ${e.pages.join(", ")}` : "",
+              e.by && !String(e.by).startsWith("policy") ? `approved by ${e.by}` : ""].filter(Boolean).join(" · ");
+            return (
+              <li key={e.id} className={`tl ${e.status} ${write ? "write" : "read"}`} style={{ "--i": Math.min(i, 12) }} title={title}>
+                <span className="tl-glyph" aria-hidden="true">{d.glyph}</span>
+                <div className="tl-main">
+                  <div className="tl-title">
+                    {d.title}
+                    {e.source && e.source !== "web" && <span className="tl-src">{SOURCE[e.source] || e.source}</span>}
+                  </div>
+                  {d.detail && <div className="tl-detail">{d.detail}</div>}
+                </div>
+                <div className="tl-meta">
+                  <span className="tl-insight">{insight(e.tool, e.status, e.preview)}</span>
+                  <time dateTime={new Date(e.ts * 1000).toISOString()}>{ago(e.ts, now)}</time>
+                </div>
+              </li>
+            );
+          })}
+          {!timeline.length && <li className="empty">Standing by. No actions yet.</li>}
         </ul>
       </section>
       <SystemConsole lines={consoleLines} active={consoleActive} />
@@ -341,7 +379,7 @@ export default function Hud() {
 
       <section className="core reveal" style={{ "--i": 1 }}>
         <div className="orb-wrap">
-          <Orb state={state} analyser={analyser} />
+          <Orb state={state} analyser={analyser} accent={accent} />
         </div>
         <div className="state" data-state={state}>
           <span aria-hidden="true">{stateLabel}</span>
