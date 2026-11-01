@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { Orb as DotOrb } from "@yogesharc/thinking-orbs";
 
-// Audio-reactive core orb on a 2D canvas: a wireframe sphere that resonates with the voice,
-// inside rotating rings. Base colour is blue; `accent` flashes green (action done), orange
-// (write / awaiting approval) or red (fault) and then fades back. Phase 9 may swap this for R3F/GLSL.
+// Audio-reactive core orb: a Thinking Orbs dot sphere (@yogesharc/thinking-orbs, MIT, SVG) as the
+// core, inside our 2D-canvas bloom and rotating rings. The dot sphere pulses with the voice (scaled
+// per frame from the analyser level) and is tinted through CSS `color`. Base colour is blue; `accent`
+// flashes green (action done), orange (write / awaiting approval) or red (fault) and then fades back.
 const BASE = [110, 210, 255];
 const COLORS = {
   idle: BASE,
@@ -26,61 +28,24 @@ const ENERGY = {
   error: { spin: 0.4, breathe: 0.02, rate: 1 },
 };
 
+// Which Thinking Orbs look the core takes in each HUD state.
+const LOOKS = {
+  idle: ["idle", "default"],
+  listening: ["waiting", "default"],
+  thinking: ["reasoning", "default"],
+  speaking: ["working", "default"],
+  error: ["retrying", "surge"],
+};
+// Core svg width as a fraction of the HUD orb; the dot sphere fills 80% of it.
+const CORE = 0.42;
+
 const TAU = Math.PI * 2;
 // slow-in, long soft landing (approximation of cubic-bezier(0.66, 0.07, 0.05, 1))
 const glide = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 
-// Wireframe sphere: latitude and longitude lines, rotated and projected orthographically.
-// Each latitude band is pushed outwards by one frequency band of the voice (resonance).
-const LATS = 9;
-const LONGS = 14;
-const STEPS = 40;
-function wireframe(ctx, { cx, r, rotY, tilt, bins, level, t, rgba, intro, reduced }) {
-  const ct = Math.cos(tilt);
-  const st = Math.sin(tilt);
-  const cy = Math.cos(rotY);
-  const sy = Math.sin(rotY);
-  const point = (theta, phi) => {
-    // displacement: voice bands by latitude, plus a slow travelling wave
-    const band = bins[Math.min(bins.length - 1, Math.floor(((phi / Math.PI) + 0.5) * 40))] / 255;
-    const wave = reduced ? 0 : Math.sin(theta * 3 + phi * 4 + t * 2.2) * (0.02 + level * 0.12);
-    const d = r * (1 + band * 0.28 * (0.4 + level) + wave);
-    let x = d * Math.cos(phi) * Math.cos(theta);
-    let y = d * Math.sin(phi);
-    let z = d * Math.cos(phi) * Math.sin(theta);
-    [x, z] = [x * cy - z * sy, x * sy + z * cy];
-    [y, z] = [y * ct - z * st, y * st + z * ct];
-    return [cx + x, cx + y, z / d];
-  };
-  const stroke = (pts) => {
-    for (let i = 1; i < pts.length; i++) {
-      const [x0, y0, z0] = pts[i - 1];
-      const [x1, y1, z1] = pts[i];
-      const front = (z0 + z1) / 2; // -1 back .. 1 front
-      ctx.strokeStyle = rgba((0.12 + 0.55 * (front + 1) / 2 + level * 0.25) * intro);
-      ctx.lineWidth = front > 0 ? 1.1 : 0.7;
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.stroke();
-    }
-  };
-  for (let j = 1; j < LATS; j++) {
-    const phi = -Math.PI / 2 + (j / LATS) * Math.PI;
-    const pts = [];
-    for (let i = 0; i <= STEPS; i++) pts.push(point((i / STEPS) * TAU, phi));
-    stroke(pts);
-  }
-  for (let i = 0; i < LONGS; i++) {
-    const theta = (i / LONGS) * TAU;
-    const pts = [];
-    for (let j = 0; j <= STEPS / 2; j++) pts.push(point(theta, -Math.PI / 2 + (j / (STEPS / 2)) * Math.PI));
-    stroke(pts);
-  }
-}
-
 export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
   const canvas = useRef(null);
+  const core = useRef(null);
   const live = useRef({ state, analyser, accent });
   live.current = { state, analyser, accent };
 
@@ -255,7 +220,7 @@ export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
         }
       }
 
-      // core: resonating wireframe sphere with a faint inner glow
+      // core: faint inner glow behind the dot sphere, which resonates with the voice
       const coreR = radius * 0.78;
       const inner = ctx.createRadialGradient(cx, cx, 0, cx, cx, coreR);
       inner.addColorStop(0, rgba((0.28 + level * 0.4) * intro * flicker));
@@ -264,10 +229,14 @@ export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
       ctx.beginPath();
       ctx.arc(cx, cx, coreR, 0, TAU);
       ctx.fill();
-      wireframe(ctx, {
-        cx, r: coreR, rotY: rot * 0.45, tilt: 0.35 + Math.sin(phase * 0.2) * 0.08, bins, level,
-        t: now / 1000, rgba: (al) => rgba(al * flicker), intro, reduced,
-      });
+      const el = core.current;
+      if (el) {
+        const swell = (radius / base) * (1 + level * 0.25);
+        el.style.color = `rgb(${r},${g},${b})`;
+        el.style.opacity = String(Math.min(1, (0.85 + level * 0.3) * intro * flicker));
+        el.style.transform = `translate(-50%, -50%) scale(${swell.toFixed(4)})`;
+        el.style.filter = `drop-shadow(0 0 ${(3 + level * 10).toFixed(1)}px rgba(${r},${g},${b},${(0.55 + level * 0.4).toFixed(2)}))`;
+      }
       ctx.globalCompositeOperation = "source-over";
 
       if (errorFlash > 0) {
@@ -283,12 +252,27 @@ export default function Orb({ state = "idle", analyser, accent, size = 280 }) {
     return () => cancelAnimationFrame(raf);
   }, [size]);
 
+  const [look, variant] = LOOKS[state] || LOOKS.idle;
+  const coreSize = Math.round(size * CORE);
   return (
-    <canvas
-      ref={canvas}
-      role="img"
-      aria-label={`JARVIS is ${state}`}
-      style={{ width: size, maxWidth: "100%", height: "auto", aspectRatio: "1 / 1", display: "block", margin: "0 auto" }}
-    />
+    <div style={{ position: "relative", width: size, maxWidth: "100%", aspectRatio: "1 / 1", margin: "0 auto" }}>
+      <canvas
+        ref={canvas}
+        role="img"
+        aria-label={`JARVIS is ${state}`}
+        style={{ width: "100%", height: "100%", display: "block" }}
+      />
+      <div
+        ref={core}
+        className="orb-core"
+        style={{
+          position: "absolute", left: "50%", top: "50%", width: `${CORE * 100}%`, aspectRatio: "1 / 1",
+          transform: "translate(-50%, -50%)", color: `rgb(${BASE.join(",")})`, opacity: 0, pointerEvents: "none",
+          willChange: "transform, filter",
+        }}
+      >
+        <DotOrb state={look} variant={variant} size={coreSize} density={1.15} dotSize={1.15} />
+      </div>
+    </div>
   );
 }
