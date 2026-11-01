@@ -5,6 +5,8 @@ import logging
 import time
 from datetime import date
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -133,6 +135,49 @@ async def speech(body: SpeechBody, request: Request,
     except VoiceError as e:
         raise HTTPException(502, str(e)) from e
     return Response(audio, media_type="audio/wav", headers={"X-TTS-Engine": engine})
+
+
+# ---------- devices (HUD Devices panel; pairing and allowing are never model tools) ----------
+async def _device_bridge(request: Request, action: str, args: dict | None = None):
+    s = request.app.state.settings
+    token = s.device_bridge_token.get_secret_value()
+    if not token:
+        raise HTTPException(503, "device bridge not configured (DEVICE_BRIDGE_TOKEN)")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(40, connect=5)) as c:
+            r = await c.post(s.device_bridge_url.rstrip("/") + "/v1/act", json={"action": action, "args": args or {}},
+                             headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"device bridge unreachable ({type(e).__name__})") from e
+    body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, body.get("detail") or "device bridge error")
+    return body.get("result")
+
+
+@router.get("/devices")
+async def devices(request: Request, _: Source = Depends(require_approver)) -> list:
+    return await _device_bridge(request, "adb_list")
+
+
+@router.post("/devices/pair")
+async def devices_pair(request: Request, _: Source = Depends(require_approver)) -> dict:
+    return await _device_bridge(request, "adb_pair_start")
+
+
+@router.get("/devices/pair/{job}")
+async def devices_pair_status(job: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    return await _device_bridge(request, "adb_pair_status", {"id": job})
+
+
+class AllowBody(BaseModel):
+    serial: str
+    allowed: bool = True
+
+
+@router.post("/devices/allow")
+async def devices_allow(body: AllowBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    return {"result": await _device_bridge(request, "adb_allow", body.model_dump())}
 
 
 # ---------- status ----------

@@ -18,6 +18,7 @@ const KbGraph = dynamic(() => import("./KbGraph"), {
 });
 
 const KbExplorer = dynamic(() => import("./KbExplorer"), { ssr: false });
+const DevicesPanel = dynamic(() => import("./DevicesPanel"), { ssr: false });
 const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explorer
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
@@ -229,12 +230,14 @@ export default function Hud() {
   // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
   // playback ends; listening always brings the orb back to centre.
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [devOpen, setDevOpen] = useState(false);
+  const [devCount, setDevCount] = useState(null);
   useEffect(() => { // close the tools list on any click outside it
-    if (!toolsOpen) return;
-    const off = (e) => !e.target.closest?.(".tools-pick") && setToolsOpen(false);
+    if (!toolsOpen && !devOpen) return;
+    const off = (e) => { if (!e.target.closest?.(".tools-pick")) { setToolsOpen(false); setDevOpen(false); } };
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
-  }, [toolsOpen]);
+  }, [toolsOpen, devOpen]);
   const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
@@ -273,7 +276,7 @@ export default function Hud() {
     setState("idle");
   };
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") { setPinned(null); setToolsOpen(false); } };
+    const onKey = (e) => { if (e.key === "Escape") { setPinned(null); setToolsOpen(false); setDevOpen(false); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -611,8 +614,21 @@ export default function Hud() {
           )}
           {status && (
             <div className="tools-pick">
+              <button type="button" className="chip" aria-expanded={devOpen}
+                onClick={() => { setDevOpen((o) => !o); setToolsOpen(false); }} title="Android devices and QR pairing">
+                devices{devCount != null ? ` ${devCount}` : ""} {devOpen ? "▴" : "▾"}
+              </button>
+              {devOpen && (
+                <div className="tools-list" role="dialog" aria-label="Devices">
+                  <DevicesPanel onCount={setDevCount} />
+                </div>
+              )}
+            </div>
+          )}
+          {status && (
+            <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={toolsOpen}
-                onClick={() => setToolsOpen((o) => !o)} title="Show the tools JARVIS can use">
+                onClick={() => { setToolsOpen((o) => !o); setDevOpen(false); }} title="Show the tools JARVIS can use">
                 tools {status.tools?.length} {toolsOpen ? "▴" : "▾"}
               </button>
               {toolsOpen && (

@@ -86,3 +86,12 @@ The connect port changes when wireless debugging restarts: re-run step 4 or ask 
 
 No Windows shell passthrough; apps open only from `DEVICE_WIN_APPS`; APKs install only from `data/apk/`.
 Screenshots land in `data/screenshots/` (git-ignored).
+
+## Pair with a QR code (easier, several phones)
+
+HUD header → **devices** → **pair a phone (QR)**. On the phone: Developer options → Wireless debugging →
+**Pair device with QR code**, scan. The bridge finds the phone over mDNS (`adb mdns services`), pairs
+with the one-time code, and adb connects to it. Then press **allow** so JARVIS may use it (kept in
+`data/adb-allow.json`, alongside `DEVICE_ADB_ALLOW`). Repeat for each phone; all stay connected at
+once, and every `adb_*` tool takes a `device` (model or serial) when more than one is allowed.
+Pairing and allowing are HUD-only: the model has no tool for them.

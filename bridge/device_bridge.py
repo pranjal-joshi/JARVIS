@@ -19,7 +19,9 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
+import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,6 +46,15 @@ TOKEN = CFG.get("DEVICE_BRIDGE_TOKEN", "")
 PORT = int(CFG.get("DEVICE_BRIDGE_PORT", "8791"))
 ADB = CFG.get("ADB_PATH", "adb")
 ADB_ALLOW = {s.strip() for s in CFG.get("DEVICE_ADB_ALLOW", "").split(",") if s.strip()}
+# devices allowed from the HUD's Devices panel (after QR pairing) are kept here, next to the .env list
+ALLOW_FILE = ROOT / "data" / "adb-allow.json"
+
+
+def _allowed() -> set[str]:
+    try:
+        return ADB_ALLOW | set(json.loads(ALLOW_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set(ADB_ALLOW)
 # name=target pairs: an exe/shell target (e.g. notepad, calc, spotify:) or a .lnk/.exe path
 WIN_APPS = dict(p.split("=", 1) for p in CFG.get("DEVICE_WIN_APPS", "notepad=notepad.exe,calculator=calc.exe")
                 .split(",") if "=" in p)
@@ -152,7 +163,7 @@ def _devices() -> list[dict]:
                 d["serial"] = adb("shell", "getprop", "ro.serialno", serial=d["id"])
             except ActionError:
                 d["serial"] = ""
-        d["allowed"] = d.get("serial", "") in ADB_ALLOW
+        d["allowed"] = d.get("serial", "") in _allowed()
         out.append(d)
     return out
 
@@ -277,10 +288,91 @@ def adb_connect(a: dict) -> str:
     return adb("connect", addr)
 
 
+# ---------------------------------------------------------------- QR pairing (Android 11+)
+# The phone scans WIFI:T:ADB;S:<name>;P:<code>;; then advertises <name> as _adb-tls-pairing._tcp
+# over mDNS; we find it with `adb mdns services`, pair with the code, and adb then connects to the
+# phone's _adb-tls-connect._tcp service on its own. Several phones can be paired, one QR each.
+PAIRINGS: dict[str, dict] = {}
+PAIR_TIMEOUT = 150
+
+
+def _pair_worker(job: dict) -> None:
+    deadline = time.monotonic() + PAIR_TIMEOUT
+    try:
+        while time.monotonic() < deadline and job["status"] == "waiting":
+            for line in adb("mdns", "services").splitlines():
+                if job["name"] in line and "_adb-tls-pairing" in line:
+                    addr = line.split()[-1]
+                    job["status"], job["address"] = "pairing", addr
+                    out = adb("pair", addr, job["code"], timeout=30)
+                    if "Successfully paired" not in out:
+                        raise ActionError(out[-200:])
+                    job["status"] = "connecting"
+                    break
+            else:
+                time.sleep(1)
+                continue
+            break
+        if job["status"] == "waiting":
+            job["status"] = "expired"
+            return
+        before = job["known"]
+        while time.monotonic() < deadline:  # wait for adb's own auto-connect to bring the phone up
+            new = [d for d in _devices() if d["state"] == "device" and d.get("serial") and d["id"] not in before]
+            if new:
+                job.update(status="connected", serial=new[0]["serial"], model=new[0]["model"],
+                           allowed=new[0]["allowed"])
+                return
+            time.sleep(1.5)
+        job["status"] = "paired"  # paired, but not connected yet: tap the phone's connect entry
+    except (ActionError, subprocess.TimeoutExpired) as e:
+        job.update(status="failed", error=str(e)[:200])
+
+
+def adb_pair_start(_: dict) -> dict:
+    for k in [k for k, j in PAIRINGS.items() if time.time() - j["created"] > 600]:
+        PAIRINGS.pop(k)
+    jid = secrets.token_hex(4)
+    job = {"id": jid, "name": f"jarvis-{jid}", "code": f"{secrets.randbelow(10**6):06d}", "status": "waiting",
+           "created": time.time(), "known": {d["id"] for d in _devices()}}
+    PAIRINGS[jid] = job
+    threading.Thread(target=_pair_worker, args=(job,), daemon=True).start()
+    return {"id": jid, "qr": f"WIFI:T:ADB;S:{job['name']};P:{job['code']};;", "status": "waiting",
+            "expires_in": PAIR_TIMEOUT}
+
+
+def adb_pair_status(a: dict) -> dict:
+    job = PAIRINGS.get(str(a.get("id", "")))
+    if not job:
+        raise ActionError("no such pairing")
+    return {k: job.get(k) for k in ("id", "status", "address", "serial", "model", "allowed", "error")}
+
+
+def adb_list(_: dict) -> list[dict]:
+    return _devices()
+
+
+def adb_allow(a: dict) -> str:
+    serial = str(a.get("serial", "")).strip()
+    if not re.match(r"^[\w.-]{4,64}$", serial):
+        raise ActionError("bad serial")
+    if serial in ADB_ALLOW and not a.get("allowed", True):
+        raise ActionError("that serial is allowed in .env (DEVICE_ADB_ALLOW); remove it there")
+    try:
+        cur = set(json.loads(ALLOW_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        cur = set()
+    cur = cur | {serial} if a.get("allowed", True) else cur - {serial}
+    ALLOW_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ALLOW_FILE.write_text(json.dumps(sorted(cur)), encoding="utf-8")
+    return f"{serial} {'allowed' if a.get('allowed', True) else 'no longer allowed'}."
+
+
 ACTIONS = {f.__name__: f for f in (
     win_info, win_media, win_open, win_lock, win_screenshot,
     adb_devices, adb_info, adb_screenshot, adb_open_app, adb_key, adb_tap, adb_type,
-    adb_shell, adb_install, adb_uninstall, adb_connect)}
+    adb_shell, adb_install, adb_uninstall, adb_connect,
+    adb_pair_start, adb_pair_status, adb_list, adb_allow)}
 
 
 class Handler(BaseHTTPRequestHandler):
