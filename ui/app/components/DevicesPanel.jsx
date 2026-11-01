@@ -18,7 +18,7 @@ const STATUS = {
   failed: "Pairing failed.",
 };
 
-export default function DevicesPanel({ onCount }) {
+export default function DevicesPanel({ onCount, version }) {
   const [list, setList] = useState(null);
   const [error, setError] = useState("");
   const [job, setJob] = useState(null); // { id, qr, svg, status, ... }
@@ -35,7 +35,7 @@ export default function DevicesPanel({ onCount }) {
     onCount?.(d.filter((x) => x.state === "device").length);
   }, [onCount]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, version]);
 
   // poll the pairing job until it settles
   useEffect(() => {

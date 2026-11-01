@@ -9,6 +9,7 @@ const ALLOWED = [
   /^llm$/,
   /^kb\/(search|graph|memory|tasks|sync|daily-summary|page)$/,
   /^audio\/(transcriptions|speech)$/,
+  /^skills(\/.+\/(enable|run))?$/,
   /^devices(\/pair(\/[a-f0-9]+)?|\/allow)?$/,
 ];
 

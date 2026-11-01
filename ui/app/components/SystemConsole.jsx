@@ -48,6 +48,8 @@ export default function SystemConsole({ lines, active, focused, pinned, onToggle
             return <div key={l.id} className="cl wait">… waiting for approval in the HUD</div>;
           if (l.kind === "out")
             return <pre key={l.id} className="cl out">{l.text}</pre>;
+          if (l.kind === "info") // hook events and skill runs
+            return <div key={l.id} className="cl info">{l.text}</div>;
           const st = STATUS[l.status] || { code: "?", cls: "err" };
           return (
             <div key={l.id} className={`cl exit ${st.cls}`}>

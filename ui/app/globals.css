@@ -1028,3 +1028,17 @@ header { position: relative; z-index: 20; }
 .dev-status.failed, .dev-status.expired { color: var(--red); animation: none; }
 .dev-status.connected { color: #6dffa8; }
 .dev-list li.kbx-dim { display: block; }
+
+/* skills popover */
+.skill-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.skill-list > li { display: grid; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid var(--cyan-faint); }
+.skill-head { display: flex; align-items: center; gap: 6px; }
+.skill-head b { flex: 1; color: var(--text); font-size: 12px; }
+.skill-head .gate { cursor: pointer; background: transparent; padding: 2px 8px; font: 10px var(--mono); border: 1px solid var(--cyan-dim); border-radius: 4px; color: var(--cyan); }
+.skill-head .gate:disabled { opacity: 0.35; cursor: default; }
+.skill-list i { font-style: normal; font-size: 10px; opacity: 0.55; }
+.skill-list small { font-size: 11px; opacity: 0.75; white-space: pre-wrap; max-height: 4.2em; overflow: hidden; }
+.hook-log { font-size: 10px; opacity: 0.75; display: grid; gap: 2px; }
+.hook-log h4 { margin: 0 0 2px; font: 600 10px var(--display); letter-spacing: 0.2em; color: var(--cyan-dim); text-transform: uppercase; }
+.hook-log span { opacity: 0.6; }
+.cl.info { color: var(--violet); }

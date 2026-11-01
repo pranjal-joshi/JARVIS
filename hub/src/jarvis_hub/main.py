@@ -17,6 +17,7 @@ from jarvis_hub.config import get_settings
 from jarvis_hub.events.bus import EventBus
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
+from jarvis_hub.automation.skills import SkillEngine
 from jarvis_hub.devices.tools import register_device_tools
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
@@ -92,6 +93,10 @@ async def lifespan(app: FastAPI):
         language=s.stt_language)
     st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(st.llm, st.tools, st.gate, st.audit, s.ask_for())
 
+    st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
+    if s.agent != "echo":
+        st.skills.start()
+
     tasks = []
     if s.agent != "echo":
         tasks.append(asyncio.create_task(_kb_sync_loop(st.kb_index, s.kb_sync_interval_s)))
@@ -105,6 +110,7 @@ async def lifespan(app: FastAPI):
             t.cancel()
             with suppress(asyncio.CancelledError):
                 await t
+        await st.skills.stop()
         await st.tools.aclose()
         await st.llm.aclose()
         await embedder.aclose()

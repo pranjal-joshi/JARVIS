@@ -180,6 +180,38 @@ async def devices_allow(body: AllowBody, request: Request, _: Source = Depends(r
     return {"result": await _device_bridge(request, "adb_allow", body.model_dump())}
 
 
+# ---------- skills (KB pages under skills/, run on events once enabled here) ----------
+@router.get("/skills")
+async def skills_list(request: Request, _: Source = Depends(require_approver)) -> dict:
+    eng = request.app.state.skills
+    return {"skills": eng.skills(), "events": eng.recent}
+
+
+class EnableBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/skills/{name:path}/enable")
+async def skills_enable(name: str, body: EnableBody, request: Request,
+                        _: Source = Depends(require_approver)) -> dict:
+    try:
+        return request.app.state.skills.set_enabled(name, body.enabled)
+    except KeyError:
+        raise HTTPException(404, "no such skill page") from None
+
+
+@router.post("/skills/{name:path}/run")
+async def skills_run(name: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    eng = request.app.state.skills
+    skill = next((s for s in eng.skills() if s["name"].lower() == name.lower()), None)
+    if skill is None:
+        raise HTTPException(404, "no such skill page")
+    if not skill["enabled"]:
+        raise HTTPException(409, "enable the skill first")
+    eng._spawn(skill, "a manual run from the HUD")
+    return {"ok": True}
+
+
 # ---------- status ----------
 @router.get("/status")
 async def status(request: Request, _: Source = Depends(require_source)) -> dict:

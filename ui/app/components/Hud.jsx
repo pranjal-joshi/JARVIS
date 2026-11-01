@@ -19,6 +19,7 @@ const KbGraph = dynamic(() => import("./KbGraph"), {
 
 const KbExplorer = dynamic(() => import("./KbExplorer"), { ssr: false });
 const DevicesPanel = dynamic(() => import("./DevicesPanel"), { ssr: false });
+const SkillsPanel = dynamic(() => import("./SkillsPanel"), { ssr: false });
 const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explorer
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
@@ -156,6 +157,7 @@ function Message({ m, latest }) {
     <div className={`msg ${m.role}`}>
       <span className="who">{m.role === "user" ? "YOU" : "JARVIS"}</span>
       <div className="text">
+        {m.skill && <div className="msg-ctx"><span>⚙ skill · {m.skill.replace(/^skills\//i, "")}</span></div>}
         {m.pages?.length > 0 && <div className="msg-ctx">{m.pages.map((n) => <span key={n}>◈ {n}</span>)}</div>}
         <RichText text={text} />
       </div>
@@ -232,12 +234,15 @@ export default function Hud() {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
   const [devCount, setDevCount] = useState(null);
+  const [skillOpen, setSkillOpen] = useState(false);
+  const [skillCount, setSkillCount] = useState(null);
+  const [hookSeq, setHookSeq] = useState(0); // bumps on hook events so open panels refresh
   useEffect(() => { // close the tools list on any click outside it
-    if (!toolsOpen && !devOpen) return;
-    const off = (e) => { if (!e.target.closest?.(".tools-pick")) { setToolsOpen(false); setDevOpen(false); } };
+    if (!toolsOpen && !devOpen && !skillOpen) return;
+    const off = (e) => { if (!e.target.closest?.(".tools-pick")) { setToolsOpen(false); setDevOpen(false); setSkillOpen(false); } };
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
-  }, [toolsOpen, devOpen]);
+  }, [toolsOpen, devOpen, skillOpen]);
   const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
@@ -276,7 +281,7 @@ export default function Hud() {
     setState("idle");
   };
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") { setPinned(null); setToolsOpen(false); setDevOpen(false); } };
+    const onKey = (e) => { if (e.key === "Escape") { setPinned(null); setToolsOpen(false); setDevOpen(false); setSkillOpen(false); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -347,6 +352,17 @@ export default function Hud() {
           if (ev.type === "thinking") setState("thinking");
           if (ev.type === "tool_call" && ev.data.risk && ev.data.risk !== "read") flash("orange");
           if (ev.type === "approval_request") { flash("orange"); chime(); }
+          if (ev.type === "hook_event") {
+            setHookSeq((n) => n + 1);
+            echo({ kind: "info", text: `⚡ ${ev.data.kind}: ${ev.data.text}` });
+          }
+          if (ev.type === "skill_run") echo({ kind: "info", text: `⚙ skill "${ev.data.skill}" (${ev.data.why})` });
+          if (ev.type === "skill_done") {
+            setHookSeq((n) => n + 1);
+            const line = ev.data.text || "Done.";
+            setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.skill }]);
+            if (speakRef.current) speakRef.current(line);
+          }
           if (ev.type === "timer") {
             chime();
             const line = `Your ${ev.data.label || "timer"} timer is done, sir.`;
@@ -614,13 +630,27 @@ export default function Hud() {
           )}
           {status && (
             <div className="tools-pick">
+              <button type="button" className="chip" aria-expanded={skillOpen}
+                onClick={() => { setSkillOpen((o) => !o); setToolsOpen(false); setDevOpen(false); }}
+                title="Skills: knowledge-base pages that run on events">
+                skills{skillCount != null ? ` ${skillCount}` : ""} {skillOpen ? "▴" : "▾"}
+              </button>
+              {skillOpen && (
+                <div className="tools-list" role="dialog" aria-label="Skills">
+                  <SkillsPanel onCount={setSkillCount} version={hookSeq} />
+                </div>
+              )}
+            </div>
+          )}
+          {status && (
+            <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={devOpen}
-                onClick={() => { setDevOpen((o) => !o); setToolsOpen(false); }} title="Android devices and QR pairing">
+                onClick={() => { setDevOpen((o) => !o); setToolsOpen(false); setSkillOpen(false); }} title="Android devices and QR pairing">
                 devices{devCount != null ? ` ${devCount}` : ""} {devOpen ? "▴" : "▾"}
               </button>
               {devOpen && (
                 <div className="tools-list" role="dialog" aria-label="Devices">
-                  <DevicesPanel onCount={setDevCount} />
+                  <DevicesPanel onCount={setDevCount} version={hookSeq} />
                 </div>
               )}
             </div>
@@ -628,7 +658,7 @@ export default function Hud() {
           {status && (
             <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={toolsOpen}
-                onClick={() => { setToolsOpen((o) => !o); setDevOpen(false); }} title="Show the tools JARVIS can use">
+                onClick={() => { setToolsOpen((o) => !o); setDevOpen(false); setSkillOpen(false); }} title="Show the tools JARVIS can use">
                 tools {status.tools?.length} {toolsOpen ? "▴" : "▾"}
               </button>
               {toolsOpen && (
