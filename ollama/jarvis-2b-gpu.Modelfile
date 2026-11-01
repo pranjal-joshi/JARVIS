@@ -1,0 +1,5 @@
+# qwen3.5:2b (4-bit) with every layer on the GPU. Ollama's auto-fit keeps a safety margin that leaves
+# 0 of 25 layers on a 2 GB MX550 (about 1.5 GB free under WSL); forcing them all uses ~1.4 GB.
+# On a GPU with more memory, use the plain base model instead.
+FROM qwen3.5:2b-q4_K_M
+PARAMETER num_gpu 99

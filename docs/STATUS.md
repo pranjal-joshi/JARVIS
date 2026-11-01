@@ -28,18 +28,21 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
    Then *"Turn on the desk lamp"* in the HUD → Approve.
 2. **HA Assist → JARVIS**: point *Local OpenAI LLM* at `http://hub:8700/v1` with the satellite token;
    add Wyoming whisper/piper; build the `JARVIS` assist pipeline (same guide, §3–5).
-3. **Cloned voice**: drop the reference clip in `voice/reference/`, start `--profile voicestudio`
-   (downloads ~2.4 GB of weights; the image is already pulled), create the `jarvis` profile ([voice/README.md](../voice/README.md)).
+3. **Cloned voice**: your clip is converted (`voice/reference/jarvis.wav`, 14.8 s), VoiceStudio is running and
+   the `jarvis` profile exists. Left for you, at http://localhost:3900: accept the OmniVoice model licence
+   (CC-BY-NC, non-commercial) in Model Catalogue so the ~2.4 GB weights download, and make the profile's
+   consent/attestation choice if VoiceStudio asks. Until then the hub speaks with Piper ([voice/README.md](../voice/README.md)).
 4. **Mic in the HUD**: not tested overnight (no microphone in the automated browser). Try ◉ → speak → ■.
 5. **Your real Logseq graph**: set `KB_GRAPH_PATH` (and `KB_GRAPH_NAME`) in `.env` to your graph folder.
    It must be a file-based graph ([decision 0001](decisions/0001-logseq-file-graph.md)).
 
 ## Known issues / limits
 
-- **Speed on CPU**: 10–30 s per reply with tools (two LLM passes). Options: `LLM_MODEL=qwen3.5:2b`
-  (pull it first), a cloud endpoint via `LLM_BASE_URL`, or the homelab GPU.
-- **Small-model judgement**: qwen3.5:4b occasionally calls a tool it didn't need (it saved a "fact" it had just looked up).
-  The tool description was tightened, and `jarvis/` writes are harmless, but expect some quirks.
+- **Speed**: now 2–4 s per reply with `jarvis-2b-gpu` fully on the MX550 (was 11–57 s with qwen3.5:4b on CPU).
+  STT/TTS/embeddings stay on CPU because the LLM fills the 2 GB card.
+- **Small-model judgement**: qwen3.5:2b is weaker than 4b. Seen once in testing: it wrote a fake
+  `<tool_result>` claiming success instead of calling the tool. The hub now detects that, asks the model
+  again once, and otherwise says nothing was changed. Expect occasional odd phrasing ("I drink tea…").
 - **Approvals from voice** block the HA request for up to 90 s while waiting for the HUD; HA may time out
   first and speak an error even though the action then runs when approved. Phase 6 should return
   "awaiting approval" immediately and confirm afterwards.

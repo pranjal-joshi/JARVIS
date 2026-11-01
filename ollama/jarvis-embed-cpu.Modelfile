@@ -1,0 +1,4 @@
+# nomic-embed-text kept on the CPU so KB syncs never evict the chat model from a small GPU.
+# Same weights as the base model, so existing Qdrant vectors stay valid.
+FROM nomic-embed-text
+PARAMETER num_gpu 0

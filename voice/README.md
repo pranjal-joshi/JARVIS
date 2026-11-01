@@ -20,6 +20,10 @@ official image `ghcr.io/debpalash/voicestudio`; GitHub has look-alike mirror rep
    docker compose --profile voice --profile voicestudio up -d
    ```
 3. Open http://localhost:3900 and enter `VOICESTUDIO_API_KEY` from `.env` when asked.
+   Accept the OmniVoice licence in **Model Catalogue** (CC-BY-NC weights: non-commercial use only).
+   Speech returns 403 `model_licence_required` until you do; the hub falls back to Piper meanwhile.
+   Clips recorded on a phone/PC (m4a etc.) can be converted with the ffmpeg in the image:
+   `docker run --rm --entrypoint ffmpeg -v "$PWD/voice/reference:/ref" ghcr.io/debpalash/voicestudio:0.5.7 -i /ref/in.m4a -ac 1 -ar 24000 /ref/jarvis.wav`
 4. **Voice cloning** → add the reference clip (it is at `/reference/<file>` inside the container,
    or upload it from your disk) → save the profile with the name **`jarvis`**
    (must match `VOICESTUDIO_VOICE` in `.env`).

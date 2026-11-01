@@ -9,7 +9,7 @@ nothing is exposed to the internet.
              │  STT: whisper (Wyoming)   TTS: piper / tts-jarvis    │
              └───────────────┬──────────────────────────────────────┘
                              │ OpenAI-compatible /v1/chat/completions (token = source "satellite")
- browser HUD ──► ui (Next.js) ──► hub (FastAPI) ──► Ollama (qwen3.5:4b, nomic-embed-text)
+ browser HUD ──► ui (Next.js) ──► hub (FastAPI) ──► Ollama (qwen3.5:2b on GPU, nomic-embed-text)
    mic/TTS        server proxy     │  agent loop ─► tool registry ─► MCP: Home Assistant
                                    │  approval gate (web/phone approve, never voice)
                                    │  audit log (SQLite) ─► jarvis/daily/<date>
@@ -33,8 +33,8 @@ See [docs/STATUS.md](docs/STATUS.md) for the detailed done/todo list.
 
 ```bash
 scripts/wsl/bootstrap.sh          # creates .env with fresh tokens (never overwrites)
-docker compose --profile voice up -d --build
-scripts/wsl/pull-models.sh        # qwen3.5:4b + nomic-embed-text into Ollama
+docker compose up -d --build      # files + profiles come from COMPOSE_FILE / COMPOSE_PROFILES in .env
+scripts/wsl/pull-models.sh        # LLM + embedding model from .env (builds ollama/<name>.Modelfile names)
 scripts/wsl/doctor.sh             # checks GPU, ports, services, hub status
 ```
 
@@ -57,7 +57,16 @@ Open http://localhost:3000. Type or press ◉ to talk (the browser asks for the 
 | `--profile voice` | + whisper, piper |
 | `--profile voicestudio` | + VoiceStudio and its Wyoming bridge (cloned voice) |
 | `-f compose.yaml -f compose.ha.yaml` | joins the existing `ha_network` so HA can reach hub + Wyoming |
-| `-f compose.yaml -f compose.gpu.yaml` | NVIDIA hosts (homelab) |
+| `-f compose.yaml -f compose.gpu.yaml` | NVIDIA hosts with a real GPU (homelab): Ollama, Whisper, VoiceStudio on GPU |
+| `-f compose.yaml -f compose.gpu-llm.yaml` | small GPU (this laptop's 2 GB MX550): only Ollama on GPU; set as the default here via `COMPOSE_FILE` in `.env` |
+
+### Models on this laptop
+
+`LLM_MODEL=jarvis-2b-gpu` is qwen3.5:2b (4-bit) with every layer forced onto the GPU
+([ollama/jarvis-2b-gpu.Modelfile](ollama/jarvis-2b-gpu.Modelfile)); Ollama's auto-fit would otherwise leave it on CPU.
+It uses ~1.4 of the ~1.5 GB free, so STT, TTS and embeddings (`jarvis-embed-cpu`) stay on CPU.
+Measured: 2–4 s per reply with tool lookups, against 11–57 s for qwen3.5:4b on CPU. The 2b model is
+weaker at tool judgement; the hub catches replies that fake a tool call as text and never reports them as done.
 
 ## Security model
 

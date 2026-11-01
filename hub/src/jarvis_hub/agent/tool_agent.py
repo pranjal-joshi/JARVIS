@@ -16,6 +16,9 @@ from jarvis_hub.persona.jarvis import SYSTEM_PROMPT, source_hint
 log = logging.getLogger(__name__)
 MAX_STEPS = 6
 MAX_TOOL_RESULT_CHARS = 6000
+FAKE_TOOL_MARKERS = ("<tool_result", "</tool_result>", "<tool_call", "<function_call", "<function=")
+FAKE_TOOL_NUDGE = ("(system) Your last message wrote a tool call or tool result as plain text; no tool ran. "
+                   "Call the tool through the tools interface, or answer without claiming any action happened.")
 
 
 class ToolAgent:
@@ -32,6 +35,7 @@ class ToolAgent:
         schemas = [t.openai_schema() for t in self.tools.all()]
 
         bus.publish(Event("thinking", source, request_id, {"step": 0}))
+        faked = False
         for step in range(MAX_STEPS):
             try:
                 msg = await self.llm.chat(convo, schemas)
@@ -41,8 +45,19 @@ class ToolAgent:
                                    "My apologies, sir, the language model is not answering.")
             calls = msg.get("tool_calls") or []
             if not calls:
-                return self._reply(bus, source, request_id,
-                                   _strip_think(msg.get("content") or "").strip() or "Done, sir.")
+                text = _strip_think(msg.get("content") or "").strip()
+                if _fakes_tool_use(text):
+                    # Small models sometimes write a tool call or result as text instead of calling
+                    # the tool. Nothing ran, so never pass that on as if it had: ask once more.
+                    log.warning("model wrote tool markup as text: %.200s", text)
+                    if faked:
+                        return self._reply(bus, source, request_id,
+                                           "My apologies, sir, I couldn't carry that out. Nothing was changed.")
+                    faked = True
+                    convo.append({"role": "assistant", "content": text})
+                    convo.append({"role": "user", "content": FAKE_TOOL_NUDGE})
+                    continue
+                return self._reply(bus, source, request_id, text or "Done, sir.")
             convo.append({"role": "assistant", "content": msg.get("content") or "",
                           "tool_calls": calls})
             for call in calls:
@@ -102,6 +117,12 @@ class ToolAgent:
     def _reply(bus: EventBus, source: Source, request_id: str, text: str) -> str:
         bus.publish(Event("reply", source, request_id, {"text": text}))
         return text
+
+
+def _fakes_tool_use(text: str) -> bool:
+    """True when a reply imitates tool markup instead of using the tools interface."""
+    lowered = text.lower()
+    return any(m in lowered for m in FAKE_TOOL_MARKERS)
 
 
 def _strip_think(text: str) -> str:

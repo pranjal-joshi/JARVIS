@@ -115,3 +115,16 @@ def test_classify_allow_list():
     assert classify("HassUnlock", allow, None) is None          # not listed -> hidden
     assert classify("GetLiveContext", allow, Risk.DESTRUCTIVE) is Risk.DESTRUCTIVE  # hint raises
     assert classify("HassTurnOn", allow, Risk.READ) is Risk.WRITE  # hint never lowers
+
+
+def test_faked_tool_result_is_retried_then_refused(parts):
+    bus, gate, audit, reg, calls = parts
+    fake = say('<tool_result>\n{"status": "success"}\n</tool_result>')
+    # A fake followed by a real call: the nudge makes the model use the tool.
+    llm = FakeLLM([fake, call("ha__GetLiveContext"), say("The lamp is off, sir.")])
+    assert asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus)) == "The lamp is off, sir."
+    assert any("no tool ran" in m["content"] for m in llm.seen[-1] if m["role"] == "user")
+    # Two fakes in a row: never claim success.
+    llm = FakeLLM([fake, fake])
+    reply = asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus))
+    assert "Nothing was changed" in reply and calls == []

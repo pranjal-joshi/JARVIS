@@ -1,0 +1,15 @@
+# Small-GPU overlay (the POC laptop's MX550, 2 GB): only Ollama gets the GPU; whisper, piper and
+# VoiceStudio stay on CPU so they don't compete for VRAM. Needs GPU support in Docker
+# (Docker Desktop + WSL2 with the NVIDIA driver, or NVIDIA Container Toolkit on Linux).
+# Pair with LLM_MODEL=qwen3.5:2b-q4_K_M; a short context keeps the KV cache inside VRAM.
+services:
+  ollama:
+    environment:
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
