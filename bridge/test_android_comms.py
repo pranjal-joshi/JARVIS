@@ -19,6 +19,13 @@ Current Notification Manager state:
           android.text=String (Running late, start without me)
           android.subText=null
         }
+    NotificationRecord(0x0d4e5f60: pkg=com.whatsapp user=UserHandle{0} id=1 key=0|com.whatsapp|1|null|10123: Notification(channel=group))
+      notification=
+        when=1793548000999
+        extras={
+          android.title=String (WhatsApp)
+          android.text=String (16 messages from 5 chats)
+        }
     NotificationRecord(0x0b2c3d4e: pkg=com.android.systemui user=UserHandle{0} id=7 key=0|com.android.systemui|7|null|10010: Notification(channel=BAT))
         extras={
           android.title=String (Battery saver)

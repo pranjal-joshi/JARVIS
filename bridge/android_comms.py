@@ -28,6 +28,7 @@ APPS = {
 # system chatter nobody asks about
 NOISE = ("android", "com.android.systemui", "com.android.vending", "com.google.android.gms",
          "com.android.providers.downloads", "com.google.android.apps.wellbeing")
+SUMMARY = re.compile(r"^(\d+ new (messages?|notifications?)|\d+ messages? from \d+ chats?|you have a notification)$", re.I)
 NUMBER = re.compile(r"^\+?[\d\s()-]{5,20}$")
 
 
@@ -55,6 +56,10 @@ def parse_notifications(dump: str) -> list[dict]:
         get = lambda k: (m[1].strip() if (m := re.search(_EXTRA.format(key=k), block, re.M)) else "")
         title, text = get("title"), get("bigText") or get("text")
         if not (title or text):
+            continue
+        # group summaries ("WhatsApp: 16 messages from 5 chats", "GPay: You have a notification") repeat
+        # the real entries and confuse a small model: drop them
+        if SUMMARY.match(text) and (title.lower() in (app_name(pkg[1]).lower(), "") or SUMMARY.match(title)):
             continue
         when = re.search(r"\bwhen=(\d{12,})", block)
         out.append({"key": key[1] if key else f"{pkg[1]}:{title}", "pkg": pkg[1], "app": app_name(pkg[1]),
