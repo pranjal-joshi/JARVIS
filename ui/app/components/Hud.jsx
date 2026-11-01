@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BorderBeam } from "border-beam";
 import dynamic from "next/dynamic";
 import Orb from "./Orb";
 import RichText from "./RichText";
@@ -457,7 +458,10 @@ export default function Hud() {
         <div className="chat" ref={chatRef}>
           {messages.map((m, i) => <Message key={i} m={m} latest={i === messages.length - 1} />)}
         </div>
-        <form className={`input reveal${state === "thinking" ? " busy" : ""}`} style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
+        {/* the beam animates its own wrapper, so the entrance animation sits on the form */}
+        <BorderBeam className="input-wrap" size="md" colorVariant="colorful" strength={0.7}
+          theme="dark" duration={state === "thinking" ? 1 : 1.96}>
+        <form className="input reveal" style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
           <button type="button" className={`mic ${state === "listening" ? "on" : ""}`} onClick={toggleMic}
             aria-label={state === "listening" ? "Stop and send" : "Speak"} aria-pressed={state === "listening"}>
             {state === "listening" ? <StopIcon /> : <MicIcon />}
@@ -467,6 +471,7 @@ export default function Hud() {
           <button type="submit" className="send">Send</button>
           <label className="speak"><input type="checkbox" checked={speak} onChange={(e) => setSpeak(e.target.checked)} /> voice</label>
         </form>
+        </BorderBeam>
       </section>
 
       <div className="side reveal" style={{ "--i": 3 }}>

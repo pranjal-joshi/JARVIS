@@ -340,40 +340,15 @@ h2::before { content: "// "; color: var(--cyan-dim); letter-spacing: 0.1em; }
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-top: 8px;
+  margin: 0;
   padding: 8px;
   border: 1px solid var(--panel-edge);
   background: rgba(4, 12, 18, 0.7);
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+  border-radius: 8px;
   transition: border-color var(--dur-short) var(--ease-in-out), box-shadow var(--dur-short) var(--ease-in-out);
 }
+.input-wrap { flex: none; margin-top: 8px; }
 .input:focus-within { border-color: var(--cyan-dim); box-shadow: inset 0 0 24px rgba(127, 231, 255, 0.06); }
-/* border beam: a short bright arc travelling round the edge (::before) with a soft inner glow
-   trailing it (::after). Idle: faint and slow. Focused: brighter. Thinking: fast. */
-@property --beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
-.input::before, .input::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: conic-gradient(from var(--beam-angle), transparent 0 84%, rgba(127, 231, 255, 0.4) 90%,
-              var(--cyan) 94%, #fff 96%, var(--violet) 98%, transparent 100%);
-  transition: opacity var(--dur-med) var(--ease-in-out);
-  animation: beam-spin 6s linear infinite;
-}
-.input::before {
-  padding: 1.5px; /* ring thickness */
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0.35;
-}
-.input::after { z-index: -1; filter: blur(14px); opacity: 0.06; }
-.input:focus-within::before { opacity: 0.9; }
-.input:focus-within::after { opacity: 0.14; }
-.input.busy::before, .input.busy::after { animation-duration: 1.6s; }
-.input.busy::before { opacity: 1; }
-.input.busy::after { opacity: 0.2; }
-@keyframes beam-spin { to { --beam-angle: 360deg; } }
 .input input[type="text"], .input input:not([type]) {
   flex: 1;
   min-width: 0;
@@ -731,7 +706,8 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
   .chat { flex: 1 1 auto; padding: 4px 2px; }
   .msg { gap: 8px; font-size: 14px; }
   .msg .who { font-size: 9px; }
-  .input { flex: none; flex-wrap: nowrap; margin: 6px 0 8px; padding: 6px; }
+  .input-wrap { flex: none; margin: 6px 0 8px; }
+  .input { flex-wrap: nowrap; padding: 6px; }
   .input input:not([type]) { flex: 1 1 auto; min-width: 0; font-size: 16px; } /* 16px stops iOS zoom-on-focus */
   .input .send { padding-inline: 10px; }
   .input .speak { font-size: 10px; }
