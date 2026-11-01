@@ -61,3 +61,16 @@ for q in medium high; do curl -L -o voice/piper/jarvis-$q.onnx $B/$q/jarvis-$q.o
 Then set `PIPER_VOICE=jarvis-medium` in `.env` and `docker compose up -d piper`.
 Measured on this laptop (CPU), one two-sentence line: `jarvis-medium` ~0.6 s, `jarvis-high` ~3.5 s,
 Kokoro `bm_george` ~3.7 s (tried and removed: too slow on CPU).
+
+### Jarvis_Real (alternative)
+
+[gstratto75/Jarvis_Real](https://github.com/gstratto75/Jarvis_Real) is another Piper medium voice (US espeak,
+22.05 kHz, speaks ~25% slower via `length_scale` 1.25). The repo has **no licence**: personal use only.
+
+```bash
+B=https://github.com/gstratto75/Jarvis_Real/raw/c5cce6f21b7295f67e431c16057df2df1adc057a
+for f in en_US-Jarvis_Real-medium.onnx en_US-Jarvis_Real-medium.onnx.json; do curl -L -o voice/piper/$f $B/$f; done
+```
+
+Then `PIPER_VOICE=en_US-Jarvis_Real-medium`. Measured ~0.5 s for a two-sentence line once loaded.
+Stock voice: `PIPER_VOICE=en_GB-alan-medium` (the default).

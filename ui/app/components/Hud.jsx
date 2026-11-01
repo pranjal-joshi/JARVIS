@@ -457,7 +457,7 @@ export default function Hud() {
         <div className="chat" ref={chatRef}>
           {messages.map((m, i) => <Message key={i} m={m} latest={i === messages.length - 1} />)}
         </div>
-        <form className="input reveal" style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
+        <form className={`input reveal${state === "thinking" ? " busy" : ""}`} style={{ "--i": 4 }} onSubmit={(e) => { e.preventDefault(); send(input); }}>
           <button type="button" className={`mic ${state === "listening" ? "on" : ""}`} onClick={toggleMic}
             aria-label={state === "listening" ? "Stop and send" : "Speak"} aria-pressed={state === "listening"}>
             {state === "listening" ? <StopIcon /> : <MicIcon />}

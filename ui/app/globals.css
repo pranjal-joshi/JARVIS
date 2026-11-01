@@ -103,10 +103,6 @@ body::after {
   to { transform: scale(1.7); opacity: 0; }
 }
 @keyframes blink { 50% { opacity: 0.35; } }
-@keyframes sweep {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(100%); }
-}
 
 /* staggered load sequence: each block sets --i */
 .reveal {
@@ -352,19 +348,32 @@ h2::before { content: "// "; color: var(--cyan-dim); letter-spacing: 0.1em; }
   transition: border-color var(--dur-short) var(--ease-in-out), box-shadow var(--dur-short) var(--ease-in-out);
 }
 .input:focus-within { border-color: var(--cyan-dim); box-shadow: inset 0 0 24px rgba(127, 231, 255, 0.06); }
-.input::after {
-  /* thin sweep along the bottom edge while focused */
+/* border beam: a short bright arc travelling round the edge (::before) with a soft inner glow
+   trailing it (::after). Idle: faint and slow. Focused: brighter. Thinking: fast. */
+@property --beam-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.input::before, .input::after {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
-  opacity: 0;
-  transform: translateX(-100%);
+  inset: 0;
+  pointer-events: none;
+  background: conic-gradient(from var(--beam-angle), transparent 0 84%, rgba(127, 231, 255, 0.4) 90%,
+              var(--cyan) 94%, #fff 96%, var(--violet) 98%, transparent 100%);
+  transition: opacity var(--dur-med) var(--ease-in-out);
+  animation: beam-spin 6s linear infinite;
 }
-.input:focus-within::after { opacity: 0.8; animation: sweep 2.4s var(--ease-in-out) infinite; }
+.input::before {
+  padding: 1.5px; /* ring thickness */
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.35;
+}
+.input::after { z-index: -1; filter: blur(14px); opacity: 0.06; }
+.input:focus-within::before { opacity: 0.9; }
+.input:focus-within::after { opacity: 0.14; }
+.input.busy::before, .input.busy::after { animation-duration: 1.6s; }
+.input.busy::before { opacity: 1; }
+.input.busy::after { opacity: 0.2; }
+@keyframes beam-spin { to { --beam-angle: 360deg; } }
 .input input[type="text"], .input input:not([type]) {
   flex: 1;
   min-width: 0;
