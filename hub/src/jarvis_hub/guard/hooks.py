@@ -106,7 +106,8 @@ def slots(tool, args, t) -> Verdict | None:
 
 
 def taint(tool, args, t) -> Verdict | None:
-    if tool.risk is not Risk.READ and (span := carried(args, t.tainted, t.heard)):
+    # a notification only ever goes to the user, so showing them outside text is fine (it's the point of it)
+    if tool.risk is not Risk.READ and tool.name != "notify" and (span := carried(args, t.tainted, t.heard)):
         return Verdict("ask", f'carries outside text ("{span}…") from a web page, message or file')
     return None
 

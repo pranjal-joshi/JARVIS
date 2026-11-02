@@ -154,17 +154,30 @@ class Timers:
             await asyncio.sleep(max(0.0, t["due"] - time.time()))
             self.active.pop(t["id"], None)
             self._save()
+            self._state("done", t)
             bus.publish(Event("timer", Source(t["source"]), t["request_id"],
                               {"id": t["id"], "label": t["label"], **({"late": True} if late else {})}))
 
         t["task"] = asyncio.get_running_loop().create_task(ring())
         self.active[t["id"]] = t
+        self.bus = bus
+
+    def _state(self, kind: str, t: dict) -> None:
+        if bus := getattr(self, "bus", None):
+            for src in (Source.WEB, Source.PHONE):
+                bus.publish(Event("timer_state", src, "", {"kind": kind, "id": t["id"], "label": t["label"],
+                                                          "due": t["due"]}))
+
+    def list(self) -> list[dict]:
+        return sorted(({k: t[k] for k in ("id", "label", "due", "source")} for t in self.active.values()),
+                      key=lambda t: t["due"])
 
     def start(self, seconds: float, label: str, ctx: ToolCtx) -> dict:
         t = {"id": uuid.uuid4().hex[:6], "label": label, "due": time.time() + seconds,
              "source": getattr(ctx.source, "value", ctx.source), "request_id": ctx.request_id}
         self._arm(t, ctx.bus)
         self._save()
+        self._state("set", t)
         return t
 
     def restore(self, bus) -> int:
@@ -186,6 +199,7 @@ class Timers:
                 t["task"].cancel()
                 gone = self.active.pop(tid)
                 self._save()
+                self._state("cancelled", gone)
                 return gone
         return None
 

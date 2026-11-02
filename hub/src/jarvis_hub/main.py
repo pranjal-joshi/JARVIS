@@ -26,6 +26,8 @@ from jarvis_hub.devices.tools import register_device_tools
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
 from jarvis_hub.kb.tools import register_kb_tools, write_daily_summary
+from jarvis_hub.automation.notify import Notifier, register_notify_tool
+from jarvis_hub.automation.watchers import WatchEngine
 from jarvis_hub.tools.utility import register_utility_tools
 from jarvis_hub.llm.client import LLMClient
 from jarvis_hub.mcp.registry import ToolRegistry
@@ -116,6 +118,8 @@ async def lifespan(app: FastAPI):
     st.sessions = Sessions(s.voice_followup_s)
     st.vocab = Vocabulary(st.kb_graph, st.audit)
     st.announcer = Announcer(st.bus, s)
+    st.notifier = Notifier(st.bus, s, st.announcer)
+    register_notify_tool(st.tools, st.notifier)
     st.latency = deque(maxlen=20)  # seconds per model-answered reply, for the HUD's model badge
     st.bus.tap(lambda ev: ev.type == "trace" and ev.data.get("route") == "model" and not ev.data.get("dry_run")
                and st.latency.append(ev.data["seconds"]))
@@ -129,8 +133,10 @@ async def lifespan(app: FastAPI):
         st.gate.on_orphan = st.agent.run_orphan  # approvals left over from before a restart
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
+    st.watch = WatchEngine(st.bus, s, st.notifier, st.skills, Path(s.hub_db_path).with_name("watchers_state.json"))
     if s.agent != "echo":
         st.skills.start()
+        st.watch.start()
 
     if n := st.timers.restore(st.bus):
         log.info("%d timers re-armed from before the restart", n)
@@ -150,6 +156,7 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await t
         await st.skills.stop()
+        await st.watch.stop()
         await st.tools.aclose()
         await st.llm.aclose()
         await embedder.aclose()

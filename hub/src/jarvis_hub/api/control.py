@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import date
 from pathlib import Path
 
@@ -344,3 +345,153 @@ async def llm_set(body: ModelBody, request: Request, _: Source = Depends(require
 
     asyncio.create_task(warm())
     return {"model": s.llm.model, "models": s.settings.llm_choices()}
+
+
+# ---------- watchers, timers and schedules (the HUD's watch panel) ----------
+# Watchers are created, changed and removed only here, by you in the HUD: the model has no tool for it.
+class WatcherBody(BaseModel):
+    watcher: dict
+    accept_unverified: bool = False  # you read the warning: the command isn't proven look-only
+    replaces: str = ""
+
+
+class DraftBody(BaseModel):
+    description: str
+    current: dict | None = None  # the watcher being edited, to refine rather than start over
+
+
+class NotifyBody(BaseModel):
+    title: str = "JARVIS"
+    text: str = "Test notification"
+    to: list[str] = ["windows", "hud"]
+
+
+def _bad(res) -> HTTPException:
+    return HTTPException(400, str(res))
+
+
+@router.get("/monitors")
+async def monitors(request: Request, _: Source = Depends(require_approver)) -> dict:
+    st = request.app.state
+    await st.watch.refresh()
+    skills = [{"name": s["name"], "schedule": s["schedule"], "enabled": s["enabled"], "dry_run": s.get("dry_run"),
+               "last_run": st.skills.last_run.get(s["name"].lower(), 0)}
+              for s in st.skills.skills() if s["trigger"] == "schedule"]
+    watch_skills = [{"name": s["name"], "match": s["match"], "enabled": s["enabled"]}
+                    for s in st.skills.skills() if s["trigger"] == "watch"]
+    return {**st.watch.describe(), "timers": st.timers.list(), "schedules": skills, "watch_skills": watch_skills,
+            "now": time.time()}
+
+
+@router.post("/watchers")
+async def watcher_save(body: WatcherBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    ok, res = await request.app.state.watch.save(body.watcher, body.accept_unverified, body.replaces)
+    if not ok:
+        raise _bad(res)
+    return res
+
+
+@router.post("/watchers/test")
+async def watcher_test(body: WatcherBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    from jarvis_hub.devices.tools import bridge_call
+    ok, res = await bridge_call(request.app.state.settings, "watch_test", {"watcher": body.watcher}, 120)
+    if not ok:
+        raise _bad(res)
+    return res
+
+
+@router.post("/watchers/{name}/run")
+async def watcher_run(name: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    eng = request.app.state.watch
+    w = next((w for w in await eng.refresh(force=True) if w["name"] == name), None)
+    if not w:
+        raise HTTPException(404, "no watcher by that name")
+    res = await eng.run(w, manual=True)
+    if res.get("error"):
+        raise _bad(res["error"])
+    return res
+
+
+@router.post("/watchers/{name}/enable")
+async def watcher_enable(name: str, body: EnableBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    ok, res = await request.app.state.watch.set_enabled(name, body.enabled)
+    if not ok:
+        raise _bad(res)
+    return res
+
+
+@router.delete("/watchers/{name}")
+async def watcher_delete(name: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    ok, res = await request.app.state.watch.delete(name)
+    if not ok:
+        raise _bad(res)
+    return {"ok": True}
+
+
+@router.post("/notify/test")
+async def notify_test(body: NotifyBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    return await request.app.state.notifier.send(body.title, body.text, body.to, origin="test")
+
+
+DRAFT_PROMPT = """You write one "watcher" for a home assistant on a Windows 11 laptop. A watcher is a look-only command
+that runs every few minutes; it prints JSON, and items not seen before notify the user.
+
+Reply with ONE JSON object and nothing else, with these fields:
+  name: lower-case-with-dashes, 2-41 characters
+  description: one sentence, what it watches
+  every: like "5m" or "1h" (at least 1m; pick something polite for the API, usually 5m-15m)
+  shell: "pwsh" (PowerShell 7, default) or "powershell" (Windows PowerShell 5.1)
+  command: one PowerShell command line that PRINTS JSON: an array of objects (or one object). Prefer the
+           tool's own JSON output (gh --json, az -o json); otherwise end with | ConvertTo-Json -Compress.
+           It must only look: never write, move or delete files, no redirection (>), no Invoke-Expression,
+           no nested cmd/powershell, no -EncodedCommand.
+  key: the field that identifies one item (so the same item never notifies twice), e.g. "url", "id", "number"
+  title: short notification title
+  text: notification text, a template with {field} placeholders (dots for nested: {repository.name})
+  url: optional link template, e.g. "{url}"
+  notify: any of "windows", "android", "hud", "voice" (default ["windows", "hud"])
+  env: names of environment variables the command needs (e.g. a PAT the user keeps in .env), else []
+
+What this laptop has: the GitHub CLI gh (logged in; it may hold several accounts: a personal one can be
+used with $env:GH_TOKEN = (gh auth token --user NAME); prefer `gh search prs` / `gh pr list --repo`),
+the Azure CLI az with the azure-devops extension (az pipelines runs list --org URL --project NAME -o json),
+classic Outlook through COM when it is running (New-Object -ComObject Outlook.Application). Use
+placeholders like <your-org> only when the request doesn't say; never invent tokens or secrets.
+
+The user's request: """
+
+
+@router.post("/watchers/draft")
+async def watcher_draft(body: DraftBody, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """You asked Claude (pressing the button is the approval) to draft a watcher; it's tested, not saved."""
+    st = request.app.state
+    s = st.settings
+    token = s.expert_bridge_token.get_secret_value()
+    if not token or token == "change-me":
+        raise HTTPException(400, "the expert bridge isn't configured (EXPERT_BRIDGE_TOKEN)")
+    question = DRAFT_PROMPT + body.description.strip()[:1500]
+    if body.current:
+        question += "\n\nRefine this current version rather than starting over:\n" + json.dumps(body.current)[:3000]
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(s.expert_timeout_s + 15, connect=5)) as c:
+            r = await c.post(s.expert_bridge_url.rstrip("/") + "/v1/ask",
+                             json={"question": question, "context": "", "engine": "claude"},
+                             headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"the expert bridge is not reachable ({type(e).__name__})")
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    answer = str(data.get("answer", ""))
+    st.audit.record(request_id=uuid.uuid4().hex, source=source, tool="ask_claude", risk="external",
+                    arguments={"question": question[:1500]}, status="ok" if r.status_code == 200 else "error",
+                    approved_by=f"{source.value} (watcher draft)", result=answer[:2000])
+    if r.status_code != 200:
+        raise HTTPException(502, f"Claude unavailable: {data.get('detail') or r.status_code}")
+    start, end = answer.find("{"), answer.rfind("}")
+    try:
+        draft = json.loads(answer[start:end + 1])
+    except ValueError:
+        raise HTTPException(502, f"Claude didn't return a watcher: {answer[:300]}")
+    from jarvis_hub.devices.tools import bridge_call
+    ok, res = await bridge_call(s, "watch_test", {"watcher": draft}, 120)
+    return {"draft": draft, "test": res if ok else None, "test_error": None if ok else str(res),
+            "model": data.get("model"), "seconds": data.get("seconds")}

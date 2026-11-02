@@ -9,8 +9,9 @@ import BootScreen from "./BootScreen";
 import RichText from "./RichText";
 import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
+import MonitorsPanel from "./MonitorsPanel";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
-import { askToNotify, chime, notifyApproval, playAudio, startRecording, stopAudio } from "../lib/audio";
+import { askToNotify, chime, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
 const KbGraph = dynamic(() => import("./KbGraph"), {
@@ -22,6 +23,7 @@ const KbExplorer = dynamic(() => import("./KbExplorer"), { ssr: false });
 const DevicesPanel = dynamic(() => import("./DevicesPanel"), { ssr: false });
 const SkillsPanel = dynamic(() => import("./SkillsPanel"), { ssr: false });
 const GuardPanel = dynamic(() => import("./GuardPanel"), { ssr: false });
+const WatchPanel = dynamic(() => import("./WatchPanel"), { ssr: false });
 const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explorer
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
@@ -219,6 +221,16 @@ export default function Hud() {
   const [leaving, setLeaving] = useState(() => new Set());
   const [kbPulse, setKbPulse] = useState(null);
   const [kbActive, setKbActive] = useState(false);
+  // monitors (watchers, timers, schedules): the panel grows and the changed row animates on each change
+  const [monitors, setMonitors] = useState(null);
+  const [monPulse, setMonPulse] = useState(null); // { name, kind, seq }
+  const [monActive, setMonActive] = useState(false);
+  const [ghosts, setGhosts] = useState([]); // cancelled / deleted / done rows, kept a moment to dissolve
+  const monTimer = useRef(null);
+  const loadMonitors = useCallback(async () => {
+    const r = await api("monitors").catch(() => null);
+    if (r?.ok) setMonitors(await r.json());
+  }, []);
   const [kbVersion, setKbVersion] = useState(0);
   const [kbView, setKbView] = useState("normal"); // normal | min | max
   const [context, setContext] = useState([]); // [{ name, text }] attached to the next question
@@ -262,22 +274,24 @@ export default function Hud() {
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillCount, setSkillCount] = useState(null);
   const [guardOpen, setGuardOpen] = useState(false);
+  const [watchOpen, setWatchOpen] = useState(false);
   const [llmInfo, setLlmInfo] = useState(null); // { loaded, median_s }: the model badge
   const [hookSeq, setHookSeq] = useState(0); // bumps on hook events so open panels refresh
   const openOnly = (which) => { // one header dropdown at a time
     setToolsOpen(which === "tools"); setDevOpen(which === "dev"); setSkillOpen(which === "skill"); setGuardOpen(which === "guard");
+    setWatchOpen(which === "watch");
   };
   useEffect(() => { // close the tools list on any click outside it
-    if (!toolsOpen && !devOpen && !skillOpen && !guardOpen) return;
+    if (!toolsOpen && !devOpen && !skillOpen && !guardOpen && !watchOpen) return;
     const off = (e) => { if (!e.target.closest?.(".tools-pick")) openOnly(null); };
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
-  }, [toolsOpen, devOpen, skillOpen, guardOpen]);
-  const [pinned, setPinned] = useState(null); // timeline | console | kb
+  }, [toolsOpen, devOpen, skillOpen, guardOpen, watchOpen]);
+  const [pinned, setPinned] = useState(null); // timeline | console | kb | watch
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
-  // any knowledge-base tool enlarges the map; other tools the console
-  const busy = kbActive ? "kb" : consoleActive ? "console" : null;
+  // any knowledge-base tool enlarges the map; a watcher or timer changing, the monitors; other tools the console
+  const busy = kbActive ? "kb" : monActive ? "watch" : consoleActive ? "console" : null;
   const holding = state === "thinking" || state === "speaking";
   if (busy) lastBusy.current = busy;
   else if (!holding) lastBusy.current = null;
@@ -286,10 +300,10 @@ export default function Hud() {
   // Layout changes (focus, panels growing) run as one view transition: the browser snapshots the
   // old and new layout and animates them on the compositor, so the move stays at 60 fps instead of
   // re-laying out the grid and resizing the WebGL graph on every frame.
-  const layoutKey = `${focus}|${kbActive}|${consoleActive}`;
-  const [shown, setShown] = useState({ focus, kb: kbActive, con: consoleActive });
+  const layoutKey = `${focus}|${kbActive}|${consoleActive}|${monActive}`;
+  const [shown, setShown] = useState({ focus, kb: kbActive, con: consoleActive, mon: monActive });
   useEffect(() => {
-    const next = { focus, kb: kbActive, con: consoleActive };
+    const next = { focus, kb: kbActive, con: consoleActive, mon: monActive };
     // no transition under the boot screen: its snapshots would paint above it
     if (!document.startViewTransition || reducedMotion() || window.innerWidth <= 1000
       || document.querySelector(".boot")) return setShown(next);
@@ -337,6 +351,11 @@ export default function Hud() {
     return () => clearInterval(id);
   }, []);
   const waiting = approvals.length > 0;
+  useEffect(() => { // the monitors window: now, then every 30 s (events refresh it in between)
+    loadMonitors();
+    const id = setInterval(loadMonitors, 30000);
+    return () => clearInterval(id);
+  }, [loadMonitors]);
   useEffect(() => { // every second while an approval card counts down, else every 15 s
     const id = setInterval(() => setNow(Date.now() / 1000), waiting ? 1000 : 15000);
     return () => clearInterval(id);
@@ -439,6 +458,28 @@ export default function Hud() {
             }
           }
           if (ev.type === "trace") note({ kind: "info", text: why(ev.data) }); // how the reply came about
+          if (ev.type === "watch" || ev.type === "timer_state") {
+            const d = ev.data;
+            const name = ev.type === "timer_state" ? d.label : d.name;
+            loadMonitors();
+            if (!(ev.type === "watch" && (d.kind === "running" || (d.kind === "ran" && !d.new)))) {
+              const seq = Date.now() + Math.random();
+              setMonPulse({ name, kind: d.kind, seq });
+              if (["cancelled", "deleted", "done"].includes(d.kind))
+                setGhosts((g) => [...g, { name, kind: d.kind, seq }].slice(-4));
+              setTimeout(() => setGhosts((g) => g.filter((x) => x.seq !== seq)), 1600);
+              setMonActive(true);
+              clearTimeout(monTimer.current);
+              monTimer.current = setTimeout(() => setMonActive(false), d.kind === "fired" || d.kind === "failed" ? 9000 : 5000);
+              if (d.kind === "fired") chime();
+            }
+          }
+          if (ev.type === "notify") {
+            const line = `🔔 ${ev.data.title}: ${ev.data.text}`;
+            note({ kind: "info", text: line });
+            setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.origin || "notify" }]);
+            notifySystem(ev.data.title, ev.data.text, ev.data.origin);
+          }
           if (ev.type === "timer") {
             chime();
             const line = `Your ${ev.data.label || "timer"} timer is done, sir.${ev.data.late ? " It went off while I was restarting." : ""}`;
@@ -488,6 +529,7 @@ export default function Hud() {
       stop = true;
       clearTimeout(retry);
       clearTimeout(kbTimer.current);
+      clearTimeout(monTimer.current);
       clearTimeout(consoleTimer.current);
       ws?.close();
     };
@@ -740,6 +782,20 @@ export default function Hud() {
           )}
           {status && (
             <div className="tools-pick">
+              <button type="button" className="chip" aria-expanded={watchOpen}
+                onClick={() => openOnly(watchOpen ? null : "watch")}
+                title="Watchers: checks that notify you of new PRs, pipelines, mail…">
+                watch{monitors?.watchers?.length ? ` ${monitors.watchers.filter((w) => w.enabled).length}` : ""} {watchOpen ? "▴" : "▾"}
+              </button>
+              {watchOpen && (
+                <div className="tools-list wide" role="dialog" aria-label="Watchers">
+                  <WatchPanel data={monitors} onChange={loadMonitors} />
+                </div>
+              )}
+            </div>
+          )}
+          {status && (
+            <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={guardOpen}
                 onClick={() => openOnly(guardOpen ? null : "guard")}
                 title="What JARVIS may do without asking, grants you gave, and eval scores">
@@ -837,7 +893,7 @@ export default function Hud() {
             <span className="sr-only">{state}</span>
             {approvals.length > 0
               ? <span className="state-sub alert">awaiting your approval</span>
-              : shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${{ kb: "knowledge map", timeline: "timeline" }[shown.focus] || "console"}`}</span>}
+              : shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${{ kb: "knowledge map", timeline: "timeline", watch: "monitors" }[shown.focus] || "console"}`}</span>}
           </div>
         </div>
         <div className="approvals">
@@ -894,8 +950,22 @@ export default function Hud() {
             aria-label={state === "listening" ? "Stop and send" : "Speak"} aria-pressed={state === "listening"}>
             {state === "listening" ? <StopIcon /> : <MicIcon />}
           </button>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Speak or type, sir…"
-            aria-label="Message JARVIS" autoComplete="off" />
+          <textarea value={input} rows={1} placeholder="Speak or type, sir…" title="Enter sends · Shift+Enter: new line"
+            aria-label="Message JARVIS" autoComplete="off"
+            onChange={(e) => {
+              setInput(e.target.value);
+              const t = e.target;
+              t.style.height = "auto";
+              t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+              t.style.overflowY = t.scrollHeight > 160 ? "auto" : "hidden";
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                send(input);
+                e.currentTarget.style.height = "auto";
+              }
+            }} />
           <button type="submit" className="send">Send</button>
           <label className="speak"><input type="checkbox" checked={speak} onChange={(e) => setSpeak(e.target.checked)} /> voice</label>
         </form>
@@ -903,6 +973,9 @@ export default function Hud() {
       </section>
 
       <div className="side map-dock reveal" style={{ "--i": 3 }}>
+      <MonitorsPanel data={monitors} pulse={monPulse} ghosts={ghosts} active={shown.mon} focused={shown.focus === "watch"}
+        headProps={headProps(pinned === "watch", () => togglePin("watch"), "monitors")}
+        onManage={(e) => { e?.stopPropagation?.(); openOnly("watch"); }} />
       <section className={`panel kb minimap${shown.kb ? ` active k-${kbPulse?.kind || "read"}` : ""}${shown.focus === "kb" ? " focused" : ""}${kbView === "min" ? " minimized" : ""}`}
         aria-label="Knowledge map">
         <i className="mm-corner tl" aria-hidden="true" /><i className="mm-corner tr" aria-hidden="true" />

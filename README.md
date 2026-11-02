@@ -94,6 +94,13 @@ approval in the HUD and the expert runs answer-only, with no tools. See [bridge/
   without asking; `powershell_run` asks every time. [bridge/ps_classify.ps1](bridge/ps_classify.ps1) checks each
   command with PowerShell's parser and refuses file writes, moves and deletes, nested shells and `iex`. The output
   of both counts as outside text (taint).
+- **Watchers and notifications.** A watcher is a look-only command (gh, az, Outlook COM, any PowerShell) the bridge
+  runs on a schedule; new items notify you (Windows toast, phone, HUD, voice) and fire `trigger:: watch` skills.
+  They live in `config/watchers.json` (not in git), changed only from the HUD's **watch** panel: the model has no
+  tool for it, commands the PowerShell check blocks are refused, and one that isn't proven look-only needs your
+  "I trust it". "Draft with Claude" there sends your description to Claude (only when you press it); you test and
+  save. The first run only learns what exists. Item text is outside text: skills see it fenced and tainted.
+  `send_notification` lets chat and skills notify you (only you, so no approval).
 - **Restarts.** Timers (`timers.json`), approvals, grants and skill schedules (`skills.json`) are kept on disk.
   A timer that came due while the hub was down rings at start-up, marked late; a daily skill missed by under 6 h runs late.
 

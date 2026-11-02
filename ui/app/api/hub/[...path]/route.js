@@ -13,6 +13,9 @@ const ALLOWED = [
   /^policy(\/grants\/[\w.*-]+)?$/,
   /^evals$/,
   /^devices(\/pair(\/[a-f0-9]+)?|\/allow|\/disconnect)?$/,
+  /^monitors$/,
+  /^watchers(\/test|\/draft|\/[a-z0-9-]+(\/(run|enable))?)?$/,
+  /^notify\/test$/,
 ];
 
 export const dynamic = "force-dynamic";
@@ -44,4 +47,4 @@ async function forward(req, { params }) {
   }
 }
 
-export { forward as GET, forward as POST };
+export { forward as GET, forward as POST, forward as DELETE };

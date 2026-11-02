@@ -12,7 +12,7 @@ class FakeAgent:
     def __init__(self):
         self.prompts, self.dry = [], []
 
-    async def run(self, *, messages, source, request_id, bus, on_text=None, dry_run=False):
+    async def run(self, *, messages, source, request_id, bus, on_text=None, dry_run=False, untrusted=None):
         self.prompts.append(messages[-1]["content"])
         self.dry.append(dry_run)
         return "done"

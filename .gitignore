@@ -23,3 +23,6 @@ data/
 voice/piper/*.onnx
 voice/piper/*.onnx.json
 voice/samples/
+
+# your watchers (commands, repo and org names): kept local
+config/watchers.json

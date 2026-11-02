@@ -106,7 +106,7 @@ class ToolAgent:
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus, on_text: Callable[[str], None] | None = None,
                   on_event: Callable[[dict], None] | None = None, session: str | None = None,
-                  dry_run: bool = False) -> str:
+                  dry_run: bool = False, untrusted: list[str] | None = None) -> str:
         """on_text, if given, receives the reply as it is generated (new text only). The returned
         string is still the full, final reply; a tool-produced answer is never streamed.
         on_event receives voice cues: {"tool": name} when a tool starts, {"say": text} for a line to
@@ -114,6 +114,7 @@ class ToolAgent:
         dry_run: tools that change anything or send data out are not run, only recorded (evals, new skills)."""
         turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session, dry_run=dry_run,
                      model=str(getattr(self.llm, "model", "")))
+        turn.tainted.extend(untrusted or [])  # an automation's event text (guard/hooks.py taint)
         if session and self.sessions and (p := self.sessions.take(session)):
             yes = answer(_last_user(messages))
             if yes is not None:  # the answer to "Shall I go ahead, sir?"

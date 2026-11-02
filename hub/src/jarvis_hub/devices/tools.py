@@ -135,6 +135,24 @@ SPECS = [  # name, description, parameters, risk
 ]
 
 
+async def bridge_call(s: Settings, action: str, args: dict, timeout: float = 200):
+    """One device-bridge action -> (True, result) or (False, error message). Used by the tools below, the
+    notifier and the watchers."""
+    token = s.device_bridge_token.get_secret_value()
+    if not token or token == "change-me":
+        return False, "the device bridge isn't configured (DEVICE_BRIDGE_TOKEN)"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5)) as c:
+            r = await c.post(s.device_bridge_url.rstrip("/") + "/v1/act", json={"action": action, "args": args},
+                             headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as e:
+        return False, f"the device bridge is not reachable ({type(e).__name__}). Is it running on the host?"
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code != 200:
+        return False, str(data.get("detail") or r.status_code)
+    return True, data.get("result")
+
+
 def register_device_tools(reg: ToolRegistry, s: Settings) -> bool:
     token = s.device_bridge_token.get_secret_value()
     if not token or token == "change-me":

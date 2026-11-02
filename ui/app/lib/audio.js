@@ -139,6 +139,17 @@ export function askToNotify() {
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
   } catch {}
 }
+// A JARVIS notification (a watcher, a skill, "notify me when...") while the HUD is in the background.
+export async function notifySystem(title, body, tag) {
+  try {
+    if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
+    const opts = { body, tag: tag || undefined };
+    const reg = swReady && (await swReady);
+    if (reg) return reg.showNotification(title, opts);
+    const n = new Notification(title, opts);
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch {}
+}
 export async function notifyApproval(data) {
   try {
     if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;

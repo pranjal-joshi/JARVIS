@@ -595,14 +595,8 @@ def _ps(args: list[str], timeout: int, env: dict | None = None) -> str:
     return (p.stdout + (p.stderr if p.returncode else "")).strip()
 
 
-def _ps_check(cmd: str) -> dict:
-    cmd = cmd.strip()
-    if not cmd:
-        raise ActionError("empty command")
-    if len(cmd) > 2000:
-        raise ActionError("that command is too long")
-    if any(SECRET.search(w) for w in re.split(r"[\\/\s'\"(),;|]+", cmd) if w):
-        raise ActionError("that command touches something that looks like a credential; it isn't allowed")
+def _ps_classify(cmd: str) -> dict:
+    """{"read": bool, "block": str|None, "why": str|None} from bridge/ps_classify.ps1; raises if it won't parse."""
     try:
         verdict = json.loads(_ps(["-EncodedCommand", PS_CLASSIFY], 30, {"JARVIS_PS_CMD": cmd}).splitlines()[-1])
     except (ValueError, IndexError):
@@ -612,6 +606,17 @@ def _ps_check(cmd: str) -> dict:
     if verdict.get("block"):
         raise ActionError(f"not allowed: the command {verdict['block']}. Files can't be written, moved or deleted")
     return verdict
+
+
+def _ps_check(cmd: str) -> dict:
+    cmd = cmd.strip()
+    if not cmd:
+        raise ActionError("empty command")
+    if len(cmd) > 2000:
+        raise ActionError("that command is too long")
+    if any(SECRET.search(w) for w in re.split(r"[\\/\s'\"(),;|]+", cmd) if w):
+        raise ActionError("that command touches something that looks like a credential; it isn't allowed")
+    return _ps_classify(cmd)
 
 
 def _ps_exec(cmd: str) -> str:
@@ -635,8 +640,178 @@ def win_ps_run(a: dict) -> str:
     return _ps_exec(cmd)
 
 
+# ---------- notifications on this laptop and the phone ----------
+# A Windows toast through the built-in WinRT API (Windows PowerShell 5.1; nothing to install). Title and text
+# travel as environment variables, never inside the script, so they can't inject PowerShell.
+TOAST = base64.b64encode(r"""
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$e = { param($s) [System.Security.SecurityElement]::Escape([string]$s) }
+$launch = if ($env:JARVIS_TOAST_URL) { " activationType=`"protocol`" launch=`"$(& $e $env:JARVIS_TOAST_URL)`"" } else { '' }
+$xml = "<toast$launch><visual><binding template=`"ToastGeneric`"><text>$(& $e $env:JARVIS_TOAST_TITLE)</text>" +
+       "<text>$(& $e $env:JARVIS_TOAST_TEXT)</text></binding></visual></toast>"
+$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; $doc.LoadXml($xml)
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show(
+  [Windows.UI.Notifications.ToastNotification]::new($doc))
+""".encode("utf-16-le")).decode()
+
+
+def win_notify(a: dict) -> str:
+    title, text = str(a.get("title") or "JARVIS")[:120], str(a.get("text") or "")[:400]
+    url = str(a.get("url") or "")
+    url = url if re.match(r"^https://[^\s\"<>]+$", url) else ""
+    p = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", TOAST],
+                       capture_output=True, text=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL,
+                       env={**os.environ, "JARVIS_TOAST_TITLE": title, "JARVIS_TOAST_TEXT": text,
+                            "JARVIS_TOAST_URL": url}, creationflags=0x08000000)
+    if p.returncode:
+        raise ActionError(f"the toast failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    return "Shown on this laptop."
+
+
+def adb_notify(a: dict) -> str:
+    """A notification on the phone (Android 10+), posted by the adb shell user."""
+    s = _device(a)
+    title, text = str(a.get("title") or "JARVIS")[:120], str(a.get("text") or "")[:400]
+    q = lambda v: "'" + v.replace("'", "'\\''") + "'"
+    adb("shell", f"cmd notification post -S bigtext -t {q(title)} jarvis-{int(time.time())} {q(text)}", serial=s)
+    return "Shown on the phone."
+
+
+# ---------- watchers: look-only checks you define, run here on a schedule by the hub ----------
+# They live in config/watchers.json, which only this bridge reads and writes, and only through the
+# watch_save / watch_delete actions the HUD calls (the model has no tool for them). A command the
+# PowerShell check blocks (file changes, nested shells, iex) is never saved or run. Each command prints
+# JSON (an array of objects, or one object); `key` names the field that identifies an item.
+WATCH_FILE = ROOT / "config" / "watchers.json"
+WATCH_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
+WATCH_EVERY = re.compile(r"^(\d+)\s*([mh])$", re.I)
+WATCH_TARGETS = {"windows", "android", "hud", "voice"}
+# JARVIS's own keys never reach a watcher command
+NOT_FOR_WATCHERS = re.compile(r"(HUB_TOKEN|BRIDGE_TOKEN|HA_TOKEN|ANTHROPIC|LLM_API_KEY)", re.I)
+_watch_lock = threading.Lock()
+
+
+def _watchers() -> list[dict]:
+    try:
+        data = json.loads(WATCH_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [w for w in data if isinstance(w, dict)] if isinstance(data, list) else []
+
+
+def _watch_check(w: dict) -> dict:
+    """Validated copy of a watcher, with `verified` (look-only by the PowerShell check) set."""
+    if not isinstance(w, dict):
+        raise ActionError("a watcher is an object")
+    name = str(w.get("name", "")).strip().lower()
+    if not WATCH_NAME.match(name):
+        raise ActionError("name: 2-41 characters, lower-case letters, digits and -")
+    m = WATCH_EVERY.match(str(w.get("every", "")).strip())
+    if not m or not 1 <= int(m[1]) * (1 if m[2].lower() == "m" else 60) <= 24 * 60:
+        raise ActionError("every: like 5m or 2h, between 1 minute and 24 hours")
+    shell = str(w.get("shell") or "pwsh")
+    if shell not in ("pwsh", "powershell"):
+        raise ActionError("shell: pwsh (PowerShell 7) or powershell (Windows PowerShell 5.1)")
+    command = str(w.get("command", "")).strip()
+    if not command or len(command) > 4000:
+        raise ActionError("command: 1-4000 characters")
+    env = [str(e).strip() for e in (w.get("env") or []) if str(e).strip()]
+    for e in env:
+        if not re.match(r"^[A-Z][A-Z0-9_]{1,60}$", e) or NOT_FOR_WATCHERS.search(e):
+            raise ActionError(f"env: {e!r} can't be passed to a watcher")
+    notify = [t for t in (w.get("notify") or []) if t in WATCH_TARGETS]
+    verdict = _ps_classify(command)  # raises for blocked commands
+    return {"name": name, "enabled": bool(w.get("enabled", True)), "every": f"{m[1]}{m[2].lower()}",
+            "shell": shell, "command": command, "key": str(w.get("key") or "id").strip(),
+            "title": str(w.get("title") or name)[:80], "text": str(w.get("text") or "{" + str(w.get("key") or "id") + "}")[:300],
+            "url": str(w.get("url") or "")[:300], "notify": notify, "env": env,
+            "description": str(w.get("description") or "")[:300],
+            "verified": bool(verdict.get("read")), "why": verdict.get("why") or ""}
+
+
+def _fill(template: str, item: dict) -> str:
+    def field(m):
+        v = item
+        for part in m[1].split("."):
+            v = v.get(part, "") if isinstance(v, dict) else ""
+        return str(v if v is not None else "")
+    return re.sub(r"\{([\w.]+)\}", field, template)
+
+
+def _watch_exec(w: dict) -> dict:
+    exe = PWSH if w["shell"] == "pwsh" else "powershell.exe"
+    env = {e: CFG.get(e, os.environ.get(e, "")) for e in w["env"]}
+    script = f"& {{\n{w['command']}\n}} | ConvertTo-Json -Depth 4 -Compress"
+    if re.search(r"ConvertTo-Json|--json|-o json|--output json", w["command"], re.I):
+        script = w["command"]  # it already prints JSON
+    p = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                        base64.b64encode(script.encode("utf-16-le")).decode()],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=PS_TIMEOUT,
+                       stdin=subprocess.DEVNULL, env={**os.environ, **env}, cwd=Path.home(),
+                       creationflags=0x08000000)
+    out = p.stdout.strip()
+    if p.returncode and not out:
+        raise ActionError(f"the command failed: {(p.stderr or '').strip()[-300:]}")
+    if not out:
+        return {"items": [], "count": 0}
+    start = min([i for i in (out.find("["), out.find("{")) if i >= 0] or [0])
+    try:
+        data = json.loads(out[start:])
+    except ValueError:
+        raise ActionError(f"the command didn't print JSON: {out[:200]}")
+    rows = data if isinstance(data, list) else [data]
+    items = []
+    for row in rows[:200]:
+        if not isinstance(row, dict):
+            row = {"value": row}
+        key = _fill("{" + w["key"] + "}", row) or json.dumps(row, sort_keys=True)[:200]
+        items.append({"key": key[:300], "text": _fill(w["text"], row)[:300], "url": _fill(w["url"], row)[:300]})
+    return {"items": items, "count": len(items)}
+
+
+def watch_list(_: dict) -> list[dict]:
+    return _watchers()
+
+
+def watch_run(a: dict) -> dict:
+    w = next((w for w in _watchers() if w.get("name") == str(a.get("name", "")).lower()), None)
+    if not w:
+        raise ActionError("no watcher by that name")
+    return _watch_exec(_watch_check(w))
+
+
+def watch_test(a: dict) -> dict:
+    """Check and run a watcher that isn't saved (the HUD's Test button, an expert's draft)."""
+    w = _watch_check(a.get("watcher"))
+    return {"watcher": w, **_watch_exec(w)}
+
+
+def watch_save(a: dict) -> dict:
+    w = _watch_check(a.get("watcher"))
+    if not w["verified"] and not a.get("accept_unverified"):
+        raise ActionError(f"not verified look-only ({w['why']}); save it only if you trust it (accept_unverified)")
+    with _watch_lock:
+        rest = [x for x in _watchers() if x.get("name") not in (w["name"], str(a.get("replaces") or ""))]
+        WATCH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WATCH_FILE.write_text(json.dumps(sorted([*rest, w], key=lambda x: x["name"]), indent=1), encoding="utf-8")
+    return w
+
+
+def watch_delete(a: dict) -> str:
+    name = str(a.get("name", "")).lower()
+    with _watch_lock:
+        all_ = _watchers()
+        if not any(x.get("name") == name for x in all_):
+            raise ActionError("no watcher by that name")
+        WATCH_FILE.write_text(json.dumps([x for x in all_ if x.get("name") != name], indent=1), encoding="utf-8")
+    return f"Deleted {name}."
+
+
 ACTIONS = {f.__name__: f for f in (
-    fs_list, fs_read, win_ps_read, win_ps_run,
+    fs_list, fs_read, win_ps_read, win_ps_run, win_notify, adb_notify,
+    watch_list, watch_run, watch_test, watch_save, watch_delete,
     win_info, win_media, win_open, win_lock, win_screenshot,
     adb_devices, adb_info, adb_screenshot, adb_open_app, adb_key, adb_tap, adb_type,
     adb_shell, adb_install, adb_uninstall, adb_connect,

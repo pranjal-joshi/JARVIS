@@ -31,6 +31,8 @@ def test_timers_are_saved_and_rearmed_after_a_restart(tmp_path):
         path.write_text(json.dumps(saved))
         assert timers.restore(bus) == 1
         ev = await asyncio.wait_for(q.get(), 2)
+        while ev.type != "timer":  # timer_state events for the HUD's watch panel come first
+            ev = await asyncio.wait_for(q.get(), 2)
         return ev, timers
 
     ev, timers = asyncio.run(after_restart())
