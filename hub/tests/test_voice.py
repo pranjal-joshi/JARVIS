@@ -64,6 +64,8 @@ def test_yes_no_words():
     assert answer("Yes please") and answer("go ahead, sir") and answer("ok")
     assert answer("no") is False and answer("don't") is False and answer("No, do it") is False
     assert answer("what's the weather") is None
+    for hedged in ["OK, don't send it", "yes but wait", "sure, no thanks", "go ahead, actually hold on"]:
+        assert answer(hedged) is False, hedged
 
 
 def test_session_adds_recent_turns_only_for_single_turn_clients():

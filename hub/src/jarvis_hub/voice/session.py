@@ -11,13 +11,15 @@ from dataclasses import dataclass, field
 
 _YES = re.compile(r"^\W*(yes|yeah|yep|yup|sure|ok(ay)?|go ahead|do it|go for it|please( do)?|proceed|"
                   r"affirmative|confirm(ed)?|carry on|send it|right|correct|absolutely|of course)\b", re.I)
-_NO = re.compile(r"^\W*(no|nope|nah|don'?t|do not|cancel|stop|never ?mind|negative|leave it|forget it|"
-                 r"not now|wait)\b", re.I)
+# anywhere in the answer, not just at the start: "OK, don't send it" and "yes, but wait" are a no
+_NO = re.compile(r"\b(no|nope|nah|don'?t|do not|cancel|stop|never ?mind|negative|leave it|forget it|"
+                 r"not now|wait|hold on)\b", re.I)
 
 
 def answer(text: str) -> bool | None:
-    """True for a spoken yes, False for a no, None for anything else (a new request)."""
-    if _NO.match(text):
+    """True for a spoken yes, False for a no, None for anything else (a new request).
+    Any negation wins: a wrong yes acts, a wrong no only asks to be said again."""
+    if _NO.search(text):
         return False
     if _YES.match(text):
         return True
