@@ -77,11 +77,11 @@ constrained), refuses text that came from a tool result, and records where each 
 | # | Change | Fixes | Effort |
 |---|---|---|---|
 | 1.1 | Fast paths for closed intents, templated JARVIS replies | Latency (<1 s), date-maths errors | 1–2 days |
-| 1.2 | JSON-schema router replacing free function calling for local models (Claude keeps native tools) | Invalid calls, faked tool markup, wrong tool | 2–3 days |
+| 1.2 | ~~JSON-schema router~~ **Dropped after measuring:** with a schema-constrained router LFM3 chose "none" for 8/8 test requests; its native tool calling chose right on 7/7. Kept native calling; code layers (fast paths, guards, slot checks, shaping) sit around it. Ollama's 500 on an unparseable tool call now retries without tools | - | done |
 | 1.3 | Composite chains table (location, contacts, "how long until", "remind me") | Implied two-step tasks | 1 day |
 | 1.4 | Slot post-conditions + read-back for every write | Changed dates/names in saves and sends | 2 days |
 | 1.5 | Result shaping; `weather`, `get_time`, timers, tasks, `phone_status` answer directly | Second model call (3–8 s), "tomorrow" mislabels | 1 day |
-| 1.6 | Cascade on low confidence (CPU 4B local first; Claude when a key exists, gated as external) | Hard questions on a small model | 1 day |
+| 1.6 | ~~Cascade~~ **Changed:** no other local model and no automatic Claude. Claude only when the user asks ("ask Claude"); when the small model gives up, the reply says so | - | done |
 | 1.7 | Caching: weather 10 min, router decision per normalised utterance | Repeated voice commands | hours |
 
 Targets (measured with 0.1): fast path < 1 s; routed single tool < 4 s to first word; two tools < 8 s;

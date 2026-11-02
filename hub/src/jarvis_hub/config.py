@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     # local models get only this many request-relevant tools (plus a few always-on ones); 0 = all tools.
     # Claude models always get every visible tool.
     tool_select_k: int = 6
+    # the local model's context window (OLLAMA_CONTEXT_LENGTH): conversations are trimmed to fit; 0 = off
+    llm_context_tokens: int = 8192
+    # notes scoring below this are not returned by search_notes (nomic cosine)
+    kb_min_score: float = 0.6
+    # where the user lives, for "weather at home"; empty = the first place on the jarvis/location page
+    home_place: str = ""
+    # requests like "what time is it" or "set a timer" answered by code without the model
+    fast_paths: bool = True
 
     mcp_config: str = "../mcp/servers.yaml"
 

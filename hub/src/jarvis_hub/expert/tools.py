@@ -13,10 +13,10 @@ from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 ENGINES = {
     "claude": ("ask_claude", "Ask Claude, a much stronger cloud model."),
     "opencode": ("ask_opencode", "Ask an opencode model (free tier, slower and quota-limited); "
-                 "use only when the user asks for opencode or ask_claude is unavailable."),
+                 "use only when the user asks for opencode."),
 }
 COMMON = (
-    " Use for: hard reasoning, coding, technical detail, long explanations you can't give well yourself. "
+    " Use only when the user asks for it by name ('ask Claude ...'). Never on your own. "
     "Not for notes, devices, small talk or simple facts. The user approves each call and sees what is "
     "sent: include only what the question needs, never secrets or personal data.")
 

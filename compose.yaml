@@ -53,7 +53,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     environment:
       TZ: ${TZ:-UTC}
-      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}  # stay loaded: a cold load costs ~13 s on the MX550
     volumes: [ollama-data:/root/.ollama]
     ports: ["127.0.0.1:11434:11434"]
     networks: [jarvis]

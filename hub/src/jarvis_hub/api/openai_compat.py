@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.config import Source
-from jarvis_hub.voice.speakable import for_ear
+from jarvis_hub.voice.speakable import for_ear, to_speech
 
 router = APIRouter(prefix="/v1")
 MODEL_ID = "jarvis"
@@ -52,8 +52,10 @@ async def chat(body: ChatRequest, request: Request,
         session = "satellite:" + (request.headers.get("x-satellite-id") or "default")[:64]
         messages = request.app.state.sessions.merge(session, messages)
     heard = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+    # evals and skill dry-runs: tools that change anything are recorded, not run
+    dry_run = request.headers.get("x-jarvis-dry-run", "").lower() in ("1", "true", "yes")
     run = dict(messages=messages, source=source, request_id=request_id, bus=request.app.state.bus,
-               session=session)
+               session=session, dry_run=dry_run)
 
     def remember(reply: str) -> None:
         if session:
@@ -104,7 +106,7 @@ async def chat(body: ChatRequest, request: Request,
     reply = await request.app.state.agent.run(**run)
     remember(reply)
     if source is Source.SATELLITE:  # Home Assistant speaks this text as it is
-        reply = for_ear(reply)
+        reply = for_ear(to_speech(reply))
     return {
         "id": cid, "object": "chat.completion", "created": created, "model": MODEL_ID,
         "choices": [{"index": 0, "finish_reason": "stop",

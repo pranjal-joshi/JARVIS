@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from jarvis_hub import __version__
 from jarvis_hub.agent.base import EchoAgent
+from jarvis_hub.agent.fastpath import FastPaths
 from jarvis_hub.agent.tool_select import ToolSelector
 from jarvis_hub.agent.tool_agent import ToolAgent
 from jarvis_hub.api import control, events_ws, openai_compat
@@ -58,6 +59,17 @@ async def _daily_summary_loop(graph: LogseqGraph, audit: AuditStore, index: KBIn
             log.exception("daily summary failed")
 
 
+async def _warm(llm: LLMClient) -> None:
+    """Load the local model now, so the first request doesn't pay ~13 s of loading."""
+    if llm.model.startswith("claude-"):
+        return
+    try:
+        await llm.chat([{"role": "user", "content": "ok"}])
+        log.info("model %s loaded", llm.model)
+    except Exception as e:
+        log.info("warm-up of %s failed: %s", llm.model, e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
@@ -81,7 +93,7 @@ async def lifespan(app: FastAPI):
             st.llm.model = saved
     embedder = LLMClient(s.embed_base_url, s.llm_api_key.get_secret_value(), s.embed_model)
     st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
-    st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url)
+    st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url, s.kb_min_score)
     register_kb_tools(st.tools, st.kb_graph, st.kb_index)
     register_utility_tools(st.tools, st.kb_graph, st.kb_index)
     if register_expert_tool(st.tools, s):
@@ -103,7 +115,8 @@ async def lifespan(app: FastAPI):
     st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(
         st.llm, st.tools, st.gate, st.audit, s.ask_for(), hidden=s.hidden_tools(),
         selector=ToolSelector(embedder, s.embed_model, s.tool_select_k),
-        sessions=st.sessions, voice_confirm=s.voice_confirm())
+        sessions=st.sessions, voice_confirm=s.voice_confirm(), context_tokens=s.llm_context_tokens,
+        fast=FastPaths(st.kb_graph, s.home_place) if s.fast_paths else None)
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     if s.agent != "echo":
@@ -111,6 +124,7 @@ async def lifespan(app: FastAPI):
 
     tasks = []
     if s.agent != "echo":
+        tasks.append(asyncio.create_task(_warm(st.llm)))
         tasks.append(asyncio.create_task(_kb_sync_loop(st.kb_index, s.kb_sync_interval_s)))
         tasks.append(asyncio.create_task(_daily_summary_loop(st.kb_graph, st.audit, st.kb_index)))
     log.info("hub %s ready: agent=%s model=%s tools=%d", __version__, s.agent, s.llm_model,

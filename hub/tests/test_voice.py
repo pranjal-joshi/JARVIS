@@ -79,7 +79,7 @@ def test_session_adds_recent_turns_only_for_single_turn_clients():
 
 def test_spoken_yes_runs_the_external_tool_and_carries_on():
     agent, bus, ran = setup([call("web_search", query="Pune weather"), say("Clear and 24 degrees, sir.")])
-    assert turn(agent, bus, "weather in Pune") == "That will search the web for Pune weather. Shall I go ahead, sir?"
+    assert turn(agent, bus, "search the web for the weather in Pune") == "That will search the web for Pune weather. Shall I go ahead, sir?"
     assert ran == []
     assert turn(agent, bus, "yes") == "Clear and 24 degrees, sir."
     assert ran == [{"query": "Pune weather"}]
@@ -102,7 +102,7 @@ def test_the_hud_is_not_asked_by_voice_and_destructive_waits_with_read_back():
     agent, bus, ran = setup([call("web_search", query="x"), say("Not approved, sir.")], risk=Risk.DESTRUCTIVE)
     agent.ask_for = frozenset({Risk.DESTRUCTIVE})
     cues = []
-    assert turn(agent, bus, "do it", cues=cues) == "Not approved, sir."  # gate timed out
+    assert turn(agent, bus, "search for it now", cues=cues) == "Not approved, sir."  # gate timed out
     assert cues[0] == {"say": "Please approve on your phone or the HUD: search the web for x."}
     assert ran == []
 
@@ -113,7 +113,7 @@ def test_slow_expert_answers_are_announced_not_waited_for():
     got = bus.subscribe(Source.SATELLITE)
 
     async def scenario():
-        reply = await agent.run(messages=[{"role": "user", "content": "ask"}], source=Source.SATELLITE,
+        reply = await agent.run(messages=[{"role": "user", "content": "look up the latest on it"}], source=Source.SATELLITE,
                                 request_id="r", bus=bus, session=SAT)
         while True:
             ev = await asyncio.wait_for(got.get(), 2)
@@ -127,7 +127,7 @@ def test_slow_expert_answers_are_announced_not_waited_for():
 def test_web_requests_are_unchanged():
     agent, bus, ran = setup([call("web_search", query="x"), say("ok")])
     agent.ask_for = frozenset()
-    assert turn(agent, bus, "search", source=Source.WEB) == "ok" and ran == [{"query": "x"}]
+    assert turn(agent, bus, "search", source=Source.WEB) == "ok." and ran == [{"query": "x"}]
 
 
 def test_for_ear():

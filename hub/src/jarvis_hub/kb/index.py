@@ -20,8 +20,11 @@ WORD = re.compile(r"[a-z0-9]+")
 
 class KBIndex:
     def __init__(self, graph: LogseqGraph, embedder: LLMClient | None, embed_model: str,
-                 qdrant_url: str) -> None:
+                 qdrant_url: str, min_score: float = 0.6) -> None:
         self.graph = graph
+        # nomic scores unrelated notes up to ~0.6 on a small graph: below this (or well below the
+        # best hit) a note is noise that would leak into the reply
+        self.min_score = min_score
         self._embedder = embedder
         self._model = embed_model
         self._qdrant = httpx.AsyncClient(base_url=qdrant_url.rstrip("/"), timeout=30)
@@ -107,10 +110,13 @@ class KBIndex:
             try:
                 vec = (await self._embed([query], "query"))[0]
                 r = await self._qdrant.post(f"/collections/{COLLECTION}/points/query", json={
-                    "query": vec, "limit": limit, "with_payload": True})
+                    "query": vec, "limit": limit + 4, "with_payload": True})
                 r.raise_for_status()
-                return [{"page": p["payload"]["page"], "text": p["payload"]["text"],
-                         "score": round(p["score"], 3)} for p in r.json()["result"]["points"]]
+                hits = [{"page": p["payload"]["page"], "text": p["payload"]["text"],
+                         "score": round(p["score"], 3)} for p in r.json()["result"]["points"]
+                        if not p["payload"]["text"].startswith("Learned: ")]  # journal copy of a memory
+                top = hits[0]["score"] if hits else 0
+                return [h for h in hits if h["score"] >= self.min_score and h["score"] >= top - 0.08][:limit]
             except (httpx.HTTPError, LLMError, KeyError) as e:
                 log.warning("vector search failed, using keywords: %s", e)
         return self._keyword_search(query, limit)

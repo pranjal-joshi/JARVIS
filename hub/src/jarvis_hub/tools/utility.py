@@ -76,6 +76,34 @@ def safe_eval(expr: str) -> float:
     return ev(ast.parse(expr, mode="eval"))
 
 
+# ---------- time zones by place ----------
+_ZONE_ALIASES = {
+    "india": "Asia/Kolkata", "mumbai": "Asia/Kolkata", "pune": "Asia/Kolkata", "delhi": "Asia/Kolkata",
+    "new delhi": "Asia/Kolkata", "bangalore": "Asia/Kolkata", "bengaluru": "Asia/Kolkata", "chennai": "Asia/Kolkata",
+    "hyderabad": "Asia/Kolkata", "uk": "Europe/London", "england": "Europe/London", "britain": "Europe/London",
+    "us": "America/New_York", "usa": "America/New_York", "america": "America/New_York", "japan": "Asia/Tokyo",
+    "china": "Asia/Shanghai", "beijing": "Asia/Shanghai", "san francisco": "America/Los_Angeles",
+    "california": "America/Los_Angeles", "seattle": "America/Los_Angeles", "germany": "Europe/Berlin",
+    "france": "Europe/Paris", "uae": "Asia/Dubai", "australia": "Australia/Sydney", "singapore": "Asia/Singapore",
+    "boston": "America/New_York", "texas": "America/Chicago", "houston": "America/Chicago",
+}
+
+
+def zone_for(place: str) -> str:
+    """An IANA zone for a city or country name ("Tokyo" -> "Asia/Tokyo"); unchanged if already one."""
+    if not place or "/" in place or place.upper() in ("UTC", "GMT"):
+        return place
+    key = place.strip().lower()
+    if key in _ZONE_ALIASES:
+        return _ZONE_ALIASES[key]
+    from zoneinfo import available_timezones
+    city = key.replace(" ", "_")
+    return next((z for z in sorted(available_timezones()) if z.lower().rsplit("/", 1)[-1] == city), place)
+
+
+WEATHER_TTL_S = 600  # a repeated "what's the weather" answers from here for 10 minutes
+
+
 # ---------- fetch_page guard ----------
 def _public_host(host: str) -> bool:
     try:
@@ -127,13 +155,14 @@ class Timers:
 
 def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> None:
     timers = Timers()
+    weather_cache: dict[str, tuple[float, str]] = {}
 
     async def get_time(args: dict, ctx: ToolCtx) -> str:
-        tz = str(args.get("timezone") or "").strip()
+        tz = zone_for(str(args.get("timezone") or "").strip())  # a small model says "Tokyo", not "Asia/Tokyo"
         try:
             now = datetime.now(ZoneInfo(tz)) if tz else datetime.now().astimezone()
         except (ZoneInfoNotFoundError, ValueError):
-            return f"ERROR: unknown time zone {tz!r}; use an IANA name like Europe/London"
+            return f"ERROR: unknown time zone {tz!r}; use a city or an IANA name like Europe/London"
         return f"{now:%A %d %B %Y, %H:%M} ({tz or now.tzname()})"
 
     async def calculate(args: dict, ctx: ToolCtx) -> str:
@@ -151,6 +180,15 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         place = str(args.get("place", "")).strip()[:100]
         if not place:
             return "ERROR: say which place"
+        key = place.lower()
+        if (hit := weather_cache.get(key)) and time.time() - hit[0] < WEATHER_TTL_S:
+            return hit[1]
+        out = await _weather(place)
+        if not out.startswith("ERROR"):
+            weather_cache[key] = (time.time(), out)
+        return out
+
+    async def _weather(place: str) -> str:
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5)) as c:
                 g = await c.get("https://geocoding-api.open-meteo.com/v1/search",
@@ -168,13 +206,19 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
             return f"ERROR: weather service unreachable ({type(e).__name__})"
         d = f.json()
         cur, day = d.get("current") or {}, d.get("daily") or {}
-        lines = [f"{h['name']}, {h.get('country', '')} now: {WMO.get(cur.get('weather_code'), 'unknown')}, "
-                 f"{cur.get('temperature_2m')}°C (feels {cur.get('apparent_temperature')}°C), "
-                 f"humidity {cur.get('relative_humidity_2m')}%, wind {cur.get('wind_speed_10m')} km/h"]
+        # Spoken sentences with relative day names: a small model mislabels raw ISO dates ("tomorrow"
+        # for today) and paraphrases numbers badly, so the tool says it the way JARVIS would.
+        r = lambda v: round(v) if isinstance(v, (int, float)) else v  # noqa: E731
+        lines = [f"In {h['name']} it's {WMO.get(cur.get('weather_code'), 'unknown')} and {r(cur.get('temperature_2m'))} "
+                 f"degrees, feeling like {r(cur.get('apparent_temperature'))}, sir."]
+        today = datetime.fromisoformat(d["current"]["time"]).date() if cur.get("time") else datetime.now().date()
         for i, when in enumerate(day.get("time") or []):
-            lines.append(f"{when}: {WMO.get(day['weather_code'][i], '?')}, {day['temperature_2m_min'][i]}–"
-                         f"{day['temperature_2m_max'][i]}°C, rain chance {day['precipitation_probability_max'][i]}%")
-        return "\n".join(lines) + "\n(source: Open-Meteo)"
+            dt = datetime.fromisoformat(when).date()
+            label = {0: "Today", 1: "Tomorrow"}.get((dt - today).days, f"{dt:%A}")
+            lines.append(f"{label}: {WMO.get(day['weather_code'][i], '?')}, {r(day['temperature_2m_min'][i])} to "
+                         f"{r(day['temperature_2m_max'][i])} degrees, {day['precipitation_probability_max'][i]}% "
+                         "chance of rain.")
+        return "\n".join(lines)
 
     async def fetch_page(args: dict, ctx: ToolCtx) -> str:
         url = str(args.get("url", "")).strip()

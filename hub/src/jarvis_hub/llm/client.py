@@ -44,9 +44,20 @@ class LLMClient:
             body["tools"] = tools
             body["tool_choice"] = "auto"
         if on_text is not None:
-            return await self._stream(body, on_text)
+            try:
+                return await self._stream(body, on_text)
+            except LLMError as e:
+                if not tools or "500" not in str(e):
+                    raise
+                log.warning("tool call unparseable; retrying without tools")
+                return await self._stream({k: v for k, v in body.items() if k not in ("tools", "tool_choice")},
+                                          on_text)
         try:
             r = await self._http.post("/chat/completions", json=body)
+            if r.status_code == 500 and tools:  # Ollama can't parse the model's tool call: answer without tools
+                log.warning("tool call unparseable (%s); retrying without tools", r.text[:200])
+                r = await self._http.post("/chat/completions", json={k: v for k, v in body.items()
+                                                                      if k not in ("tools", "tool_choice")})
             r.raise_for_status()
         except httpx.HTTPError as e:
             raise LLMError(f"LLM request failed: {e}") from e

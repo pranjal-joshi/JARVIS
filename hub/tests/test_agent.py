@@ -184,7 +184,8 @@ def test_streamed_text_is_reset_when_a_tool_follows(parts):
     agent = ToolAgent(StreamLLM([first, say("It is off, sir.")]), reg, gate, audit)
     reply = asyncio.run(agent.run(messages=[{"role": "user", "content": "lamp?"}], source=Source.WEB,
                                   request_id="r1", bus=bus, on_text=got.append))
-    assert got == ["Let me check.", None, "It is off, sir."] and reply == "It is off, sir."
+    # "Let me check." never ended in a full sentence boundary before the tool call, so nothing was sent
+    assert got == ["It is off, sir."] and reply == "It is off, sir."
 
 
 def test_claimed_save_without_a_tool_is_sent_back_then_refused(parts):
@@ -214,4 +215,5 @@ def test_stated_facts_get_a_remember_hint(parts):
                          ("what is my wifi password?", False), ("turn on the lamp", False)]:
         llm = FakeLLM([say("Very good, sir.")])
         asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus, text=text))
-        assert ("call remember" in llm.seen[0][0]["content"]) is hinted, text
+        assert ("call remember" in llm.seen[0][-1]["content"]) is hinted, text  # rides on the user turn
+        assert "call remember" not in llm.seen[0][0]["content"]  # the system prompt never changes

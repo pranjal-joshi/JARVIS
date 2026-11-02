@@ -17,6 +17,7 @@ class ToolSelector:
     def __init__(self, embedder: LLMClient, model: str, k: int = 6, core: tuple[str, ...] = CORE) -> None:
         self._embedder, self._model, self.k, self.core = embedder, model, k, core
         self._vectors: dict[tuple[str, str], list[float]] = {}  # (name, description) -> unit vector
+        self._queries: dict[str, list[float]] = {}  # recent query vectors: voice commands repeat
 
     async def select(self, tools: list[Tool], messages: list[dict]) -> list[Tool]:
         """The core tools plus the k tools closest to the latest user turns, in registry order."""
@@ -25,7 +26,12 @@ class ToolSelector:
             return tools
         try:
             await self._embed_tools(tools)
-            q = _unit((await self._embedder.embed(["search_query: " + query], self._model))[0])
+            q = self._queries.get(query)
+            if q is None:
+                q = _unit((await self._embedder.embed(["search_query: " + query], self._model))[0])
+                if len(self._queries) >= 256:
+                    self._queries.pop(next(iter(self._queries)))
+                self._queries[query] = q
         except (LLMError, IndexError, KeyError) as e:
             log.warning("tool selection unavailable, offering every tool: %s", e)
             return tools
@@ -46,7 +52,8 @@ class ToolSelector:
 
 def _query(messages: list[dict]) -> str:
     """The last user turn, plus the one before so short follow-ups ("yes, send it") keep their topic."""
-    said = [m["content"] for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    said = [m["content"].split("\n\n(Now: ")[0] for m in messages  # without the per-turn time line
+            if m.get("role") == "user" and isinstance(m.get("content"), str)]
     if not said:
         return ""
     return (said[-2][:300] + "\n" if len(said) > 1 else "") + said[-1][:1000]

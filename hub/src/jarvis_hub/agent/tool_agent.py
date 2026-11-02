@@ -8,9 +8,12 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
+from jarvis_hub.agent.fastpath import FastPaths
+from jarvis_hub.agent.fastpath import Plan as FastPlan
+from jarvis_hub.agent.style import SentenceGate, tidy
 from jarvis_hub.agent.tool_select import ToolSelector
 from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
@@ -24,6 +27,7 @@ from jarvis_hub.voice.session import PendingTool, Sessions, answer
 log = logging.getLogger(__name__)
 MAX_STEPS = 6
 MAX_TOOL_RESULT_CHARS = 6000
+REPLY_RESERVE = 600  # tokens kept free for the reply
 DEFAULT_ASK_FOR = frozenset({Risk.DESTRUCTIVE, Risk.EXTERNAL})
 SLOW_ORIGINS = ("expert",)  # tools that can take minutes: run in the background for satellites
 FAKE_TOOL_MARKERS = ("<tool_result", "</tool_result>", "<tool_call", "<function_call", "<function=")
@@ -40,6 +44,11 @@ CLAIM_NUDGE = ("(system) Your reply says you did something, but no tool that cha
                "If the user wanted it saved or done, call the tool now (remember, for a fact about the user). "
                "Otherwise answer without claiming you did it.")
 NOT_DONE = 'I haven\'t actually saved or changed anything, sir. Say "remember ..." and I will.'
+# What makes a web search worth it: the user asked for one, or wants something current.
+CURRENT = re.compile(
+    r"\b(search|look (?:it |that )?up|google|web|online|internet|latest|news|today|tonight|yesterday|tomorrow|"
+    r"current(?:ly)?|now|recent(?:ly)?|this (?:week|month|year|season)|price|cost|rate|score|stock|"
+    r"open|hours|release[ds]?|update[ds]?|live|20\d\d|who won|result)\b", re.I)
 # A message that tells JARVIS something about the user without saying "remember".
 STATES_A_FACT = re.compile(
     r"\b(?:my|our)\s+(?:[\w']+\s+){0,3}(?:is|are|was|were)\b"
@@ -56,7 +65,8 @@ class ToolAgent:
                  audit: AuditStore, ask_for: frozenset[Risk] = DEFAULT_ASK_FOR,
                  hidden: frozenset[str] = frozenset(), selector: ToolSelector | None = None,
                  sessions: Sessions | None = None,
-                 voice_confirm: frozenset[Risk] = frozenset({Risk.EXTERNAL})) -> None:
+                 voice_confirm: frozenset[Risk] = frozenset({Risk.EXTERNAL}), context_tokens: int = 8192,
+                 fast: FastPaths | None = None) -> None:
         self.llm, self.tools, self.gate, self.audit = llm, tools, gate, audit
         self.ask_for = ask_for  # risk levels that wait for a human; the rest run and are audited
         self.hidden = hidden  # internal tool names the model never sees and may not call
@@ -64,6 +74,8 @@ class ToolAgent:
         self.sessions = sessions  # satellite conversations; None = no spoken confirmations
         self.voice_confirm = voice_confirm  # approval risks a satellite user may confirm by saying yes
         self._tasks: set[asyncio.Task] = set()  # background expert answers
+        self.context_tokens = context_tokens  # the model's window; 0 = don't trim
+        self.fast = fast  # requests answered by code, no model call (agent/fastpath.py)
 
     def visible(self) -> list[Tool]:
         return [t for t in self.tools.all() if t.name not in self.hidden]
@@ -78,22 +90,33 @@ class ToolAgent:
 
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus, on_text: Callable[[str], None] | None = None,
-                  on_event: Callable[[dict], None] | None = None, session: str | None = None) -> str:
+                  on_event: Callable[[dict], None] | None = None, session: str | None = None,
+                  dry_run: bool = False) -> str:
         """on_text, if given, receives the reply as it is generated (new text only). The returned
         string is still the full, final reply; a tool-produced answer is never streamed.
         on_event receives voice cues: {"tool": name} when a tool starts, {"say": text} for a line to
-        speak at once (an approval to give elsewhere). session names a satellite's conversation."""
-        turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session)
+        speak at once (an approval to give elsewhere). session names a satellite's conversation.
+        dry_run: tools that change anything or send data out are not run, only recorded (evals, new skills)."""
+        turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session, dry_run=dry_run)
         if session and self.sessions and (p := self.sessions.take(session)):
             yes = answer(_last_user(messages))
             if yes is not None:  # the answer to "Shall I go ahead, sir?"
                 return await self._resume(p, yes, turn)
-        # Client-supplied system prompts are dropped: the persona and rules are ours.
+        # Client-supplied system prompts are dropped: the persona and rules are ours. The system prompt
+        # is the same on every turn so Ollama can reuse its cached prefix; what changes (the time, hints)
+        # rides on the latest user message instead.
         said = _last_user(messages)
+        turn.heard = " ".join(m["content"] for m in messages if m.get("role") == "user")[-1500:]
+        if self.fast and (plan := self.fast.match(said)):
+            if (reply := await self._fast(plan, turn)) is not None:
+                return reply
         hint = FACT_HINT if STATES_A_FACT.search(said) and not said.rstrip().endswith("?") else ""
-        convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)
-                  + f"\nCurrent local time: {datetime.now():%A %d %B %Y, %H:%M}." + hint}]
-        convo += [m for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
+        convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)}]
+        convo += [dict(m) for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
+        for m in reversed(convo):
+            if m["role"] == "user":
+                m["content"] = f"{m['content']}\n\n(Now: {datetime.now():%A %d %B %Y, %H:%M}.{hint})"
+                break
         return await self._loop(convo, turn)
 
     async def _loop(self, convo: list[dict], t: "_Turn") -> str:
@@ -102,16 +125,19 @@ class ToolAgent:
         faked = claimed = False
         for step in range(MAX_STEPS):
             streamed = []
+            gate = SentenceGate(lambda x: (streamed.append(x), t.on_text(x)), t.source) if t.on_text else None
+            _fit(convo, schemas, self.context_tokens)
             try:
-                msg = await (self.llm.chat(convo, schemas, on_text=_speakable_stream(
-                    lambda x: (streamed.append(x), t.on_text(x))))
-                             if t.on_text else self.llm.chat(convo, schemas))
+                msg = await (self.llm.chat(convo, schemas, on_text=_speakable_stream(gate.feed))
+                             if gate else self.llm.chat(convo, schemas))
             except LLMError as e:
                 log.warning("%s", e)
                 return self._reply(t, "My apologies, sir, the language model is not answering.")
             calls = msg.get("tool_calls") or []
-            if calls and streamed or (not calls and _fakes_tool_use(_strip_think(msg.get("content") or ""))
-                                      and streamed):
+            raw = _strip_think(msg.get("content") or "").strip()
+            if gate and not calls and not _fakes_tool_use(raw) and not (CLAIMS_ACTION.search(raw) and not t.changed):
+                gate.flush()
+            if calls and streamed or (not calls and _fakes_tool_use(raw) and streamed):
                 t.on_text(None)  # what streamed was not the answer after all: tell the client to drop it
             if not calls:
                 text = _strip_think(msg.get("content") or "").strip()
@@ -136,12 +162,21 @@ class ToolAgent:
                     convo.append({"role": "assistant", "content": text})
                     convo.append({"role": "user", "content": CLAIM_NUDGE})
                     continue
-                return self._reply(t, text or "Done, sir.")
+                if not text:  # nothing to say and nothing done: never answer "Done"
+                    return self._reply(t, "Done, sir." if t.changed else "Sorry, sir, I didn't catch that.")
+                return self._reply(t, tidy(text, t.source))
             asked = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": [],
                      **({"_claude": msg["_claude"]} if msg.get("_claude") else {})}
             answers, final = [], None
             for call in calls:
                 prep = self._prepare(call)
+                if not isinstance(prep, str) and prep[0].name == "web_search" and not CURRENT.search(t.heard):
+                    # a 2B model searches for "the capital of Australia": costs a credit, an approval, 20 s
+                    prep = ("ERROR: that is general knowledge, not current news. Answer it yourself without "
+                            "searching; if you really don't know, say so.")
+                if not isinstance(prep, str) and (bad := _unsaid(prep[0], prep[1], t)):
+                    prep = (f"ERROR: {prep[0].model_name} has {', '.join(bad)}, which the user didn't say. "
+                            "Use the user's own words, names, dates and numbers, then call it again.")
                 if not isinstance(prep, str) and self._needs_voice_yes(prep[0], t):
                     # Ask aloud and end the turn; the user's next words answer it (see run/_resume).
                     tool, args = prep
@@ -172,7 +207,10 @@ class ToolAgent:
             if final is not None:
                 return self._reply(t, final)
             t.bus.publish(Event("thinking", t.source, t.request_id, {"step": step + 1}))
-        return self._reply(t, "I seem to be going in circles, sir. Shall we try that differently?")
+        # no automatic hand-off to a bigger model: Claude only when the user asks for it
+        claude = " Or say \"ask Claude\" and I'll put it to Claude." if any(
+            x.name == "ask_claude" for x in self.visible()) else ""
+        return self._reply(t, "I seem to be going in circles, sir. Shall we try that differently?" + claude)
 
     async def _resume(self, p: PendingTool, yes: bool, t: "_Turn") -> str:
         tool = self.tools.get(p.tool)
@@ -190,6 +228,28 @@ class ToolAgent:
         result = await self._run(tool, p.args, "voice", t)
         convo = [*p.convo, {"role": "tool", "tool_call_id": p.call_id, "content": result}]
         return await self._loop(convo, t)
+
+    async def _fast(self, plan: FastPlan, t: "_Turn") -> str | None:
+        """Run a fast-path plan through the gate; None (fall back to the model) if a step can't run."""
+        tools = [(self.tools.get(name), args) for name, args in plan.steps]
+        if any(tool is None or tool.name in self.hidden for tool, _ in tools):
+            return None
+        t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0, "route": "fast", "intent": plan.intent}))
+        results = []
+        for tool, args in tools:
+            result = await self._approve_and_run(tool, args, t)
+            body = _unfence(result)
+            if body is None or body.startswith("ERROR"):
+                log.info("fast path %s fell back to the model: %.120s", plan.intent, body or result)
+                return None
+            results.append(result)
+        try:
+            reply = plan.say(results)
+        except (ValueError, IndexError, KeyError) as e:
+            log.warning("fast path %s couldn't word the reply: %s", plan.intent, e)
+            return None
+        log.info("fast path: %s", plan.intent)
+        return self._reply(t, reply)
 
     def _needs_voice_yes(self, tool: Tool, t: "_Turn") -> bool:
         """Satellite only: tools that would wait for a HUD approval at one of the voice_confirm risks
@@ -249,6 +309,8 @@ class ToolAgent:
         name = tool.name  # audit, events and approvals use the internal name
         t.bus.publish(Event("tool_call", t.source, t.request_id,
                             {"tool": name, "origin": tool.origin, "risk": tool.risk, "arguments": args}))
+        if t.dry_run and tool.risk is not Risk.READ:
+            return "dry-run"  # recorded, never run: no approval needed
         if tool.self_scoped:
             return "policy:self-scoped"
         if tool.risk not in self.ask_for:
@@ -268,14 +330,18 @@ class ToolAgent:
     async def _run(self, tool: Tool, args: dict, approved_by: str, t: "_Turn") -> str:
         name = tool.name
         t.on_event({"tool": tool.model_name})
-        try:
-            output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id))
-            status = "error" if output.startswith("ERROR") else "ok"
-        except Exception as e:
-            log.exception("tool %s failed", name)
-            output, status = f"ERROR: {e}", "error"
+        if approved_by == "dry-run":
+            output, status = f"(dry run: {tool.model_name} was recorded, not run.) Reply as if it was done.", "dry-run"
+        else:
+            try:
+                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id))
+                status = "error" if output.startswith("ERROR") else "ok"
+            except Exception as e:
+                log.exception("tool %s failed", name)
+                output, status = f"ERROR: {e}", "error"
         output = output[:MAX_TOOL_RESULT_CHARS]
-        if status == "ok" and (tool.risk is not Risk.READ or "screenshot" in name):  # a screenshot is saved too
+        t.seen.append(output)
+        if status in ("ok", "dry-run") and (tool.risk is not Risk.READ or "screenshot" in name):  # screenshots save
             t.changed = True
         self.audit.record(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk,
                           arguments=args, status=status, approved_by=approved_by,
@@ -306,6 +372,70 @@ class _Turn:
     on_event: Callable[[dict], None] = lambda e: None
     session: str | None = None
     changed: bool = False  # a tool that changes something ran successfully this turn
+    dry_run: bool = False
+    heard: str = ""  # the user's words this conversation (slot checks)
+    seen: list[str] = field(default_factory=list)  # tool outputs this turn
+
+
+# Arguments a write may only contain if the user said them (or a tool returned them this turn):
+# a 2B model "remembers" 9 June as September 9 and texts the wrong name.
+SLOT_KEYS = ("fact", "text", "to", "name", "page", "message", "contact")
+_NUMBER_WORDS = {w: str(i) for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen twenty".split())}
+_NOT_NAMES = {"User", "User's", "I", "I'm", "The", "Sir", "JARVIS", "Jarvis", "My", "Mr", "Mrs", "Ms", "Dr",
+              "Remember", "Note", "Today", "Tomorrow", "Yesterday"}
+_MONTH = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I)
+
+
+def _unsaid(tool: Tool, args: dict, t: "_Turn") -> list[str]:
+    """Names, numbers and months in a write's arguments that the user never said."""
+    if tool.risk is Risk.READ or not t.heard:
+        return []
+    said = t.heard + " " + " ".join(t.seen)
+    said_l = said.lower()
+    digits = set(re.findall(r"\d+", said)) | {d for w, d in _NUMBER_WORDS.items() if re.search(rf"\b{w}\b", said_l)}
+    months = {m.lower()[:3] for m in _MONTH.findall(said)}
+    bad = []
+    for key in SLOT_KEYS:
+        value = args.get(key)
+        if not isinstance(value, str):
+            continue
+        bad += [n for n in re.findall(r"\d+", value) if n not in digits and n.lstrip("0") not in digits]
+        bad += [m[0] for m in _MONTH.finditer(value) if m[1].lower() not in months]
+        for m in re.finditer(r"\b[A-Z][a-z]{2,}(?:'s)?\b", value):  # names; a sentence's first word is just a capital
+            w, before = m[0], value[:m.start()].rstrip()
+            if before and not before.endswith((".", "!", "?", ":")) and w not in _NOT_NAMES \
+                    and not _MONTH.fullmatch(w) and w.removesuffix("'s").lower() not in said_l:
+                bad.append(w)
+    return list(dict.fromkeys(bad))
+
+
+def _tokens(m: dict) -> int:
+    """Rough token count (about 3.5 characters per token for English and JSON)."""
+    return int(len(json.dumps(m, ensure_ascii=False)) / 3.5) + 4
+
+
+def _fit(convo: list[dict], schemas: list[dict], budget: int) -> None:
+    """Keep the conversation inside the model's context window, so the system prompt (and its
+    data-not-instructions rules) is never what gets cut. Drops the oldest turns before the latest
+    user message first, then shortens older tool results, then the newest ones."""
+    if budget <= 0:
+        return
+    room = budget - REPLY_RESERVE - sum(_tokens(s) for s in schemas)
+    used = lambda: sum(_tokens(m) for m in convo)  # noqa: E731
+    last_user = max(i for i, m in enumerate(convo) if m["role"] == "user") if any(
+        m["role"] == "user" for m in convo) else len(convo)
+    while used() > room and last_user > 1:
+        del convo[1]  # oldest history after the system prompt
+        last_user -= 1
+    tools = [m for m in convo if m["role"] == "tool"]
+    for limit, group in ((600, tools[:-1]), (1500, tools[-1:]), (400, tools)):
+        for m in group:
+            if used() <= room:
+                return
+            if len(m["content"]) > limit:
+                m["content"] = m["content"][:limit] + "\n…(cut to fit)\n</tool_result>"
 
 
 # How a confirmation or approval reads the action back, e.g. "send a text to Chiku saying on my way".

@@ -79,7 +79,8 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
 
     reg.add(Tool("kb_search", "builtin",
                  "Search the user's notes and your memories. Use for: 'what did I decide about X', 'how do I "
-                 "take my coffee', 'who is Chiku', anything about the user's life, home, people or plans.",
+                 "take my coffee', 'who is Chiku', anything about the user's life, home, people or plans. "
+                 "Not for general advice or knowledge.",
                  _obj({"query": {"type": "string", "description": "a few keywords"}}, ["query"]),
                  Risk.READ, kb_search))
     reg.add(Tool("kb_read_page", "builtin",
