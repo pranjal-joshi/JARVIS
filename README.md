@@ -88,6 +88,14 @@ approval in the HUD and the expert runs answer-only, with no tools. See [bridge/
   includes an injection page ([[Untrusted Clipping]]) to test this.
 - **Exposure.** Every host port binds to 127.0.0.1. Remote access is meant to go through Tailscale (later phase).
 - **Audit.** Every tool call (including denied/timed-out ones) is in the SQLite audit log (`/v1/audit`).
+- **Files and PowerShell on the laptop** (device bridge). `read_file`/`list_files` only read: folders listed in
+  `DEVICE_FILES_ALLOW`, or `*` for every local drive; credential-looking files (`.env`, keys, `.ssh`, password
+  stores) stay unreadable. `powershell_read` runs look-only commands (or a named check such as `disk_space`)
+  without asking; `powershell_run` asks every time. [bridge/ps_classify.ps1](bridge/ps_classify.ps1) checks each
+  command with PowerShell's parser and refuses file writes, moves and deletes, nested shells and `iex`. The output
+  of both counts as outside text (taint).
+- **Restarts.** Timers (`timers.json`), approvals, grants and skill schedules (`skills.json`) are kept on disk.
+  A timer that came due while the hub was down rings at start-up, marked late; a daily skill missed by under 6 h runs late.
 
 ## Layout
 

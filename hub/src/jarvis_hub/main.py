@@ -98,7 +98,8 @@ async def lifespan(app: FastAPI):
     st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
     st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url, s.kb_min_score)
     register_kb_tools(st.tools, st.kb_graph, st.kb_index)
-    register_utility_tools(st.tools, st.kb_graph, st.kb_index)
+    st.timers = register_utility_tools(st.tools, st.kb_graph, st.kb_index,
+                                       Path(s.hub_db_path).with_name("timers.json"))
     if register_expert_tool(st.tools, s):
         log.info("ask_claude/ask_opencode enabled via %s", s.expert_bridge_url)
     if register_device_tools(st.tools, s):
@@ -130,6 +131,9 @@ async def lifespan(app: FastAPI):
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     if s.agent != "echo":
         st.skills.start()
+
+    if n := st.timers.restore(st.bus):
+        log.info("%d timers re-armed from before the restart", n)
 
     tasks = []
     if s.agent != "echo":

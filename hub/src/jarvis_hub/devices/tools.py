@@ -5,6 +5,8 @@ Risk: looking (info, screenshots, device list) is a read; media keys, opening an
 locking and connecting are harmless writes; tapping, typing, shell, install and uninstall can
 change anything on the phone, so they are destructive and wait for approval."""
 
+import re
+
 import httpx
 
 from jarvis_hub.approval.gate import Risk
@@ -13,6 +15,44 @@ from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
 WIN_KEYS = ["play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]
 ADB_KEYS = WIN_KEYS[:3] + ["volume_up", "volume_down", "mute", "home", "back", "wake", "sleep"]
+
+
+# Ready-made look-only PowerShell for common questions: a 2B model writes PowerShell poorly (made-up
+# parameters and cmdlets), but picks a name from a list well. `command` stays for anything else.
+PS_CHECKS = {
+    "disk_space": "Get-PSDrive -PSProvider FileSystem | Where-Object Used | Select-Object Name, "
+                  "@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}, @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}}",
+    "top_cpu": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 8 Name, Id, "
+               "@{n='CPUSeconds';e={[math]::Round($_.CPU)}}, @{n='MemoryMB';e={[math]::Round($_.WorkingSet64/1MB)}}",
+    "top_memory": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 Name, Id, "
+                  "@{n='MemoryMB';e={[math]::Round($_.WorkingSet64/1MB)}}",
+    "uptime": "(Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime | Select-Object Days, Hours, Minutes",
+    "network": "Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | Select-Object InterfaceAlias, "
+               "@{n='IPv4';e={$_.IPv4Address.IPAddress}}, @{n='Gateway';e={$_.IPv4DefaultGateway.NextHop}}",
+    "gpu": "nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv",
+    "installed_apps": r"Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, "
+                      r"HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | "
+                      "Where-Object DisplayName | Sort-Object DisplayName -Unique | Select-Object -ExpandProperty DisplayName",
+    "startup_apps": "Get-CimInstance Win32_StartupCommand | Select-Object Name, Location",
+    "find_file": "Get-ChildItem -Path $HOME -Recurse -File -Filter '*{name}*' -ErrorAction SilentlyContinue | "
+                 "Select-Object -First 15 FullName, @{n='KB';e={[math]::Round($_.Length/1KB)}}, LastWriteTime",
+    "recent_files": "Get-ChildItem -Path $HOME\\Documents, $HOME\\Downloads, $HOME\\Desktop -Recurse -Depth 2 -File "
+                    "-ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | "
+                    "Select-Object -First 15 FullName, LastWriteTime",
+}
+
+
+def ps_command(args: dict) -> dict:
+    """powershell_read's arguments -> the command to run: a named check, or the model's own command."""
+    check = str(args.get("check") or "").strip().lower()
+    if check in PS_CHECKS:
+        name = re.sub(r"[^\w .-]", "", str(args.get("name") or ""))[:60].strip()
+        if check == "find_file" and not name:
+            return {"error": "ERROR: find_file needs name (part of the file name)"}
+        return {"command": PS_CHECKS[check].replace("{name}", name)}
+    if check and not args.get("command"):
+        return {"error": f"ERROR: unknown check {check!r}; use one of {', '.join(PS_CHECKS)} or give command"}
+    return {"command": str(args.get("command") or "")}
 
 
 def _obj(props: dict, required: list[str] | None = None) -> dict:
@@ -33,11 +73,24 @@ SPECS = [  # name, description, parameters, risk
      _obj({"target": {"type": "string", "description": "app name or https URL"}}, ["target"]), Risk.WRITE),
     ("win_lock", "Lock this laptop. Use for: 'lock my laptop'.", _obj({}), Risk.WRITE),
     ("win_screenshot", "Save a screenshot of this laptop's screen.", _obj({}), Risk.READ),
-    ("fs_list", "List a folder the user shared with you (read-only). Use for: 'what's in my notes folder'. "
-     "Empty path = the shared folders.", _obj({"path": {"type": "string", "description": "e.g. notes/2026"}}),
+    ("fs_list", "List a folder on this laptop (read-only). Use for: 'what's in my Downloads folder'. "
+     "Empty path = the shared folders and drives.",
+     _obj({"path": {"type": "string", "description": "e.g. C:\\Users or notes/2026"}}), Risk.READ),
+    ("fs_read", "Read a text file on this laptop (read-only). Use for: 'read my packing list'.",
+     _obj({"path": {"type": "string", "description": "e.g. C:\\Users\\me\\notes.txt"}}, ["path"]), Risk.READ),
+    ("win_ps_read", "Look something up on this laptop. Prefer a check: disk_space, top_cpu, top_memory, uptime, "
+     "network, gpu, installed_apps, startup_apps, find_file (with name), recent_files. Otherwise give a "
+     "look-only PowerShell command (Get-/Test-/Measure-/Select-). Use for: 'how much disk space is free', "
+     "'what's using my CPU', 'find my resume'.",
+     _obj({"check": {"type": "string", "enum": list(PS_CHECKS)},
+           "name": {"type": "string", "description": "for find_file: part of the file name"},
+           "command": {"type": "string", "description": "only when no check fits: one PowerShell command line"}}),
      Risk.READ),
-    ("fs_read", "Read a text file from a shared folder (read-only). Use for: 'read my packing list from notes'.",
-     _obj({"path": {"type": "string", "description": "e.g. notes/packing.md"}}, ["path"]), Risk.READ),
+    ("win_ps_run", "Run a PowerShell command that changes something on this laptop (stop a process, start an app, "
+     "change a setting). The user approves it first. Files can't be written, moved or deleted. "
+     "Use only when no other tool does it.",
+     _obj({"command": {"type": "string", "description": "one PowerShell command line"}}, ["command"]),
+     Risk.DESTRUCTIVE),
     ("adb_devices", "Which phones and tablets are connected. Use for: 'is my phone connected'.", _obj({}), Risk.READ),
     ("adb_info", "The phone's battery and the app on screen. Use for: 'phone battery', 'what's on my phone'.",
      _obj({}), Risk.READ),
@@ -90,6 +143,10 @@ def register_device_tools(reg: ToolRegistry, s: Settings) -> bool:
 
     def make(action: str):
         async def act(args: dict, ctx: ToolCtx) -> str:
+            if action == "win_ps_read":
+                args = ps_command(args)
+                if "error" in args:
+                    return args["error"]
             if action == "adb_install":  # the bridge only takes files from its own data/apk drop folder
                 args = {**args, "apk": "data/apk/" + str(args.get("apk", "")).replace("\\", "/").split("/")[-1]}
             try:

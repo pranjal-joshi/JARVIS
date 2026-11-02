@@ -39,6 +39,7 @@ NS = "skills/"
 TRIGGERS = {"device_joined", "device_left", "timer_done", "schedule", "notification", "call_incoming"}
 EVERY = re.compile(r"^every\s+(\d+)\s*([mh])$", re.I)
 DAILY = re.compile(r"^(\d{1,2}):(\d{2})$")
+CATCH_UP = 6 * 3600  # a daily run missed by more than this (JARVIS was off overnight) is skipped
 RUN_SOURCE = Source.WEB  # results show on the HUD; approvals go to the HUD/phone as usual
 
 
@@ -54,7 +55,8 @@ class SkillEngine:
         self.enabled: dict[str, str] = state.get("enabled", {})  # skill name (lower) -> pinned sha256
         # skills promoted out of dry-run: a newly enabled skill first only shows what it would do
         self.live: set[str] = set(state.get("live", []))
-        self.last_run: dict[str, float] = {}
+        # when each scheduled skill last ran, kept across restarts so "every 2h" and daily runs carry on
+        self.last_run: dict[str, float] = state.get("last_run", {})
         self.devices: dict[str, dict] | None = None  # serial -> device, None until first poll
         self.seen_notes: dict[str, set[str]] = {}  # serial -> notification keys already reported
         self.ringing: dict[str, bool] = {}
@@ -74,8 +76,8 @@ class SkillEngine:
         return data
 
     def _save(self) -> None:
-        self.state_file.write_text(json.dumps({"enabled": self.enabled, "live": sorted(self.live)}, indent=1),
-                                   encoding="utf-8")
+        self.state_file.write_text(json.dumps({"enabled": self.enabled, "live": sorted(self.live),
+                                               "last_run": self.last_run}, indent=1), encoding="utf-8")
 
     def promote(self, name: str, live: bool = True) -> dict:
         """Take an enabled skill out of dry-run (or put it back)."""
@@ -221,14 +223,22 @@ class SkillEngine:
                 if m := EVERY.match(s["schedule"]):
                     period = int(m[1]) * (60 if m[2].lower() == "m" else 3600)
                     if time.time() - last >= max(period, 60):
-                        self.last_run[key] = time.time()  # first run waits one period
+                        self._ran(key)  # the first run waits one period; one missed while down runs once
                         if last:
                             self._spawn(s, f"schedule ({s['schedule']})")
                 elif m := DAILY.match(s["schedule"]):
                     due = now.replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
-                    if now >= due and datetime.fromtimestamp(last) < due and (now - due).seconds < 300:
-                        self._spawn(s, f"schedule ({s['schedule']})")
+                    # due and not yet run today; a run missed while the hub was down catches up within CATCH_UP
+                    if now >= due and datetime.fromtimestamp(last) < due:
+                        self._ran(key)
+                        if (now - due).total_seconds() < CATCH_UP:
+                            late = (now - due).total_seconds() > 300
+                            self._spawn(s, f"schedule ({s['schedule']}{', late: JARVIS was offline' if late else ''})")
             await asyncio.sleep(30)
+
+    def _ran(self, key: str) -> None:
+        self.last_run[key] = time.time()
+        self._save()
 
     def start(self) -> None:
         self.bus.tap(self.on_bus)

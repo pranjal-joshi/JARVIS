@@ -520,7 +520,7 @@ _SAYS = {
 def _describe(tool: Tool, args: dict) -> str:
     if say := _SAYS.get(tool.name):
         return say(args)
-    target = next((str(args[k]) for k in ("name", "page", "to", "query", "app") if args.get(k)), "")
+    target = next((str(args[k]) for k in ("name", "page", "to", "query", "app", "command") if args.get(k)), "")
     return tool.model_name.replace("_", " ") + (f" {target}" if target else "")
 
 

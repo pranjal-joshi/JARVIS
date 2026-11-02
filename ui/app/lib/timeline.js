@@ -50,6 +50,10 @@ export function describe(tool = "", args = {}) {
     case "adb_call": return { glyph: "☏", title: "CALL", detail: clip(a.to) };
     case "adb_call_answer": return { glyph: "☏", title: "ANSWER CALL", detail: "" };
     case "adb_call_end": return { glyph: "☏", title: "HANG UP", detail: "" };
+    case "fs_list": return { glyph: "▤", title: "FILE INDEX", detail: clip(a.path || "shared folders") };
+    case "fs_read": return { glyph: "▤", title: "FILE READ", detail: clip(a.path) };
+    case "win_ps_read": return { glyph: "⌘", title: "SYSTEM QUERY", detail: clip(a.check ? `${a.check} ${a.name || ""}` : a.command) };
+    case "win_ps_run": return { glyph: "⌘", title: "SYSTEM COMMAND", detail: clip(a.command) };
     case "kb_clear_memory": return { glyph: "✖", title: "MEMORY WIPE", detail: "all jarvis/ pages" };
     case "kb_delete_page": return { glyph: "✖", title: "PAGE DELETE", detail: clip(a.page) };
     case "kb_delete_item": return { glyph: "✖", title: "ITEM DELETE", detail: clip(`${a.page}: ${a.match}`) };

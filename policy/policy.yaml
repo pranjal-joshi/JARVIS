@@ -28,6 +28,18 @@ rules:
     action: ask
     why: wipes everything JARVIS has learned
 
+  # Files: read_file / list_files are read-only by design (no tool writes, moves or deletes files).
+  # PowerShell: the device bridge checks every command with PowerShell's parser and refuses file writes,
+  # moves and deletes, nested shells and iex outright; this rule is a second, visible layer for the same.
+  - tool: win_ps_*
+    args: {command: '(?i)(\b(remove-item|rm|ri|del|erase|rd|rmdir|set-content|add-content|out-file|move-item|mv|copy-item|cp|rename-item|ren|new-item|ni|clear-content)\b|>)'}
+    action: deny
+    why: JARVIS may not write, move or delete files
+  # look-only commands (powershell_read) run straight away; anything else (powershell_run) asks every time
+  - tool: win_ps_run
+    action: ask
+    why: runs a command that changes this laptop
+
   # Examples (remove the # to use):
   # - tool: web_search
   #   hours: "00-06"

@@ -17,7 +17,7 @@ from jarvis_hub.approval.gate import Risk
 
 # tools whose output is someone else's words
 TAINT_SOURCES = {"web_search", "fetch_page", "adb_notifications", "adb_sms_read", "adb_call_log", "fs_read",
-                 "fs_list"}
+                 "fs_list", "win_ps_read", "win_ps_run"}
 # reads whose full text shouldn't sit in the audit log (it keeps a short note instead)
 REDACT_IN_AUDIT = {"adb_notifications", "adb_sms_read", "adb_call_log", "fs_read"}
 

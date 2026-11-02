@@ -13,6 +13,7 @@ Safety:
   this bridge only enforces the allow-lists; logs record the action name, never the arguments.
 """
 
+import base64
 import ctypes
 import difflib
 import hmac
@@ -21,6 +22,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import threading
 import time
@@ -494,26 +496,55 @@ def adb_watch(_: dict) -> list[dict]:
 
 
 # ---------- files: read-only, inside folders you list, nothing else ----------
-# DEVICE_FILES_ALLOW=notes=C:\Users\me\Documents\Notes;recipes=D:\Recipes  (name=folder, ";" between).
-# Empty = the file tools find nothing. Work folders stay out unless you add them yourself.
-FILE_ROOTS = {k.strip().lower(): Path(v.strip()).resolve() for k, v in
-              (p.split("=", 1) for p in CFG.get("DEVICE_FILES_ALLOW", "").split(";") if "=" in p)}
-TEXT_EXT = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log", ".ini", ".toml", ".py", ".js", ".html", ".xml"}
-SECRET = re.compile(r"(^\.env|\.pem$|\.key$|\.pfx$|\.p12$|id_rsa|id_ed25519|password|secret|credential|token|"
-                    r"\.kdbx$|wallet)", re.I)
+# DEVICE_FILES_ALLOW=notes=C:\Users\me\Documents\Notes;recipes=D:\Recipes  (name=folder, ";" between),
+# or * for every local drive (named by letter: c, d...). Paths may also be absolute (C:\Users\me\x.txt).
+# Empty = the file tools find nothing. There is no write, move or delete here, whatever is listed.
+
+
+def _file_roots(spec: str) -> dict[str, Path]:
+    roots = {}
+    for part in (p.strip() for p in spec.split(";") if p.strip()):
+        if part == "*":
+            roots |= {d.lower(): Path(f"{d}:\\") for d in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                      if ctypes.windll.kernel32.GetDriveTypeW(f"{d}:\\") == 3}  # 3 = a fixed (local) disk
+        elif "=" in part:
+            k, v = part.split("=", 1)
+            roots[k.strip().lower()] = Path(v.strip()).resolve()
+    return roots
+
+
+FILE_ROOTS = _file_roots(CFG.get("DEVICE_FILES_ALLOW", ""))
+TEXT_EXT = {".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".log", ".ini", ".toml", ".cfg",
+            ".conf", ".xml", ".html", ".htm", ".css", ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".ps1", ".psm1",
+            ".bat", ".cmd", ".sh", ".sql", ".java", ".cs", ".go", ".rs", ".c", ".cpp", ".h", ".rb", ".php", ".srt",
+            ".vtt", ".tex", ".rst", ".gitignore", ".dockerfile"}
+# credentials stay unreadable even with whole drives shared: key files, password stores, auth configs
+SECRET = re.compile(r"(^\.env|\.pem$|\.key$|\.pfx$|\.p12$|id_rsa|id_ed25519|id_ecdsa|password|secret|credential|"
+                    r"token|\.kdbx$|wallet|^\.npmrc$|^\.pypirc$|^\.netrc$|^_netrc$|^\.git-credentials$|"
+                    r"^\.ssh$|^\.gnupg$|^\.aws$|^\.azure$|^\.kube$|^\.docker$|cookies|login data|"
+                    r"^local state$|\.rdp$)", re.I)
 MAX_FILE_BYTES = 200_000
 
 
 def _in_roots(rel: str) -> tuple[str, Path]:
-    """'notes/sub/file.md' -> (root name, absolute path), refusing anything outside the listed folders."""
+    """'notes/sub/file.md' or 'C:\\Users\\me\\file.md' -> (root name, absolute path), refusing anything
+    outside the listed folders and anything that looks like a credential."""
     if not FILE_ROOTS:
         raise ActionError("no folders are shared with JARVIS (DEVICE_FILES_ALLOW is empty)")
-    rel = rel.replace("\\", "/").strip("/ ")
-    name, _, rest = rel.partition("/")
-    root = FILE_ROOTS.get(name.lower())
-    if root is None:
-        raise ActionError(f"no shared folder called {name!r}. Shared: {', '.join(sorted(FILE_ROOTS))}")
-    path = (root / rest).resolve()
+    rel = rel.strip().strip('"')
+    if re.match(r"^[A-Za-z]:([\\/]|$)", rel):  # an absolute path: find the shared folder holding it
+        path = Path(rel if len(rel) > 2 else rel + "\\").resolve()
+        name, root = next(((n, r) for n, r in sorted(FILE_ROOTS.items(), key=lambda kv: -len(str(kv[1])))
+                           if path == r or r in path.parents), (None, None))
+        if root is None:
+            raise ActionError(f"{path} isn't in a shared folder. Shared: {', '.join(sorted(FILE_ROOTS))}")
+    else:
+        rel = rel.replace("\\", "/").strip("/ ")
+        name, _, rest = rel.partition("/")
+        root = FILE_ROOTS.get(name.lower().rstrip(":"))
+        if root is None:
+            raise ActionError(f"no shared folder called {name!r}. Shared: {', '.join(sorted(FILE_ROOTS))}")
+        path = (root / rest).resolve()
     if path != root and root not in path.parents:
         raise ActionError("that path leaves the shared folder")
     if any(SECRET.search(part) for part in path.relative_to(root).parts):
@@ -523,7 +554,8 @@ def _in_roots(rel: str) -> tuple[str, Path]:
 
 def fs_list(a: dict) -> str:
     if not str(a.get("path", "")).strip():
-        return "Shared folders: " + ", ".join(sorted(FILE_ROOTS)) if FILE_ROOTS else "No folders are shared."
+        return ("Shared folders: " + ", ".join(f"{n} ({r})" for n, r in sorted(FILE_ROOTS.items()))
+                if FILE_ROOTS else "No folders are shared.")
     name, path = _in_roots(str(a["path"]))
     if not path.is_dir():
         raise ActionError("not a folder")
@@ -537,15 +569,74 @@ def fs_read(a: dict) -> str:
     name, path = _in_roots(str(a.get("path", "")))
     if not path.is_file():
         raise ActionError("no such file")
-    if path.suffix.lower() not in TEXT_EXT:
+    if (path.suffix or path.name).lower() not in TEXT_EXT and path.name.lower() not in ("dockerfile", "makefile",
+                                                                                       "readme", "license"):
         raise ActionError(f"only text files ({', '.join(sorted(TEXT_EXT))})")
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ActionError("that file is too big to read aloud")
     return path.read_text(encoding="utf-8", errors="replace")[:6000]
 
 
+# ---------- PowerShell: look-only commands run freely, others after your approval, file changes never ----------
+# bridge/ps_classify.ps1 judges each command with PowerShell's own parser (aliases resolved): look-only
+# (Get-/Test-/Measure-... and a few tools like nvidia-smi), changes (Stop-Process, Start-Process...), or
+# blocked (writes, moves or deletes files, nested shells, iex, encoded commands). The hub asks you before
+# win_ps_run; this check runs again here, so a blocked command never runs whatever the hub decided.
+PWSH = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+PS_CLASSIFY = base64.b64encode((Path(__file__).with_name("ps_classify.ps1")).read_text(encoding="utf-8")
+                               .encode("utf-16-le")).decode()
+PS_TIMEOUT = int(CFG.get("POWERSHELL_TIMEOUT_S", "60") or 60)
+
+
+def _ps(args: list[str], timeout: int, env: dict | None = None) -> str:
+    p = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", *args], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
+                       env={**os.environ, **(env or {})}, cwd=Path.home(), creationflags=0x08000000)  # no window
+    return (p.stdout + (p.stderr if p.returncode else "")).strip()
+
+
+def _ps_check(cmd: str) -> dict:
+    cmd = cmd.strip()
+    if not cmd:
+        raise ActionError("empty command")
+    if len(cmd) > 2000:
+        raise ActionError("that command is too long")
+    if any(SECRET.search(w) for w in re.split(r"[\\/\s'\"(),;|]+", cmd) if w):
+        raise ActionError("that command touches something that looks like a credential; it isn't allowed")
+    try:
+        verdict = json.loads(_ps(["-EncodedCommand", PS_CLASSIFY], 30, {"JARVIS_PS_CMD": cmd}).splitlines()[-1])
+    except (ValueError, IndexError):
+        raise ActionError("the command couldn't be checked, so it wasn't run")
+    if verdict.get("error"):
+        raise ActionError(f"that isn't valid PowerShell: {verdict['error']}")
+    if verdict.get("block"):
+        raise ActionError(f"not allowed: the command {verdict['block']}. Files can't be written, moved or deleted")
+    return verdict
+
+
+def _ps_exec(cmd: str) -> str:
+    script = f"& {{\n{cmd}\n}} 2>&1 | Out-String -Width 160"
+    out = _ps(["-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode()], PS_TIMEOUT)
+    return (out[:4000] + ("\n(… cut)" if len(out) > 4000 else "")) or "(no output)"
+
+
+def win_ps_read(a: dict) -> str:
+    cmd = str(a.get("command", ""))
+    v = _ps_check(cmd)
+    if not v.get("read"):
+        raise ActionError(f"that command changes things ({v.get('why') or 'not look-only'}); "
+                          "use powershell_run, which asks the user first")
+    return _ps_exec(cmd)
+
+
+def win_ps_run(a: dict) -> str:
+    cmd = str(a.get("command", ""))
+    _ps_check(cmd)
+    return _ps_exec(cmd)
+
+
 ACTIONS = {f.__name__: f for f in (
-    fs_list, fs_read,
+    fs_list, fs_read, win_ps_read, win_ps_run,
     win_info, win_media, win_open, win_lock, win_screenshot,
     adb_devices, adb_info, adb_screenshot, adb_open_app, adb_key, adb_tap, adb_type,
     adb_shell, adb_install, adb_uninstall, adb_connect,

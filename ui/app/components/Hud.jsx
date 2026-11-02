@@ -441,7 +441,7 @@ export default function Hud() {
           if (ev.type === "trace") note({ kind: "info", text: why(ev.data) }); // how the reply came about
           if (ev.type === "timer") {
             chime();
-            const line = `Your ${ev.data.label || "timer"} timer is done, sir.`;
+            const line = `Your ${ev.data.label || "timer"} timer is done, sir.${ev.data.late ? " It went off while I was restarting." : ""}`;
             setMessages((m) => [...m, { role: "assistant", text: line }]);
             if (speakRef.current) speakRef.current(line);
           }

@@ -31,6 +31,8 @@ MODEL_NAMES = {
     "adb_contacts": "find_contact",
     "fs_list": "list_files",
     "fs_read": "read_file",
+    "win_ps_read": "powershell_read",
+    "win_ps_run": "powershell_run",
     "adb_call_answer": "answer_call",
     "adb_call_end": "hang_up",
     "adb_sms_send": "send_text",
