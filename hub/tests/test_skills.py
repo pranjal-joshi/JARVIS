@@ -10,10 +10,11 @@ from jarvis_hub.kb.graph import LogseqGraph
 
 class FakeAgent:
     def __init__(self):
-        self.prompts = []
+        self.prompts, self.dry = [], []
 
-    async def run(self, *, messages, source, request_id, bus, on_text=None):
+    async def run(self, *, messages, source, request_id, bus, on_text=None, dry_run=False):
         self.prompts.append(messages[-1]["content"])
+        self.dry.append(dry_run)
         return "done"
 
 
@@ -89,3 +90,21 @@ def test_new_phone_notification_and_ringing_become_events(tmp_path):
     assert seen == []
     asyncio.run(eng._watch_phones(c, "u", "t"))
     assert seen == [("notification", "WhatsApp: Asha — yo"), ("call_incoming", "+911234 on Pixel")]
+
+
+def test_new_skills_run_dry_until_promoted(tmp_path):
+    g = LogseqGraph(str(tmp_path / "kb"))
+    g.append_to_user_page("skills/Tea", "trigger:: timer_done\n\n- Say tea is ready")
+
+    async def scenario():
+        agent = FakeAgent()
+        eng = SkillEngine(g, EventBus(), agent, Settings(_env_file=None), tmp_path / "skills.json")
+        eng.set_enabled("skills/Tea", True)
+        assert eng.skills()[0]["dry_run"]
+        await eng.run(eng.skills()[0], "test")
+        eng.promote("skills/Tea")
+        await eng.run(eng.skills()[0], "test")
+        eng.set_enabled("skills/Tea", True)  # enabled again (e.g. after an edit): dry-run again
+        assert eng.skills()[0]["dry_run"]
+        return agent.dry
+    assert asyncio.run(scenario()) == [True, False]

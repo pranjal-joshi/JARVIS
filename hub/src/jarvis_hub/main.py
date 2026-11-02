@@ -17,6 +17,7 @@ from jarvis_hub.approval.gate import ApprovalGate
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import get_settings
 from jarvis_hub.events.bus import EventBus
+from jarvis_hub.guard.policy import Policy
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.automation.skills import SkillEngine
@@ -79,7 +80,8 @@ async def lifespan(app: FastAPI):
     st.settings = s
     st.bus = EventBus()
     st.audit = AuditStore(s.hub_db_path)
-    st.gate = ApprovalGate(st.bus, s.approval_timeout_s)
+    st.gate = ApprovalGate(st.bus, s.approval_timeout_s, s.hub_db_path)
+    st.policy = Policy(s.policy_file, s.ask_for(), s.hub_db_path)
     st.tools = ToolRegistry()
     st.llm = LLMClient(s.llm_base_url, s.llm_api_key.get_secret_value(), s.default_llm(),
                        s.llm_timeout_s, s.llm_extra(), s.llm_per_model())
@@ -116,7 +118,10 @@ async def lifespan(app: FastAPI):
         st.llm, st.tools, st.gate, st.audit, s.ask_for(), hidden=s.hidden_tools(),
         selector=ToolSelector(embedder, s.embed_model, s.tool_select_k),
         sessions=st.sessions, voice_confirm=s.voice_confirm(), context_tokens=s.llm_context_tokens,
-        fast=FastPaths(st.kb_graph, s.home_place) if s.fast_paths else None)
+        fast=FastPaths(st.kb_graph, s.home_place) if s.fast_paths else None, policy=st.policy)
+    if isinstance(st.agent, ToolAgent):
+        st.agent._bus = st.bus
+        st.gate.on_orphan = st.agent.run_orphan  # approvals left over from before a restart
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     if s.agent != "echo":

@@ -5,7 +5,8 @@ import json
 from datetime import date
 
 from jarvis_hub.agent.fastpath import FastPaths, _expression, _target_date
-from jarvis_hub.agent.tool_agent import ToolAgent, _Turn, _unsaid
+from jarvis_hub.agent.tool_agent import ToolAgent, _Turn
+from jarvis_hub.guard.hooks import unsaid
 from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
@@ -121,8 +122,8 @@ def test_slot_check_sends_a_changed_date_back(tmp_path):
 
 
 def test_unsaid():
-    t = _Turn(Source.WEB, "r", EventBus(), heard="text Chiku I'm running ten minutes late")
+    heard = "text Chiku I'm running ten minutes late"
     send = Tool("adb_sms_send", "devices", "", {}, Risk.DESTRUCTIVE, None)
-    assert _unsaid(send, {"to": "Chiku", "text": "Running 10 minutes late"}, t) == []
-    assert _unsaid(send, {"to": "Chiku", "text": "Running 15 minutes late, Rohan"}, t) == ["15", "Rohan"]
-    assert _unsaid(Tool("weather", "b", "", {}, Risk.READ, None), {"place": "Paris"}, t) == []
+    assert unsaid(send, {"to": "Chiku", "text": "Running 10 minutes late"}, heard, []) == []
+    assert unsaid(send, {"to": "Chiku", "text": "Running 15 minutes late, Rohan"}, heard, []) == ["15", "Rohan"]
+    assert unsaid(Tool("weather", "b", "", {}, Risk.READ, None), {"place": "Paris"}, heard, []) == []

@@ -27,6 +27,7 @@ class ToolCtx:
     bus: object
     source: str
     request_id: str
+    via: str = ""  # where a saved fact came from ("said by you"...), for the memory's provenance
 
 
 ToolFn = Callable[[dict, ToolCtx], Awaitable[str]]

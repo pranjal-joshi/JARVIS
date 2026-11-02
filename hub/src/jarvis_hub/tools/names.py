@@ -29,6 +29,8 @@ MODEL_NAMES = {
     "adb_sms_read": "read_texts",
     "adb_call_log": "recent_calls",
     "adb_contacts": "find_contact",
+    "fs_list": "list_files",
+    "fs_read": "read_file",
     "adb_call_answer": "answer_call",
     "adb_call_end": "hang_up",
     "adb_sms_send": "send_text",

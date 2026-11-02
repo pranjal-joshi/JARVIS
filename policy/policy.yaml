@@ -1,0 +1,42 @@
+# What JARVIS may do without asking you. Read by the hub on every tool call (edits apply at once;
+# a file that doesn't parse is ignored and the previous version stays in force).
+# Mounted read-only into the hub; JARVIS can't change it, and neither can anything it reads.
+#
+# actions: allow (run, audited), ask (approval card on the HUD/phone; a satellite can say "yes" only
+#          to the risks in VOICE_CONFIRM_RISKS), deny (never), dry-run (record what it would do, don't do it)
+#
+# Order: a grant you gave on a card ("allow for 1 hour") > the first matching rule > the default for
+# the tool's risk. Budgets can turn an allow into a deny. Hooks still apply on top: a write that carries
+# text from a web page, message or file always asks, whatever this file says.
+
+defaults:          # by risk level
+  read: allow
+  write: allow     # JARVIS's own notes, timers, laptop media keys
+  external: ask    # data leaves this machine (web search, ask_claude)
+  destructive: ask # texts, calls, deletes, opening apps
+
+budgets:           # 0 = no limit
+  external_per_day: 40   # Firecrawl's free plan is ~1,000 credits a month, about 2 per search
+  writes_per_hour: 60
+
+rules:
+  # Tool names are the internal ones (kb_remember, adb_sms_send, ha__HassTurnOn) or what the model sees
+  # (remember, send_text); * and ? work as wildcards. Optional: source [web, phone, satellite],
+  # hours "22-07" (local time), args {argument: regex}, why "shown on the card and in the audit".
+
+  - tool: kb_clear_memory
+    action: ask
+    why: wipes everything JARVIS has learned
+
+  # Examples (remove the # to use):
+  # - tool: web_search
+  #   hours: "00-06"
+  #   action: deny
+  #   why: no outside calls at night
+  # - tool: win_open
+  #   args: {app: "^(notepad|calculator)$"}
+  #   action: allow
+  # - tool: adb_*
+  #   source: [satellite]
+  #   action: ask
+  #   why: anything on the phone from a speaker in the room asks first

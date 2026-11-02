@@ -493,7 +493,59 @@ def adb_watch(_: dict) -> list[dict]:
     return out
 
 
+# ---------- files: read-only, inside folders you list, nothing else ----------
+# DEVICE_FILES_ALLOW=notes=C:\Users\me\Documents\Notes;recipes=D:\Recipes  (name=folder, ";" between).
+# Empty = the file tools find nothing. Work folders stay out unless you add them yourself.
+FILE_ROOTS = {k.strip().lower(): Path(v.strip()).resolve() for k, v in
+              (p.split("=", 1) for p in CFG.get("DEVICE_FILES_ALLOW", "").split(";") if "=" in p)}
+TEXT_EXT = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log", ".ini", ".toml", ".py", ".js", ".html", ".xml"}
+SECRET = re.compile(r"(^\.env|\.pem$|\.key$|\.pfx$|\.p12$|id_rsa|id_ed25519|password|secret|credential|token|"
+                    r"\.kdbx$|wallet)", re.I)
+MAX_FILE_BYTES = 200_000
+
+
+def _in_roots(rel: str) -> tuple[str, Path]:
+    """'notes/sub/file.md' -> (root name, absolute path), refusing anything outside the listed folders."""
+    if not FILE_ROOTS:
+        raise ActionError("no folders are shared with JARVIS (DEVICE_FILES_ALLOW is empty)")
+    rel = rel.replace("\\", "/").strip("/ ")
+    name, _, rest = rel.partition("/")
+    root = FILE_ROOTS.get(name.lower())
+    if root is None:
+        raise ActionError(f"no shared folder called {name!r}. Shared: {', '.join(sorted(FILE_ROOTS))}")
+    path = (root / rest).resolve()
+    if path != root and root not in path.parents:
+        raise ActionError("that path leaves the shared folder")
+    if any(SECRET.search(part) for part in path.relative_to(root).parts):
+        raise ActionError("that file looks like a secret; it isn't shared")
+    return name, path
+
+
+def fs_list(a: dict) -> str:
+    if not str(a.get("path", "")).strip():
+        return "Shared folders: " + ", ".join(sorted(FILE_ROOTS)) if FILE_ROOTS else "No folders are shared."
+    name, path = _in_roots(str(a["path"]))
+    if not path.is_dir():
+        raise ActionError("not a folder")
+    items = sorted((p for p in path.iterdir() if not p.name.startswith(".") and not SECRET.search(p.name)),
+                   key=lambda p: (p.is_file(), p.name.lower()))[:100]
+    return "\n".join(f"{p.name}/" if p.is_dir() else f"{p.name} ({p.stat().st_size // 1024} KB)" for p in items) \
+        or "(empty)"
+
+
+def fs_read(a: dict) -> str:
+    name, path = _in_roots(str(a.get("path", "")))
+    if not path.is_file():
+        raise ActionError("no such file")
+    if path.suffix.lower() not in TEXT_EXT:
+        raise ActionError(f"only text files ({', '.join(sorted(TEXT_EXT))})")
+    if path.stat().st_size > MAX_FILE_BYTES:
+        raise ActionError("that file is too big to read aloud")
+    return path.read_text(encoding="utf-8", errors="replace")[:6000]
+
+
 ACTIONS = {f.__name__: f for f in (
+    fs_list, fs_read,
     win_info, win_media, win_open, win_lock, win_screenshot,
     adb_devices, adb_info, adb_screenshot, adb_open_app, adb_key, adb_tap, adb_type,
     adb_shell, adb_install, adb_uninstall, adb_connect,

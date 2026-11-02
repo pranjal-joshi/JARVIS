@@ -40,7 +40,7 @@ class Announcer:
         text, kind = None, None
         if ev.type == "timer" and "timer" in self.kinds and ev.source is Source.SATELLITE:
             text, kind = f"Your {ev.data.get('label') or 'timer'} timer is done, sir.", "timer"
-        elif ev.type == "skill_done" and "skill" in self.kinds:
+        elif ev.type == "skill_done" and "skill" in self.kinds and not ev.data.get("dry_run"):  # a dry run did nothing
             text, kind = to_speech(ev.data.get("text") or "", 300), "skill"
         elif ev.type == "hook_event" and "call" in self.kinds and ev.data.get("kind") == "call_incoming":
             text, kind = f"Incoming call: {ev.data.get('text')}.", "call"

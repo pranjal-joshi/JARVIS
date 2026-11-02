@@ -1,9 +1,11 @@
 """Hub endpoints for the UI and phone: approvals, audit, knowledge base, voice, status."""
 
 import asyncio
+import json
 import logging
 import time
 from datetime import date
+from pathlib import Path
 
 import httpx
 
@@ -14,7 +16,7 @@ from pydantic import BaseModel
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.approval.gate import APPROVER_SOURCES
 from jarvis_hub.config import Source
-from jarvis_hub.kb.tools import recent_memory, write_daily_summary
+from jarvis_hub.kb.tools import _today_title, recent_memory, write_daily_summary
 from jarvis_hub.voice.service import VoiceError
 from jarvis_hub.voice.speakable import for_ear, to_speech
 
@@ -31,6 +33,7 @@ def require_approver(source: Source = Depends(require_source)) -> Source:
 # ---------- approvals ----------
 class DecisionBody(BaseModel):
     approved: bool
+    allow_minutes: int | None = None  # "allow this tool for a while" (approved only, at most a day)
 
 
 @router.get("/approvals")
@@ -41,9 +44,44 @@ async def list_approvals(request: Request, _: Source = Depends(require_approver)
 @router.post("/approvals/{approval_id}")
 async def decide(approval_id: str, body: DecisionBody, request: Request,
                  source: Source = Depends(require_approver)) -> dict:
-    if not request.app.state.gate.decide(approval_id, body.approved, source):
+    st = request.app.state
+    p = st.gate.get(approval_id)
+    if body.approved and body.allow_minutes and p is not None:
+        st.policy.grant(p.tool, p.source.value, min(body.allow_minutes, 24 * 60))
+    if not st.gate.decide(approval_id, body.approved, source):
         raise HTTPException(404, "no such pending approval")
     return {"ok": True}
+
+
+# ---------- policy (read-only here: the file is edited by hand) ----------
+@router.get("/policy")
+async def policy(request: Request, _: Source = Depends(require_approver)) -> dict:
+    return request.app.state.policy.describe()
+
+
+@router.delete("/policy/grants/{tool}")
+async def revoke_grant(tool: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    request.app.state.policy.revoke(tool)
+    return {"ok": True}
+
+
+# ---------- evals (scripts/eval posts its summary; the HUD shows them) ----------
+@router.post("/evals")
+async def eval_post(request: Request, _: Source = Depends(require_approver)) -> dict:
+    body = await request.json()
+    path = Path(request.app.state.settings.hub_db_path).with_name("evals.json")
+    runs = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    runs = [*runs, {k: body.get(k) for k in ("model", "when", "cases", "passed", "first_words_median_s",
+                                             "by_category")} | {"failed": [
+        {"id": r["id"], "fails": r["fails"]} for r in body.get("rows", []) if not r.get("pass")][:60]}][-30:]
+    path.write_text(json.dumps(runs), encoding="utf-8")
+    return {"ok": True}
+
+
+@router.get("/evals")
+async def eval_list(request: Request, _: Source = Depends(require_approver)) -> list:
+    path = Path(request.app.state.settings.hub_db_path).with_name("evals.json")
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 # ---------- audit ----------
@@ -69,6 +107,30 @@ async def kb_graph(request: Request, _: Source = Depends(require_approver)) -> d
 async def kb_memory(request: Request, limit: int = 20,
                     _: Source = Depends(require_approver)) -> list:
     return recent_memory(request.app.state.kb_graph, min(limit, 100))
+
+
+class MemoryEdit(BaseModel):
+    page: str
+    text: str  # the block as it is now (its first line is enough)
+    new: str | None = None  # None = forget it
+
+
+@router.post("/kb/memory/edit")
+async def kb_memory_edit(body: MemoryEdit, request: Request, _: Source = Depends(require_approver)) -> dict:
+    """The HUD's memory review: correct or forget one thing JARVIS learned (jarvis/ pages only; the
+    old page is kept in .trash/)."""
+    g = request.app.state.kb_graph
+    first = body.text.strip().splitlines()[0][:200]
+    try:
+        removed = g.delete_blocks(body.page, first)
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(400, str(e)) from e
+    if not removed:
+        raise HTTPException(404, "no such memory")
+    if body.new and body.new.strip():
+        g.write_jarvis_page(body.page, f"{body.new.strip()}\n  learned:: [[{_today_title(g)}]]\n  via:: edited by you")
+    await request.app.state.kb_index.sync()
+    return {"ok": True, "removed": removed}
 
 
 @router.get("/kb/page")
@@ -210,6 +272,16 @@ async def skills_enable(name: str, body: EnableBody, request: Request,
                         _: Source = Depends(require_approver)) -> dict:
     try:
         return request.app.state.skills.set_enabled(name, body.enabled)
+    except KeyError:
+        raise HTTPException(404, "no such skill page") from None
+
+
+@router.post("/skills/{name:path}/promote")
+async def skills_promote(name: str, body: EnableBody, request: Request,
+                         _: Source = Depends(require_approver)) -> dict:
+    """enabled=true: take the skill out of dry-run, so it really acts; false: back to dry-run."""
+    try:
+        return request.app.state.skills.promote(name, body.enabled)
     except KeyError:
         raise HTTPException(404, "no such skill page") from None
 

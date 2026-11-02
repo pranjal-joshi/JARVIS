@@ -21,12 +21,14 @@ services:
       TZ: ${TZ:-UTC}
       HUB_DB_PATH: /data/jarvis.db
       MCP_CONFIG: /config/mcp/servers.yaml
+      POLICY_FILE: /config/policy/policy.yaml
       KB_GRAPH_DIR: /kb
     read_only: true
     tmpfs: [/tmp]
     volumes:
       - hub-data:/data
       - ./mcp:/config/mcp:ro
+      - ./policy:/config/policy:ro
       - ${KB_GRAPH_PATH:-./data/kb-graph}:/kb
     ports: ["127.0.0.1:8700:8700"]
     networks: [jarvis]

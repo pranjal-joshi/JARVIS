@@ -54,7 +54,9 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
         if not fact:
             return "ERROR: empty fact"
         topic = str(args.get("topic", "memory")).strip() or "memory"
-        page = graph.write_jarvis_page(topic, f"{fact}\n  learned:: [[{_today_title(graph)}]]")
+        # provenance: "said by you" (memory capture), "approved by you", or noted by JARVIS on its own
+        via = ctx.via or "noted by JARVIS"
+        page = graph.write_jarvis_page(topic, f"{fact}\n  learned:: [[{_today_title(graph)}]]\n  via:: {via}")
         graph.append_journal(f"Learned: {fact} (see [[{page}]]) #jarvis")
         await index.sync()
         # the exact words saved, so the spoken confirmation repeats them (a misheard date shows up)

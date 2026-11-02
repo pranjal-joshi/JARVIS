@@ -19,6 +19,9 @@ from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event, EventBus
+from jarvis_hub.guard.hooks import POST_TOOL, PRE_TOOL, audit_text, unsaid
+from jarvis_hub.guard.policy import Decision as PolicyDecision
+from jarvis_hub.guard.policy import Policy
 from jarvis_hub.llm.client import LLMClient, LLMError
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.persona.jarvis import SYSTEM_PROMPT, source_hint
@@ -44,11 +47,6 @@ CLAIM_NUDGE = ("(system) Your reply says you did something, but no tool that cha
                "If the user wanted it saved or done, call the tool now (remember, for a fact about the user). "
                "Otherwise answer without claiming you did it.")
 NOT_DONE = 'I haven\'t actually saved or changed anything, sir. Say "remember ..." and I will.'
-# What makes a web search worth it: the user asked for one, or wants something current.
-CURRENT = re.compile(
-    r"\b(search|look (?:it |that )?up|google|web|online|internet|latest|news|today|tonight|yesterday|tomorrow|"
-    r"current(?:ly)?|now|recent(?:ly)?|this (?:week|month|year|season)|price|cost|rate|score|stock|"
-    r"open|hours|release[ds]?|update[ds]?|live|20\d\d|who won|result)\b", re.I)
 # A message that tells JARVIS something about the user without saying "remember".
 STATES_A_FACT = re.compile(
     r"\b(?:my|our)\s+(?:[\w']+\s+){0,3}(?:is|are|was|were)\b"
@@ -56,6 +54,13 @@ STATES_A_FACT = re.compile(
     r"|was born)\b|\bI'm allergic\b"
     r"|\bkeep (?:that|this|it) in mind\b|\bdon'?t forget\b|\bfor (?:future|later) reference\b|\bfor the record\b",
     re.I)
+CAPTURE_PROMPT = ("Extract the facts the user states about themselves, their people, home or preferences, worth "
+                  "remembering later. Keep the user's own words, names, dates and numbers; write each as a short "
+                  "sentence in the third person (\"The user's sister Chiku's birthday is 9 June.\"). topic: one "
+                  "word (people, preferences, home, health, travel, work, dates). No facts: an empty list.")
+CAPTURE_SCHEMA = {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array", "maxItems": 3,
+                  "items": {"type": "object", "required": ["fact", "topic"],
+                            "properties": {"fact": {"type": "string"}, "topic": {"type": "string"}}}}}}
 FACT_HINT = ("\nThe user's last message tells you something about them. If it is worth keeping, call remember "
              "with it (exact names, dates and numbers) before you answer.")
 
@@ -66,9 +71,11 @@ class ToolAgent:
                  hidden: frozenset[str] = frozenset(), selector: ToolSelector | None = None,
                  sessions: Sessions | None = None,
                  voice_confirm: frozenset[Risk] = frozenset({Risk.EXTERNAL}), context_tokens: int = 8192,
-                 fast: FastPaths | None = None) -> None:
+                 fast: FastPaths | None = None, policy: Policy | None = None) -> None:
         self.llm, self.tools, self.gate, self.audit = llm, tools, gate, audit
-        self.ask_for = ask_for  # risk levels that wait for a human; the rest run and are audited
+        # what may run without a human (guard/policy.py); without a file, APPROVAL_RISKS (ask_for) decides
+        self.policy = policy or Policy(None, ask_for, ":memory:")
+        self._bus: EventBus | None = None  # the hub's bus, for work that starts outside a request
         self.hidden = hidden  # internal tool names the model never sees and may not call
         self.selector = selector  # narrows the tools offered to local models; None = offer them all
         self.sessions = sessions  # satellite conversations; None = no spoken confirmations
@@ -76,6 +83,14 @@ class ToolAgent:
         self._tasks: set[asyncio.Task] = set()  # background expert answers
         self.context_tokens = context_tokens  # the model's window; 0 = don't trim
         self.fast = fast  # requests answered by code, no model call (agent/fastpath.py)
+
+    @property
+    def ask_for(self) -> frozenset[Risk]:
+        return self.policy.ask_for
+
+    @ask_for.setter
+    def ask_for(self, risks: frozenset[Risk]) -> None:
+        self.policy.set_ask_for(risks)
 
     def visible(self) -> list[Tool]:
         return [t for t in self.tools.all() if t.name not in self.hidden]
@@ -110,7 +125,10 @@ class ToolAgent:
         if self.fast and (plan := self.fast.match(said)):
             if (reply := await self._fast(plan, turn)) is not None:
                 return reply
-        hint = FACT_HINT if STATES_A_FACT.search(said) and not said.rstrip().endswith("?") else ""
+        states = STATES_A_FACT.search(said) and not said.rstrip().endswith("?")
+        if states and not self._is_claude() and (reply := await self._capture(said, turn)):
+            return reply
+        hint = FACT_HINT if states else ""
         convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)}]
         convo += [dict(m) for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
         for m in reversed(convo):
@@ -169,15 +187,15 @@ class ToolAgent:
                      **({"_claude": msg["_claude"]} if msg.get("_claude") else {})}
             answers, final = [], None
             for call in calls:
-                prep = self._prepare(call)
-                if not isinstance(prep, str) and prep[0].name == "web_search" and not CURRENT.search(t.heard):
-                    # a 2B model searches for "the capital of Australia": costs a credit, an approval, 20 s
-                    prep = ("ERROR: that is general knowledge, not current news. Answer it yourself without "
-                            "searching; if you really don't know, say so.")
-                if not isinstance(prep, str) and (bad := _unsaid(prep[0], prep[1], t)):
-                    prep = (f"ERROR: {prep[0].model_name} has {', '.join(bad)}, which the user didn't say. "
-                            "Use the user's own words, names, dates and numbers, then call it again.")
-                if not isinstance(prep, str) and self._needs_voice_yes(prep[0], t):
+                prep, hold = self._prepare(call), ""
+                if not isinstance(prep, str):
+                    for hook in PRE_TOOL:  # guard/hooks.py: needless search, unsaid names/dates, taint
+                        if v := hook(prep[0], prep[1], t):
+                            if v.kind == "error":
+                                prep = v.message
+                                break
+                            hold = v.message  # "ask": a human decides, whatever the policy says
+                if not isinstance(prep, str) and not hold and self._needs_voice_yes(prep[0], prep[1], t):
                     # Ask aloud and end the turn; the user's next words answer it (see run/_resume).
                     tool, args = prep
                     asked["tool_calls"].append(call)
@@ -190,13 +208,13 @@ class ToolAgent:
                     # A slow expert answer (up to minutes) must not hold the satellite: run it in the
                     # background and announce it when it lands.
                     tool, args = prep
-                    approved_by = await self._approve(tool, args, t)
+                    approved_by = await self._approve(tool, args, t, hold)
                     if approved_by.startswith("ERROR"):
                         prep = approved_by
                     else:
                         self._background(tool, args, approved_by, t)
                         return self._reply(t, "Working on it, sir. I'll tell you when the answer is in.")
-                result = prep if isinstance(prep, str) else await self._approve_and_run(*prep, t)
+                result = prep if isinstance(prep, str) else await self._approve_and_run(*prep, t, hold)
                 asked["tool_calls"].append(call)
                 answers.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
                 tool = self.tools.get(call.get("function", {}).get("name", ""))
@@ -229,6 +247,56 @@ class ToolAgent:
         convo = [*p.convo, {"role": "tool", "tool_call_id": p.call_id, "content": result}]
         return await self._loop(convo, t)
 
+    async def run_orphan(self, p) -> None:
+        """An approval left over from before a restart was approved: run it now and say what happened."""
+        tool = self.tools.get(p.tool)
+        rid = f"orphan-{p.id[:8]}"
+        t = _Turn(p.source, rid, self._bus or EventBus())
+        if tool is None or tool.name in self.hidden:
+            text = f"I can no longer run {p.tool}, sir; it isn't available."
+        else:
+            body = _unfence(await self._run(tool, p.arguments, "web:after-restart", t)) or ""
+            text = (f"Done, sir: {p.says or tool.model_name}." if not body.startswith("ERROR")
+                    else f"That failed, sir: {body[6:].strip()}")
+        t.bus.publish(Event("reply", Source.WEB, rid, {"text": text}))
+        if p.source is Source.SATELLITE:
+            t.bus.publish(Event("announce", Source.SATELLITE, rid, {"text": text, "kind": "approval"}))
+
+    def _is_claude(self) -> bool:
+        return str(getattr(self.llm, "model", "")).startswith("claude-")
+
+    async def _capture(self, said: str, t: "_Turn") -> str | None:
+        """Memory as its own step: when the user states something about themselves, a schema-constrained
+        call pulls the facts out of THEIR words only, each is checked against what they said, and saved
+        with "said by you" as its source. A 2B model asked to answer and remember at once mostly answers."""
+        tool = self.tools.get("kb_remember")
+        if tool is None or tool.name in self.hidden or not hasattr(self.llm, "json"):
+            return None
+        try:
+            out = await self.llm.json([{"role": "system", "content": CAPTURE_PROMPT},
+                                       {"role": "user", "content": said}], CAPTURE_SCHEMA)
+        except LLMError as e:
+            log.info("memory capture unavailable: %s", e)
+            return None
+        facts = []
+        for f in (out or {}).get("facts", [])[:3]:
+            fact, topic = str(f.get("fact", "")).strip(), str(f.get("topic", "") or "memory").strip()
+            if len(fact) < 4 or unsaid(tool, {"fact": fact}, said, []):
+                continue  # empty, or names/dates the user didn't say: leave it to the normal path
+            facts.append((fact, re.sub(r"[^a-z]", "", topic.lower())[:20] or "memory"))
+        if not facts:
+            return None
+        t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0, "route": "memory"}))
+        t.via = "said by you"
+        saved = []
+        for fact, topic in facts:
+            result = await self._approve_and_run(tool, {"fact": fact, "topic": topic}, t)
+            if (body := _unfence(result)) is not None and not body.startswith("ERROR"):
+                saved.append(fact)
+        if not saved:
+            return None
+        return self._reply(t, "Noted, sir: " + "; ".join(s.rstrip(".") for s in saved) + ".")
+
     async def _fast(self, plan: FastPlan, t: "_Turn") -> str | None:
         """Run a fast-path plan through the gate; None (fall back to the model) if a step can't run."""
         tools = [(self.tools.get(name), args) for name, args in plan.steps]
@@ -251,11 +319,12 @@ class ToolAgent:
         log.info("fast path: %s", plan.intent)
         return self._reply(t, reply)
 
-    def _needs_voice_yes(self, tool: Tool, t: "_Turn") -> bool:
-        """Satellite only: tools that would wait for a HUD approval at one of the voice_confirm risks
-        are confirmed by a spoken yes instead (the rest still need the HUD or phone)."""
-        return (t.source is Source.SATELLITE and bool(t.session) and self.sessions is not None
-                and not tool.self_scoped and tool.risk in self.ask_for and tool.risk in self.voice_confirm)
+    def _needs_voice_yes(self, tool: Tool, args: dict, t: "_Turn") -> bool:
+        """Satellite only: tools the policy would hold for a HUD approval, at one of the voice_confirm
+        risks, are confirmed by a spoken yes instead (the rest still need the HUD or phone)."""
+        return (t.source is Source.SATELLITE and bool(t.session) and self.sessions is not None and not t.dry_run
+                and tool.risk in self.voice_confirm
+                and self.policy.decide(tool, args, t.source, self.audit).action == "ask")
 
     def _background(self, tool: Tool, args: dict, approved_by: str, t: "_Turn") -> None:
         async def work() -> None:
@@ -298,27 +367,39 @@ class ToolAgent:
             return prep
         return await self._approve_and_run(*prep, _Turn(source, request_id, bus))
 
-    async def _approve_and_run(self, tool: Tool, args: dict, t: "_Turn") -> str:
-        approved_by = await self._approve(tool, args, t)
+    async def _approve_and_run(self, tool: Tool, args: dict, t: "_Turn", hold: str = "") -> str:
+        approved_by = await self._approve(tool, args, t, hold)
         if approved_by.startswith("ERROR"):
             return approved_by
         return await self._run(tool, args, approved_by, t)
 
-    async def _approve(self, tool: Tool, args: dict, t: "_Turn") -> str:
-        """Who let this run ("policy", "web", "phone"...), or an ERROR when nobody did."""
+    async def _approve(self, tool: Tool, args: dict, t: "_Turn", hold: str = "") -> str:
+        """Who let this run ("policy", "web", "phone", "grant"...), or an ERROR when nobody did.
+        hold: why a hook wants a human to decide (e.g. outside text in the arguments)."""
         name = tool.name  # audit, events and approvals use the internal name
         t.bus.publish(Event("tool_call", t.source, t.request_id,
                             {"tool": name, "origin": tool.origin, "risk": tool.risk, "arguments": args}))
         if t.dry_run and tool.risk is not Risk.READ:
             return "dry-run"  # recorded, never run: no approval needed
-        if tool.self_scoped:
-            return "policy:self-scoped"
-        if tool.risk not in self.ask_for:
-            return "policy"
+        d = self.policy.decide(tool, args, t.source, self.audit)
+        if hold and d.action in ("allow", "dry-run"):
+            d = PolicyDecision("ask", hold, "hook")
+        t.trace.append({"tool": name, "decision": d.action, "rule": d.rule, "why": d.why})
+        if d.action == "deny":
+            self.audit.record(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk, arguments=args,
+                              status="blocked", approved_by=None, result=d.why or d.rule)
+            t.bus.publish(Event("tool_result", t.source, t.request_id, {"tool": name, "status": "blocked"}))
+            return (f"ERROR: that isn't allowed ({d.why or 'blocked by the policy'}). Tell the user briefly; "
+                    "don't retry.")
+        if d.action == "dry-run":
+            return "dry-run"
+        if d.action == "allow":
+            return {"default": "policy", "self-scoped": "policy:self-scoped", "grant": "grant"}.get(
+                d.rule.split(" ")[0], f"policy:{d.rule}")
         if t.source is Source.SATELLITE:  # a satellite can't approve: say where to, and read it back
             t.on_event({"say": f"Please approve on your phone or the HUD: {_describe(tool, args)}."})
-        decision = await self.gate.request(request_id=t.request_id, source=t.source,
-                                           tool=name, risk=tool.risk, arguments=args)
+        decision = await self.gate.request(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk,
+                                           arguments=args, reason=d.why, says=_describe(tool, args))
         if decision.approved:
             return decision.by
         status = "timeout" if decision.by == "timeout" else "denied"
@@ -334,18 +415,20 @@ class ToolAgent:
             output, status = f"(dry run: {tool.model_name} was recorded, not run.) Reply as if it was done.", "dry-run"
         else:
             try:
-                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id))
+                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id, via=t.via))
                 status = "error" if output.startswith("ERROR") else "ok"
             except Exception as e:
                 log.exception("tool %s failed", name)
                 output, status = f"ERROR: {e}", "error"
         output = output[:MAX_TOOL_RESULT_CHARS]
+        for hook in POST_TOOL:  # guard/hooks.py: records outside text (taint)
+            output = hook(tool, args, output, t)
         t.seen.append(output)
         if status in ("ok", "dry-run") and (tool.risk is not Risk.READ or "screenshot" in name):  # screenshots save
             t.changed = True
         self.audit.record(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk,
                           arguments=args, status=status, approved_by=approved_by,
-                          result=output[:2000])
+                          result=audit_text(tool, output))
         t.bus.publish(Event("tool_result", t.source, t.request_id,
                             {"tool": name, "status": status, "preview": output[:300]}))
         # Fence results so the model treats them as data, not instructions.
@@ -375,40 +458,9 @@ class _Turn:
     dry_run: bool = False
     heard: str = ""  # the user's words this conversation (slot checks)
     seen: list[str] = field(default_factory=list)  # tool outputs this turn
-
-
-# Arguments a write may only contain if the user said them (or a tool returned them this turn):
-# a 2B model "remembers" 9 June as September 9 and texts the wrong name.
-SLOT_KEYS = ("fact", "text", "to", "name", "page", "message", "contact")
-_NUMBER_WORDS = {w: str(i) for i, w in enumerate(
-    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
-    "seventeen eighteen nineteen twenty".split())}
-_NOT_NAMES = {"User", "User's", "I", "I'm", "The", "Sir", "JARVIS", "Jarvis", "My", "Mr", "Mrs", "Ms", "Dr",
-              "Remember", "Note", "Today", "Tomorrow", "Yesterday"}
-_MONTH = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I)
-
-
-def _unsaid(tool: Tool, args: dict, t: "_Turn") -> list[str]:
-    """Names, numbers and months in a write's arguments that the user never said."""
-    if tool.risk is Risk.READ or not t.heard:
-        return []
-    said = t.heard + " " + " ".join(t.seen)
-    said_l = said.lower()
-    digits = set(re.findall(r"\d+", said)) | {d for w, d in _NUMBER_WORDS.items() if re.search(rf"\b{w}\b", said_l)}
-    months = {m.lower()[:3] for m in _MONTH.findall(said)}
-    bad = []
-    for key in SLOT_KEYS:
-        value = args.get(key)
-        if not isinstance(value, str):
-            continue
-        bad += [n for n in re.findall(r"\d+", value) if n not in digits and n.lstrip("0") not in digits]
-        bad += [m[0] for m in _MONTH.finditer(value) if m[1].lower() not in months]
-        for m in re.finditer(r"\b[A-Z][a-z]{2,}(?:'s)?\b", value):  # names; a sentence's first word is just a capital
-            w, before = m[0], value[:m.start()].rstrip()
-            if before and not before.endswith((".", "!", "?", ":")) and w not in _NOT_NAMES \
-                    and not _MONTH.fullmatch(w) and w.removesuffix("'s").lower() not in said_l:
-                bad.append(w)
-    return list(dict.fromkeys(bad))
+    tainted: list[str] = field(default_factory=list)  # outside text this turn (web, messages, files)
+    trace: list[dict] = field(default_factory=list)  # policy decisions, for the HUD's "why" panel
+    via: str = ""  # provenance for memories saved this turn
 
 
 def _tokens(m: dict) -> int:

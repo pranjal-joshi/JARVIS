@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     fast_paths: bool = True
 
     mcp_config: str = "../mcp/servers.yaml"
+    # what may run without a human: rules, budgets, grants (guard/policy.py). Missing = APPROVAL_RISKS only.
+    policy_file: str = "../policy/policy.yaml"
 
     kb_graph_dir: str = "../kb/sample-graph"
     kb_graph_name: str = ""  # defaults to the folder name

@@ -50,7 +50,10 @@ class SkillEngine:
     def __init__(self, graph: LogseqGraph, bus: EventBus, agent, settings: Settings, state_file: Path) -> None:
         self.graph, self.bus, self.agent, self.settings = graph, bus, agent, settings
         self.state_file = state_file
-        self.enabled: dict[str, str] = self._load()  # skill name (lower) -> pinned sha256
+        state = self._load()
+        self.enabled: dict[str, str] = state.get("enabled", {})  # skill name (lower) -> pinned sha256
+        # skills promoted out of dry-run: a newly enabled skill first only shows what it would do
+        self.live: set[str] = set(state.get("live", []))
         self.last_run: dict[str, float] = {}
         self.devices: dict[str, dict] | None = None  # serial -> device, None until first poll
         self.seen_notes: dict[str, set[str]] = {}  # serial -> notification keys already reported
@@ -61,14 +64,27 @@ class SkillEngine:
         self._watchers: list[asyncio.Task] = []
 
     # ---------- state ----------
-    def _load(self) -> dict[str, str]:
+    def _load(self) -> dict:
         try:
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
+        if "enabled" not in data:  # the old format: {name: sha} only, all of them already trusted
+            return {"enabled": data, "live": list(data)}
+        return data
 
     def _save(self) -> None:
-        self.state_file.write_text(json.dumps(self.enabled, indent=1), encoding="utf-8")
+        self.state_file.write_text(json.dumps({"enabled": self.enabled, "live": sorted(self.live)}, indent=1),
+                                   encoding="utf-8")
+
+    def promote(self, name: str, live: bool = True) -> dict:
+        """Take an enabled skill out of dry-run (or put it back)."""
+        skill = next((s for s in self.skills() if s["name"].lower() == name.lower()), None)
+        if skill is None:
+            raise KeyError(name)
+        (self.live.add if live else self.live.discard)(name.lower())
+        self._save()
+        return next(s for s in self.skills() if s["name"].lower() == name.lower())
 
     def skills(self) -> list[dict]:
         out = []
@@ -87,6 +103,7 @@ class SkillEngine:
                 "enabled": pinned == digest,
                 "changed": bool(pinned) and pinned != digest,  # edited after it was enabled
                 "last_run": self.last_run.get(key),
+                "dry_run": key not in self.live,
             })
         return out
 
@@ -96,8 +113,10 @@ class SkillEngine:
             raise KeyError(name)
         if on:
             self.enabled[page.name.lower()] = _digest(page)
+            self.live.discard(page.name.lower())  # (re-)enabled, maybe after an edit: dry-run first
         else:
             self.enabled.pop(page.name.lower(), None)
+            self.live.discard(page.name.lower())
         self._save()
         return next(s for s in self.skills() if s["name"].lower() == page.name.lower())
 
@@ -127,18 +146,23 @@ class SkillEngine:
         key = skill["name"].lower()
         self._running.add(key)
         rid = uuid.uuid4().hex
-        self.bus.publish(Event("skill_run", RUN_SOURCE, rid, {"skill": skill["name"], "why": why}))
+        dry = key not in self.live
+        self.bus.publish(Event("skill_run", RUN_SOURCE, rid, {"skill": skill["name"], "why": why, "dry_run": dry}))
         prompt = (f"(Automation) The skill \"{skill['name']}\" was triggered by {why}. "
                   f"Carry out these instructions, which the user wrote and enabled:\n{skill['instructions']}")
         try:
             reply = await self.agent.run(messages=[{"role": "user", "content": prompt}], source=RUN_SOURCE,
-                                         request_id=rid, bus=self.bus)
+                                         request_id=rid, bus=self.bus, dry_run=dry)
         except Exception as e:  # a failing skill must not take the engine down
             log.exception("skill %s failed", skill["name"])
             reply = f"The skill failed: {e}"
         finally:
             self._running.discard(key)
-        self.bus.publish(Event("skill_done", RUN_SOURCE, rid, {"skill": skill["name"], "text": reply}))
+        audit = getattr(self.agent, "audit", None)
+        would = [f"{r['tool']} {r['arguments']}" for r in audit.recent(50)
+                 if r["request_id"] == rid and r["status"] == "dry-run"] if dry and audit else []
+        self.bus.publish(Event("skill_done", RUN_SOURCE, rid, {"skill": skill["name"], "text": reply,
+                                                                "dry_run": dry, "would": would[::-1]}))
         return reply
 
     # ---------- watchers ----------

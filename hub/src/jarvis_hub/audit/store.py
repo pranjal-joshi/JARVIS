@@ -50,6 +50,14 @@ class AuditStore:
             cols = [c[0] for c in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
+    def count_since(self, since: float, risk: str | None = None) -> int:
+        """Calls that actually ran since a time (for the policy's budgets)."""
+        q, args = "SELECT COUNT(*) FROM audit_log WHERE ts >= ? AND status = 'ok'", [since]
+        if risk:
+            q, args = q + " AND risk = ?", [*args, risk]
+        with self._lock:
+            return self._conn.execute(q, args).fetchone()[0]
+
     def between(self, start: float, end: float) -> list[dict]:
         with self._lock:
             cur = self._conn.execute(

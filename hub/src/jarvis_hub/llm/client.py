@@ -69,6 +69,20 @@ class LLMClient:
                 call["function"]["arguments"] = json.dumps(args or {})
         return msg
 
+    async def json(self, messages: list[dict], schema: dict) -> dict:
+        """A reply that is always valid JSON for schema (Ollama enforces it while decoding). Local models only."""
+        if self.model.startswith("claude-"):
+            raise LLMError("schema-constrained output is used with local models only")
+        body = {"model": self.model, "messages": messages, **self._extra, **self._per_model.get(self.model, {}),
+                "temperature": 0, "response_format": {"type": "json_schema",
+                                                      "json_schema": {"name": "out", "schema": schema}}}
+        try:
+            r = await self._http.post("/chat/completions", json=body)
+            r.raise_for_status()
+            return json.loads(r.json()["choices"][0]["message"]["content"] or "{}")
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            raise LLMError(f"JSON request failed: {e}") from e
+
     async def _stream(self, body: dict, on_text: Callable[[str], None]) -> dict:
         content, calls = "", {}  # tool calls arrive in pieces keyed by index
         try:
