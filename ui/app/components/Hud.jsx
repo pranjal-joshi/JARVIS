@@ -928,7 +928,6 @@ export default function Hud() {
         {kbView === "normal" && (
           <div className="mm-view">
             <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />
-            <div className="mm-radar" aria-hidden="true" />
             {kbActive && <div key={kbPulse?.seq} className="mm-ping" aria-hidden="true" />}
           </div>
         )}

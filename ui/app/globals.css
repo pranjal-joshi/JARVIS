@@ -491,27 +491,6 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
 .kb.k-fault { --mm: #ff5c9a; --mm-glow: rgba(255, 92, 154, 0.16); }
 .kb.active { flex-basis: 64%; border-color: var(--mm); box-shadow: inset 0 0 40px var(--mm-glow), 0 0 28px var(--mm-glow); }
 .mm-view { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-/* range rings and a slow radar sweep; the sweep speeds up and takes the tool's colour while active */
-.mm-radar {
-  position: absolute; inset: 0; pointer-events: none; margin: 0 -14px;
-  background:
-    radial-gradient(circle at 50% 50%, transparent 0 24%, rgba(127, 231, 255, 0.07) 24.3% 24.8%, transparent 25% 49%,
-      rgba(127, 231, 255, 0.06) 49.3% 49.8%, transparent 50%),
-    conic-gradient(from 0deg at 50% 50%, transparent 0 300deg, rgba(127, 231, 255, 0.10) 350deg, rgba(127, 231, 255, 0.22) 360deg);
-  -webkit-mask: radial-gradient(circle at 50% 50%, #000 0 70%, transparent 72%);
-  mask: radial-gradient(circle at 50% 50%, #000 0 70%, transparent 72%);
-  animation: mm-sweep 6s linear infinite;
-  opacity: 0.55;
-}
-.kb.active .mm-radar {
-  background:
-    radial-gradient(circle at 50% 50%, transparent 0 24%, var(--mm-glow) 24.3% 24.8%, transparent 25% 49%,
-      var(--mm-glow) 49.3% 49.8%, transparent 50%),
-    conic-gradient(from 0deg at 50% 50%, transparent 0 290deg, var(--mm-glow) 345deg, var(--mm) 360deg);
-  animation-duration: 1.8s;
-  opacity: 0.45;
-}
-@keyframes mm-sweep { to { transform: rotate(1turn); } }
 /* one ripple per knowledge-base event */
 .mm-ping {
   position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; pointer-events: none;
@@ -1125,4 +1104,4 @@ header { position: relative; z-index: 20; }
 .guard-rules small, .guard-evals small { flex-basis: 100%; opacity: 0.7; }
 .guard-evals details { margin-top: 4px; opacity: 0.8; }
 .guard-evals details div { margin: 2px 0 2px 8px; }
-@media (prefers-reduced-motion: reduce) { .mm-radar, .mm-ping, .kb.active .mm-corner { animation: none; } .mm-ping { display: none; } }
+@media (prefers-reduced-motion: reduce) { .mm-ping, .kb.active .mm-corner { animation: none; } .mm-ping { display: none; } }
