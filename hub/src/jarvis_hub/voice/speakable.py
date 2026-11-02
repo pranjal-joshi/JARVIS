@@ -76,3 +76,59 @@ def to_speech(text: str, max_chars: int = MAX_SPOKEN) -> str:
     if out.endswith(":"):
         out = out[:-1] + "."
     return out
+
+
+# ---------- listening, not reading (voice satellites) ----------
+_MONTHS = ("January|February|March|April|May|June|July|August|September|October|November|December|"
+           "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec")
+_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+                "October", "November", "December"]
+_TIME = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(\s*[ap]\.?m\b\.?)?", re.I)
+_ISO_DATE = re.compile(r"\b(20\d\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b")
+_DAY_MONTH_YEAR = re.compile(rf"\b(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})\.?),?\s+20\d\d\b", re.I)
+_MONTH_DAY_YEAR = re.compile(rf"\b((?:{_MONTHS})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?),?\s+20\d\d\b", re.I)
+_BIG = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+)(?:\.\d+)?(?!\d|,\d)")
+_SYMBOLS = [(re.compile(r"\s*%"), " percent"), (re.compile(r"\s*°\s*C\b"), " degrees"),
+            (re.compile(r"\s*°"), " degrees"), (re.compile(r"\s+&\s+"), " and "),
+            (re.compile(r"₹\s?([\d,.]+)"), r"\1 rupees"), (re.compile(r"£\s?([\d,.]+)"), r"\1 pounds"),
+            (re.compile(r"\$\s?([\d,.]+)"), r"\1 dollars"), (re.compile(r"€\s?([\d,.]+)"), r"\1 euros")]
+
+
+def _spoken_time(m: re.Match) -> str:
+    h, mins = int(m[1]), int(m[2])
+    if m[3]:  # "5:15 pm": the hour is already on the 12-hour clock
+        h = h % 12 + (12 if m[3].strip().lower().startswith("p") else 0)
+    to = mins > 30
+    hour = (h + to) % 12 or 12
+    if mins == 0:
+        said = f"{hour} o'clock"
+    elif mins in (15, 30, 45):
+        said = {15: "quarter past", 30: "half past", 45: "quarter to"}[mins] + f" {hour}"
+    else:
+        said = f"{60 - mins if to else mins} {'to' if to else 'past'} {hour}"
+    hh = (h + to) % 24
+    part = "in the morning" if 5 <= hh < 12 else "in the afternoon" if 12 <= hh < 17 else \
+        "in the evening" if 17 <= hh < 21 else "at night"
+    return f"{said} {part}"
+
+
+def _round_big(m: re.Match) -> str:
+    n = int(m[1].replace(",", ""))
+    if n < 10_000:
+        return m[1].replace(",", "")
+    if n >= 1_000_000:
+        return f"about {round(n / 1_000_000, 1):g} million"
+    return f"about {round(n / 1000):g} thousand"
+
+
+def for_ear(text: str) -> str:
+    """Satellite style: times as spoken ("quarter past five in the evening"), dates without the
+    year, big numbers rounded, symbols as words. Applied to speech only, after to_speech."""
+    text = _ISO_DATE.sub(lambda m: f"{int(m[3])} {_MONTH_NAMES[int(m[2]) - 1]}", text)
+    text = _DAY_MONTH_YEAR.sub(r"\1", text)
+    text = _MONTH_DAY_YEAR.sub(r"\1", text)
+    text = _TIME.sub(_spoken_time, text)
+    text = _BIG.sub(_round_big, text)
+    for rx, rep in _SYMBOLS:
+        text = rx.sub(rep, text)
+    return re.sub(r"\s{2,}", " ", text).strip()

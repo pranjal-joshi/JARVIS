@@ -1,6 +1,10 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["aiosendspin[server]==10.2.2"]  # only for the optional Sendspin output
+# dependencies = [
+#   "aiosendspin[server]==10.2.2",   # optional Sendspin output
+#   "pymicro-wakeword==2.5.0",       # optional "Hey Jarvis" wake word (microWakeWord, TFLite)
+#   "pymicro-features==2.0.2",
+# ]
 # ///
 """Satellite emulator: a stand-in for an ESPHome voice satellite (e.g. Home Assistant Voice PE),
 so the hub's satellite path can be exercised without hardware.
@@ -10,7 +14,7 @@ it as source=satellite: short spoken answers, and it can never approve an action
 
 Runs on the host, bound to 127.0.0.1 (browsers allow the microphone on localhost without HTTPS).
 Standard library only:  uv run --no-project python satellite/emulator.py   ->  http://127.0.0.1:8792
-With the Sendspin output (aiosendspin, from the inline metadata above, in uv's cache only):
+With the wake word and Sendspin output (from the inline metadata above, in uv's cache only):
                          uv run --script satellite/emulator.py
 """
 
@@ -47,6 +51,8 @@ NAME = CFG.get("SATELLITE_NAME", "Satellite (emulated)")
 MAX_BODY = 10 * 1024 * 1024
 SENDSPIN_PORT = int(CFG.get("SATELLITE_SENDSPIN_PORT", "8927"))
 SENDSPIN = None  # SendspinOut once started; None = Sendspin unavailable, the page plays replies itself
+WAKE_MODEL = CFG.get("SATELLITE_WAKE_WORD", "hey_jarvis")
+WAKE = None  # wakeword.WakeWord once loaded; None = push-to-talk only
 
 
 def start_sendspin() -> None:
@@ -65,8 +71,17 @@ def start_sendspin() -> None:
         SENDSPIN = out
 
 
+def start_wake() -> None:
+    global WAKE
+    if WAKE_MODEL.lower() in ("", "off", "false", "none"):
+        return log.info("wake word disabled (SATELLITE_WAKE_WORD=off)")
+    from wakeword import load
+    if WAKE := load(WAKE_MODEL):
+        log.info("wake word on: %s", WAKE_MODEL)
+
+
 def hub(path: str, data: bytes | None, ctype: str | None, timeout: float = 200):
-    headers = {"Authorization": f"Bearer {TOKEN}"}
+    headers = {"Authorization": f"Bearer {TOKEN}", "X-Satellite-Id": "emulator"}
     if ctype:
         headers["Content-Type"] = ctype
     return urlopen(Request(f"{HUB}/v1/{path}", data=data, headers=headers,
@@ -91,7 +106,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             return self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/info":
-            return self._json(200, {"name": NAME, "hub": HUB, "token": bool(TOKEN)})
+            return self._json(200, {"name": NAME, "hub": HUB, "token": bool(TOKEN),
+                                    "wake": WAKE.name if WAKE else None,
+                                    "events": HUB.replace("http", "ws", 1) + "/v1/events"})
         if self.path == "/api/sendspin/status":
             if not SENDSPIN:
                 return self._json(200, {"enabled": False, "running": False, "players": []})
@@ -104,6 +121,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(413, {"detail": "too large"})
         body = self.rfile.read(length)
         try:
+            if self.path == "/api/wake":  # 16 kHz mono s16le from the page's microphone
+                if not WAKE:
+                    return self._json(503, {"detail": "wake word not loaded"})
+                if self.headers.get("X-Reset"):
+                    WAKE.reset()
+                return self._json(200, {"hit": WAKE.feed(body)})
+            if self.path == "/api/events-ticket":  # one-time ticket: the page opens the hub's event stream
+                with hub("events/ticket", b"{}", "application/json", 10) as r:
+                    return self._send(200, r.read(), "application/json")
+            if self.path == "/api/status":  # what's up and down, for spoken error messages
+                with hub("status", None, None, 10) as r:
+                    return self._send(200, r.read(), "application/json")
             if self.path == "/api/stt":  # raw 16 kHz WAV from the page -> multipart for the hub
                 b = uuid.uuid4().hex
                 form = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n"
@@ -161,6 +190,7 @@ def main() -> None:
     if not TOKEN or TOKEN == "change-me":
         raise SystemExit("set HUB_TOKEN_SATELLITE in .env first")
     start_sendspin()
+    start_wake()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     log.info("satellite emulator on http://127.0.0.1:%d -> hub %s", PORT, HUB)
     try:

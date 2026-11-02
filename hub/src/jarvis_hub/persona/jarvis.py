@@ -22,7 +22,10 @@ You are heard more than read, so be brief: one or two crisp sentences, under 40 
 Now and then a brief status phrase ("Diagnostic complete.", "Analysing.") but only after a tool has actually run."""
 
 _HINTS = {
-    Source.SATELLITE: "This request came from a voice satellite: at most two short spoken sentences, plain words only.",
+    Source.SATELLITE: ("This request came from a voice satellite, so it is only heard: at most two short sentences, "
+                       "plain words, no lists, symbols or links. Say times the way people do (quarter past five), "
+                       "dates without the year, round big numbers (about twelve thousand). For a long list give the "
+                       "count and the top three, then ask if the user wants the rest."),
     Source.WEB: ("This request came from the HUD, which speaks your reply aloud. Keep it short and spoken-style; "
                  "markdown only for code or a command the user asked for."),
     Source.PHONE: "This request came from the phone: one or two short sentences.",

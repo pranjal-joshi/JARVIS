@@ -16,7 +16,7 @@ from jarvis_hub.approval.gate import APPROVER_SOURCES
 from jarvis_hub.config import Source
 from jarvis_hub.kb.tools import recent_memory, write_daily_summary
 from jarvis_hub.voice.service import VoiceError
-from jarvis_hub.voice.speakable import to_speech
+from jarvis_hub.voice.speakable import for_ear, to_speech
 
 router = APIRouter(prefix="/v1")
 log = logging.getLogger(__name__)
@@ -111,9 +111,11 @@ async def transcribe(file: UploadFile, request: Request,
     if len(data) > MAX_AUDIO_BYTES:
         raise HTTPException(413, "audio too large")
     try:
-        return {"text": await request.app.state.voice.transcribe(data)}
+        heard = await request.app.state.voice.transcribe(data)
     except VoiceError as e:
         raise HTTPException(502, str(e)) from e
+    text = request.app.state.vocab.correct(heard)  # names Whisper misheard
+    return {"text": text, **({"heard": heard} if text != heard else {})}
 
 
 class SpeechBody(BaseModel):
@@ -124,10 +126,12 @@ class SpeechBody(BaseModel):
 
 @router.post("/audio/speech")
 async def speech(body: SpeechBody, request: Request,
-                 _: Source = Depends(require_source)) -> Response:
+                 source: Source = Depends(require_source)) -> Response:
     if not body.input.strip():
         raise HTTPException(400, "empty input")
     spoken = to_speech(body.input[:6000])
+    if source is Source.SATELLITE:  # heard, never seen: times, dates and numbers as you'd say them
+        spoken = for_ear(spoken)
     if not spoken:  # nothing sayable (e.g. a code-only reply): stay quiet
         return Response(status_code=204)
     try:

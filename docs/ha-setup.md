@@ -78,6 +78,26 @@ Settings → Voice assistants → **Add assistant**:
 
 Test it from the Assist dialog in HA (the chat bubble, or its microphone button).
 
+## 6. Voice-only use (satellite with no screen)
+
+The hub already handles these for any client using `HUB_TOKEN_SATELLITE`; the steps below are the HA
+side. Nothing here changes the approval rules.
+
+| What | Hub side (done) | HA side (you) |
+|---|---|---|
+| Wake word | — | ESPHome satellite → wake word **hey_jarvis** (microWakeWord, on the device). Voice PE: device page → *Wake word* select. |
+| Interrupt by voice | — | Voice PE stops playback when the wake word is heard again; leave *Stop word* on. |
+| Follow-ups ("yes, send it") | Keeps each satellite's last turns for `VOICE_FOLLOWUP_S` (120 s), used when HA sends one turn at a time | HA 2025.4+ keeps the mic open when the reply ends in "?" (continue conversation). Nothing to set. |
+| Saying "yes" to web search / ask_claude | `VOICE_CONFIRM_RISKS=external`: the satellite asks "Shall I go ahead, sir?" and acts on your next words | — |
+| Texts, calls, deletes (`destructive`) | Satellite says "Please approve on your phone or the HUD: send a text to Chiku saying …" | Optional push: set `HA_NOTIFY_SERVICE=mobile_app_<your phone>` and `HUD_URL=https://<laptop-ip>:3443`; tapping the notification opens the HUD. |
+| Timers, skill results, incoming calls, background ask_claude answers | Published as `announce` events | Set `HA_ANNOUNCE_ENTITY=assist_satellite.<your satellite>`; the hub calls `assist_satellite.announce`. |
+| Thinking sound during long tool calls | Streams tool-start cues (emulator only) | Voice PE: enable the *processing sound* on the device page. |
+| Times, dates, numbers said naturally | Non-streamed satellite replies and satellite TTS go through `for_ear` | — |
+| Misheard names | Names from KB page titles, the page `jarvis/vocabulary` (one name per block) and recent contacts are put right after Whisper | — |
+
+The `HA_*` calls use `HA_TOKEN`. If that token's user is not an admin, give it access to the notify
+and assist_satellite services. With these unset, nothing is sent to HA.
+
 ## Undo
 
 Delete the three integrations in HA, delete the JARVIS user, then

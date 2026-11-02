@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.config import Source
+from jarvis_hub.voice.speakable import for_ear
 
 router = APIRouter(prefix="/v1")
 MODEL_ID = "jarvis"
@@ -46,7 +47,17 @@ async def chat(body: ChatRequest, request: Request,
                source: Source = Depends(require_source)):
     request_id = uuid.uuid4().hex
     messages = [{"role": m.role, "content": _text(m.content)} for m in body.messages]
-    run = dict(messages=messages, source=source, request_id=request_id, bus=request.app.state.bus)
+    session = None
+    if source is Source.SATELLITE:  # one conversation per satellite, kept by the hub (see voice/session.py)
+        session = "satellite:" + (request.headers.get("x-satellite-id") or "default")[:64]
+        messages = request.app.state.sessions.merge(session, messages)
+    heard = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+    run = dict(messages=messages, source=source, request_id=request_id, bus=request.app.state.bus,
+               session=session)
+
+    def remember(reply: str) -> None:
+        if session:
+            request.app.state.sessions.record(session, heard, reply)
     created, cid = int(time.time()), f"chatcmpl-{request_id}"
 
     if body.stream:
@@ -58,8 +69,9 @@ async def chat(body: ChatRequest, request: Request,
                 "model": MODEL_ID, **extra,
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}) + "\n\n"
 
-        queue: asyncio.Queue[str] = asyncio.Queue()
-        task = asyncio.create_task(request.app.state.agent.run(**run, on_text=queue.put_nowait))
+        queue: asyncio.Queue[str | dict | None] = asyncio.Queue()
+        task = asyncio.create_task(request.app.state.agent.run(**run, on_text=queue.put_nowait,
+                                                                on_event=queue.put_nowait))
 
         async def gen():
             yield chunk({"role": "assistant"})
@@ -69,6 +81,9 @@ async def chat(body: ChatRequest, request: Request,
                     piece = await asyncio.wait_for(queue.get(), 0.25)
                 except TimeoutError:
                     continue
+                if isinstance(piece, dict):  # voice cue: a tool started, or a line to say now
+                    yield chunk({}, jarvis=piece)
+                    continue
                 if piece is None:  # the agent took that back (a tool runs next): client drops it
                     streamed = ""
                     yield chunk({}, jarvis={"reset": True})
@@ -76,6 +91,7 @@ async def chat(body: ChatRequest, request: Request,
                 streamed += piece
                 yield chunk({"content": piece})
             reply = task.result()
+            remember(reply)
             if not streamed.strip():  # a tool's own answer or an error message: send it whole
                 yield chunk({"content": reply})
             # Non-standard: the final text (it can differ from what streamed if a tool ran after the
@@ -86,6 +102,9 @@ async def chat(body: ChatRequest, request: Request,
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     reply = await request.app.state.agent.run(**run)
+    remember(reply)
+    if source is Source.SATELLITE:  # Home Assistant speaks this text as it is
+        reply = for_ear(reply)
     return {
         "id": cid, "object": "chat.completion", "created": created, "model": MODEL_ID,
         "choices": [{"index": 0, "finish_reason": "stop",

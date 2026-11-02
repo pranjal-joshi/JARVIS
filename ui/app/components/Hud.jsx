@@ -10,7 +10,7 @@ import RichText from "./RichText";
 import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
-import { chime, playAudio, startRecording, stopAudio } from "../lib/audio";
+import { askToNotify, chime, notifyApproval, playAudio, startRecording, stopAudio } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
 const KbGraph = dynamic(() => import("./KbGraph"), {
@@ -370,6 +370,12 @@ export default function Hud() {
     return () => clearTimeout(t);
   }, [bootPhase]);
 
+  // approval notifications while the HUD is in the background: permission is asked on the first click
+  useEffect(() => {
+    addEventListener("pointerdown", askToNotify, { once: true });
+    return () => removeEventListener("pointerdown", askToNotify);
+  }, []);
+
   // event stream (reconnects with a fresh one-time ticket)
   useEffect(() => {
     let ws;
@@ -388,7 +394,7 @@ export default function Hud() {
           if (ev.type === "subscribed") return setLink("online");
           if (ev.type === "thinking") setState("thinking");
           if (ev.type === "tool_call" && ev.data.risk && ev.data.risk !== "read") flash("orange");
-          if (ev.type === "approval_request") { flash("orange"); chime(); }
+          if (ev.type === "approval_request") { flash("orange"); chime(); notifyApproval(ev.data); }
           if (ev.type === "hook_event") {
             setHookSeq((n) => n + 1);
             echo({ kind: "info", text: `⚡ ${ev.data.kind}: ${ev.data.text}` });

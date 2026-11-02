@@ -125,3 +125,23 @@ export function chime() {
     /* no audio available: the card still shows */
   }
 }
+
+// System notification for an approval while the HUD is in the background (another tab, phone
+// screen off), so a voice-only user hears "approve it on your phone" and finds it there.
+// Needs permission, asked on the first click (askToNotify). Android Chrome only shows them through
+// a service worker, which the HUD doesn't have: there the chime and the HA push (HA_NOTIFY_SERVICE) remain.
+export function askToNotify() {
+  try {
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  } catch {}
+}
+export function notifyApproval(data) {
+  try {
+    if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
+    const n = new Notification("JARVIS needs your approval", {
+      body: `${data.tool} (${data.risk}) asked by ${data.requested_by}`, tag: data.approval_id, requireInteraction: true });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch {
+    navigator.vibrate?.([200, 100, 200]);
+  }
+}

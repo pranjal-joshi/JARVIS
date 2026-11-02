@@ -6,13 +6,26 @@ it as `source=satellite`: short spoken answers, and it can never approve an acti
 the HUD or phone).
 
 ```
-uv run --no-project python satellite/emulator.py      # standard library only, page speaker
-uv run --script satellite/emulator.py                 # + Sendspin output (see below)
+uv run --script satellite/emulator.py                 # wake word + Sendspin output (see below)
+uv run --no-project python satellite/emulator.py      # standard library only: push-to-talk, page speaker
 ```
 
 Open http://127.0.0.1:8792 (localhost, so the browser allows the microphone without HTTPS).
 
-- Hold the button (or Space) to talk, or type what you'd say.
+- Say **"Hey Jarvis"** (tick "wake word"), hold the button (or Space), or type what you'd say. The
+  wake word is microWakeWord's `hey_jarvis` model, the one a Voice PE runs on the device, through
+  `pymicro-wakeword==2.5.0` (OHF, TensorFlow Lite bundled; fetched into uv's cache by `uv run --script`).
+  The page streams 16 kHz audio to the emulator in 100 ms blocks; nothing is stored. Recording stops
+  after 0.9 s of quiet. `SATELLITE_WAKE_WORD=off` (or okay_nabu, hey_mycroft, alexa) in `.env`.
+- Barge-in: the wake word or the button while it's thinking or talking stops it and listens.
+- Earcons: rising tones = listening, falling = heard you, a soft pulse while thinking, a tick when a
+  tool starts (plus "One moment, sir." if nothing has been said yet), two low tones = something failed.
+- When JARVIS asks a question it keeps listening for about 5 s, no wake word needed ("Shall I go ahead,
+  sir?" → "yes").
+- Announcements from the hub (timers set here, skill results, incoming calls, `ask_claude` answers that
+  ran in the background) arrive over the hub's event stream and are spoken when the satellite is idle.
+- Failures are spoken: "I can't reach my hub", "My hearing is offline" (Whisper down); if the hub's
+  text-to-speech fails, the browser's own voice reads the reply.
 - The LED ring follows the ESPHome states: listening (violet, follows your voice), thinking
   (cyan chase), replying (green, follows the audio), error (red blink).
 - Replies stream: each sentence is sent to TTS as soon as it's complete; the log shows when the
@@ -56,7 +69,7 @@ Notes:
 - The server key is kept in `data/satellite/sendspin_identity.key` so players see the same server
   across restarts.
 
-Settings (`.env`, optional): `SATELLITE_HUB_URL` (default http://127.0.0.1:8700),
+Settings (`.env`, optional): `SATELLITE_WAKE_WORD` (hey_jarvis), `SATELLITE_HUB_URL` (default http://127.0.0.1:8700),
 `SATELLITE_EMULATOR_PORT` (8792), `SATELLITE_NAME`, `SATELLITE_SENDSPIN` (true),
 `SATELLITE_SENDSPIN_PORT` (8927), `SATELLITE_SENDSPIN_HOST` (0.0.0.0),
 `SATELLITE_SENDSPIN_DISCOVER` (false).

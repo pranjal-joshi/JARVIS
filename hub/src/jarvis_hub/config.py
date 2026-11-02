@@ -81,6 +81,20 @@ class Settings(BaseSettings):
     firecrawl_api_key: SecretStr = SecretStr("")
     web_search_approval: bool = True  # the query leaves this machine: ask each time unless set false
 
+    # voice satellites
+    voice_followup_s: float = 120  # a satellite's last turns are kept this long for follow-ups
+    # approval risks a satellite user may give by saying "yes" (the rest wait for the HUD or phone)
+    voice_confirm_risks: str = "external"
+    # what satellites announce unasked: timer, skill, call (background answers are always announced)
+    voice_announce: str = "timer,skill,call"
+    # Home Assistant REST (optional): HA_URL defaults to HA_MCP_URL without /api/mcp
+    ha_url: str = ""
+    ha_mcp_url: str = ""
+    ha_token: SecretStr = SecretStr("")
+    ha_notify_service: str = ""  # e.g. mobile_app_pixel_9a: approval requests pushed to the phone
+    ha_announce_entity: str = ""  # e.g. assist_satellite.home_voice: announcements spoken there
+    hud_url: str = ""  # opened by the approval notification, e.g. https://192.168.1.20:3443
+
     def token_sources(self) -> dict[str, Source]:
         """Map each configured bearer token to the source it may speak for.
         Empty or placeholder tokens are treated as disabled."""
@@ -102,6 +116,14 @@ class Settings(BaseSettings):
     def hidden_tools(self) -> frozenset[str]:
         from jarvis_hub.tools.names import internal_name
         return frozenset(internal_name(t.strip()) for t in self.model_hidden_tools.split(",") if t.strip())
+
+    def voice_confirm(self) -> frozenset:
+        from jarvis_hub.approval.gate import Risk
+        return frozenset(Risk(r.strip()) for r in self.voice_confirm_risks.split(",") if r.strip())
+
+    def ha_base_url(self) -> str:
+        url = self.ha_url or self.ha_mcp_url.removesuffix("/").removesuffix("/api/mcp")
+        return url.rstrip("/")
 
     def llm_extra(self) -> dict:
         return json.loads(self.llm_extra_body or "{}")

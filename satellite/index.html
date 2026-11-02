@@ -80,7 +80,7 @@
       <button class="btn" id="btn" type="button" aria-label="Hold to talk">HOLD<br>TO TALK</button>
     </div>
     <div class="state" id="state" aria-live="polite">idle</div>
-    <div class="hint">Hold the button (or Space) to talk. Or type what you'd say:</div>
+    <div class="hint">Say "Hey Jarvis", or hold the button (or Space) to talk. Either one also interrupts a reply. Or type what you'd say:</div>
     <form id="say">
       <input type="text" id="text" placeholder="e.g. what's the weather in Pune" aria-label="Spoken text" autocomplete="off">
       <button class="plain" type="submit">SAY</button>
@@ -93,18 +93,22 @@
       </select>
       <label><input type="checkbox" id="mute"> mute</label>
     </div>
+    <div class="row">
+      <label><input type="checkbox" id="wake" disabled> <span id="wakelabel">wake word</span></label>
+    </div>
   </section>
 
   <section class="panel" aria-label="Event log">
     <h2>Pipeline</h2>
-    <div class="log" id="log"><div class="empty">Waiting for a wake… hold the button to start.</div></div>
+    <div class="log" id="log"><div class="empty">Waiting for a wake… say "Hey Jarvis" or hold the button.</div></div>
   </section>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const COLORS = { idle: "rgba(127,231,255,0.08)", listening: "#b48bff", thinking: "#7fe7ff",
-                 replying: "#6dffa8", error: "#ff5c5c" };
+                 replying: "#6dffa8", announcing: "#ffb347", error: "#ff5c5c" };
 const N = 12;
 const leds = [...Array(N)].map((_, i) => {
   const d = document.createElement("div");
@@ -117,7 +121,8 @@ const leds = [...Array(N)].map((_, i) => {
 
 // ---- LED ring: ESPHome-style per-state animation ----
 let state = "idle", level = 0;
-function setState(s) { state = s; $("state").textContent = s; }
+function setState(s) { state = s; $("state").textContent = s; if (s === "idle") setTimeout(drainAnnouncements, 0); }
+const busy = () => ["listening", "thinking", "replying", "announcing"].includes(state);
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 (function ring(t) {
   const c = COLORS[state];
@@ -125,7 +130,8 @@ const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
     let on = 0;
     if (state === "listening") on = 0.35 + Math.min(1, level * 4) * 0.65;
     else if (state === "thinking") on = reduce ? 0.8 : ((i - t / 70) % N + N) % N < 3 ? 1 : 0.15;
-    else if (state === "replying") on = reduce ? 0.9 : 0.5 + 0.5 * Math.sin(t / 180 + i * 0.5) * Math.min(1, level * 6 + 0.3);
+    else if (state === "replying" || state === "announcing")
+      on = reduce ? 0.9 : 0.5 + 0.5 * Math.sin(t / 180 + i * 0.5) * Math.min(1, level * 6 + 0.3);
     else if (state === "error") on = Math.floor(t / 250) % 2 ? 1 : 0.2;
     l.style.background = on ? c : "var(--led)";
     l.style.opacity = state === "idle" ? 1 : on;
@@ -144,41 +150,43 @@ function log(kind, label, text) {
   box.prepend(d);
 }
 
-// ---- mic: record, then 16 kHz mono WAV (what the hub's Whisper path takes) ----
-let rec = null;
-async function startRec() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
-  const ctx = new AudioContext();
-  const an = ctx.createAnalyser(); an.fftSize = 256;
-  ctx.createMediaStreamSource(stream).connect(an);
-  const buf = new Uint8Array(an.fftSize);
-  const meter = setInterval(() => { an.getByteTimeDomainData(buf); level = Math.max(...buf.map((v) => Math.abs(v - 128))) / 128; }, 50);
-  const mr = new MediaRecorder(stream); const chunks = [];
-  mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  mr.start();
-  return { async stop() {
-    const done = new Promise((r) => (mr.onstop = r)); mr.stop(); await done;
-    clearInterval(meter); level = 0; stream.getTracks().forEach((t) => t.stop());
-    const decoded = await ctx.decodeAudioData(await new Blob(chunks).arrayBuffer()); ctx.close();
-    const rate = 16000, off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
-    const s = off.createBufferSource(); s.buffer = decoded; s.connect(off.destination); s.start();
-    const pcm = (await off.startRendering()).getChannelData(0);
-    const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
-    const str = (o, x) => [...x].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
-    str(0, "RIFF"); out.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVEfmt "); out.setUint32(16, 16, true);
-    out.setUint16(20, 1, true); out.setUint16(22, 1, true); out.setUint32(24, rate, true); out.setUint32(28, rate * 2, true);
-    out.setUint16(32, 2, true); out.setUint16(34, 16, true); str(36, "data"); out.setUint32(40, pcm.length * 2, true);
-    pcm.forEach((v, i) => { const x = Math.max(-1, Math.min(1, v)); out.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); });
-    return new Blob([out.buffer], { type: "audio/wav" });
-  } };
+// ---- earcons: short synthesised tones, so you know where you are without looking ----
+let fx = null;
+function tone(notes, vol = 0.08) {
+  if ($("mute").checked) return;
+  fx ??= new AudioContext();
+  const t0 = fx.currentTime + 0.01;
+  for (const [f, at, dur] of notes) {
+    const o = fx.createOscillator(), g = fx.createGain();
+    o.type = "sine"; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t0 + at); g.gain.linearRampToValueAtTime(vol, t0 + at + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + dur);
+    o.connect(g).connect(fx.destination); o.start(t0 + at); o.stop(t0 + at + dur + 0.05);
+  }
 }
+const EAR = {
+  wake: () => tone([[660, 0, 0.12], [880, 0.1, 0.18]]),          // rising: listening
+  followup: () => tone([[880, 0, 0.12]], 0.05),                    // one soft note: still listening
+  heard: () => tone([[880, 0, 0.08], [660, 0.07, 0.12]], 0.05),    // falling: got it
+  pulse: () => tone([[440, 0, 0.2]], 0.025),                       // still thinking
+  tool: () => tone([[523, 0, 0.08], [659, 0.06, 0.1]], 0.035),     // a tool started
+  announce: () => tone([[784, 0, 0.14], [1047, 0.12, 0.24]]),
+  error: () => tone([[330, 0, 0.18], [220, 0.16, 0.32]], 0.1),
+};
 
-// ---- speaker: sentences play in order as their audio arrives ----
+// ---- speech out: hub TTS, or the browser's own voice when the hub's voice is down ----
 let turn = 0, playing = null;
 let ssUntil = 0; // Sendspin: when the players should finish what's been queued (performance.now() ms)
 function stopAudio() {
   try { playing?.stop(); } catch {} playing = null;
+  speechSynthesis.cancel();
   if (ssUntil > performance.now()) { ssUntil = 0; fetch("/api/sendspin/stop", { method: "POST" }).catch(() => {}); }
+}
+function browserSay(text) {
+  return new Promise((res) => {
+    const u = new SpeechSynthesisUtterance(text); u.lang = "en-GB"; u.onend = res; u.onerror = res;
+    speechSynthesis.speak(u);
+  });
 }
 // Sendspin output: the emulator queues each sentence on the players and returns at once; the
 // page only estimates playback from the WAV length to keep the ring "replying" meanwhile.
@@ -191,7 +199,7 @@ async function sendspinPlay(blob, mine) {
 }
 async function sendspinDrain(mine) {
   const meter = setInterval(() => { level = 0.12 + Math.random() * 0.12; }, 120);
-  while (mine === turn && performance.now() < ssUntil) await new Promise((r) => setTimeout(r, 100));
+  while (mine === turn && performance.now() < ssUntil) await sleep(100);
   clearInterval(meter); level = 0;
 }
 async function play(blob, mine) {
@@ -206,20 +214,37 @@ async function play(blob, mine) {
   await new Promise((r) => { src.onended = r; src.start(); });
   clearInterval(meter); level = 0; ctx.close();
 }
-function speaker(mine) {
-  let chain = Promise.resolve();
+const ttsCache = new Map(); // the filler line, synthesised once
+function tts(text, cache = false) {
+  if (cache && ttsCache.has(text)) return ttsCache.get(text);
+  const p = fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: text }) })
+    .then((r) => (r.status === 204 ? null : r.ok ? r.blob() : { failed: r.status }))
+    .catch(() => ({ failed: "unreachable" }));
+  if (cache) { ttsCache.set(text, p); p.then((b) => b?.failed && ttsCache.delete(text)); }
+  return p;
+}
+let voiceDown = false;
+function speaker(mine, as = "replying") {
+  let chain = Promise.resolve(), spoke = false;
   return {
-    add(text) {
+    get spoke() { return spoke; },
+    add(text, { cache = false, label = "TTS" } = {}) {
       if (!text.trim() || $("mute").checked) return;
+      spoke = true;
       const t0 = performance.now();
-      const audio = fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: text }) })
-        .then((r) => (r.ok && r.status !== 204 ? r.blob() : null)).catch(() => null);
+      const audio = tts(text, cache);
       const viaSendspin = $("out").value === "sendspin";
       chain = chain.then(async () => {
         const blob = await audio;
-        if (!blob || mine !== turn) return;
-        log("tts", "TTS", `${text.trim()} (${Math.round(performance.now() - t0)} ms)${viaSendspin ? " → sendspin" : ""}`);
-        setState("replying");
+        if (mine !== turn || !blob) return;
+        setState(as);
+        if (blob.failed) { // the hub's voice is down: say it anyway, in the browser's voice
+          if (!voiceDown) log("err", "VOICE", `hub text-to-speech failed (${blob.failed}); using the browser voice`);
+          voiceDown = true;
+          return browserSay(text);
+        }
+        voiceDown = false;
+        log("tts", label, `${text.trim()} (${Math.round(performance.now() - t0)} ms)${viaSendspin ? " → sendspin" : ""}`);
         if (viaSendspin) await sendspinPlay(blob, mine).catch((e) => log("err", "SENDSPIN", String(e.message || e)));
         else await play(blob, mine);
       });
@@ -234,29 +259,57 @@ function sentenceEnd(s) {
   return 0;
 }
 
+// ---- failures: a distinct tone and one spoken cause ----
+async function fail(label, detail, spoken) {
+  log("err", label, detail);
+  EAR.error(); setState("error");
+  const mine = ++turn;
+  if (spoken && !$("mute").checked) {
+    const blob = await tts(spoken);
+    if (mine === turn) { if (blob && !blob.failed) await play(blob, mine); else await browserSay(spoken); }
+  }
+  await sleep(600);
+  if (mine === turn) setState("idle");
+}
+function cause(detail) {
+  if (/hub unreachable|Failed to fetch|NetworkError/i.test(detail)) return "I can't reach my hub, sir.";
+  if (/whisper|speech-to-text|transcri/i.test(detail)) return "My hearing is offline, sir. Speech recognition isn't answering.";
+  return "Something went wrong on my side, sir.";
+}
+
 // ---- one voice turn: text -> hub chat (streamed) -> spoken sentence by sentence ----
-let history = [];
+let history = [], chatAbort = null;
+const FILLER = "One moment, sir.";
 async function converse(text) {
-  const mine = ++turn; stopAudio();
+  const mine = ++turn; stopAudio(); chatAbort?.abort(); chatAbort = new AbortController();
   log("stt", "HEARD", text);
   history = [...history, { role: "user", content: text }].slice(-8);
   setState("thinking");
   const voice = speaker(mine);
   let shown = "", pending = "", final = null;
   const t0 = performance.now();
+  const pulse = setInterval(() => mine === turn && state === "thinking" && EAR.pulse(), 2200);
   try {
-    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: history }) });
+    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ messages: history }), signal: chatAbort.signal });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "", first = null;
     outer: for (;;) {
       const { value, done } = await reader.read(); if (done) break;
+      if (mine !== turn) return; // barged in: this turn is over
       buf += dec.decode(value, { stream: true }); let i;
       while ((i = buf.indexOf("\n\n")) >= 0) {
         const line = buf.slice(0, i).replace(/^data:\s*/, ""); buf = buf.slice(i + 2);
         if (line === "[DONE]") break outer;
         let ev; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.jarvis?.reset) { shown = pending = ""; turn++; stopAudio(); continue; }
-        if (ev.jarvis?.final != null) final = ev.jarvis.final;
+        const j = ev.jarvis || {};
+        if (j.reset) { shown = pending = ""; continue; }
+        if (j.tool) { // a tool started: a tick, and a short filler line if nothing has been said yet
+          EAR.tool(); log("wake", "TOOL", j.tool);
+          if (!voice.spoke) voice.add(FILLER, { cache: true, label: "FILLER" });
+        }
+        if (j.say) voice.add(j.say, { label: "SAY" }); // e.g. "Please approve on your phone: ..."
+        if (j.final != null) final = j.final;
         const piece = ev.choices?.[0]?.delta?.content; if (!piece) continue;
         first ??= Math.round(performance.now() - t0);
         shown += piece; pending += piece; let cut;
@@ -268,28 +321,158 @@ async function converse(text) {
     history = [...history, { role: "assistant", content: reply }];
     if (!shown.trim()) voice.add(reply); else if (pending.trim()) voice.add(pending);
     await voice.done();
-    if (mine === turn) setState("idle");
+    if (mine !== turn) return;
+    // JARVIS asked something: keep listening for the answer, no wake word needed
+    if (/\?["')\]]?\s*$/.test(reply.trim()) && mic.ctx) return listen("followup");
+    setState("idle");
   } catch (e) {
-    log("err", "ERROR", String(e.message || e)); setState("error");
-    setTimeout(() => mine === turn && setState("idle"), 2000);
+    if (e.name === "AbortError" || mine !== turn) return;
+    fail("ERROR", String(e.message || e), cause(String(e.message || e)));
+  } finally {
+    clearInterval(pulse);
   }
 }
 
-// ---- push to talk ----
+// ---- microphone: one always-on 16 kHz stream for the wake word, recording and voice barge-in ----
+const RATE = 16000, BLOCK = 1600; // 100 ms blocks
+const mic = { ctx: null, mode: "off", floor: 0.01, carry: new Float32Array(0), pos: 0 };
+let rec = null, wakeOn = false, wakeName = null;
+async function micStart() {
+  if (mic.ctx) { await mic.ctx.resume(); return; }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+  const ctx = new AudioContext();
+  const code = `registerProcessor("tap", class extends AudioWorkletProcessor {
+    process(inputs) { const c = inputs[0][0]; if (c) this.port.postMessage(c.slice(0)); return true; } });`;
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  const node = new AudioWorkletNode(ctx, "tap");
+  const silent = ctx.createGain(); silent.gain.value = 0;
+  ctx.createMediaStreamSource(stream).connect(node).connect(silent).connect(ctx.destination);
+  const step = ctx.sampleRate / RATE;
+  let acc = [];
+  node.port.onmessage = (e) => { // resample to 16 kHz (linear), then cut into 100 ms blocks
+    const x = e.data, src = new Float32Array(mic.carry.length + x.length);
+    src.set(mic.carry); src.set(x, mic.carry.length);
+    let p = mic.pos;
+    for (; p + 1 < src.length; p += step) { const i = Math.floor(p), f = p - i; acc.push(src[i] * (1 - f) + src[i + 1] * f); }
+    const keep = Math.floor(p); mic.carry = src.slice(keep); mic.pos = p - keep;
+    while (acc.length >= BLOCK) { onBlock(Float32Array.from(acc.slice(0, BLOCK))); acc = acc.slice(BLOCK); }
+  };
+  mic.ctx = ctx;
+}
+function toPcm(f32) {
+  const out = new Int16Array(f32.length);
+  f32.forEach((v, i) => { const x = Math.max(-1, Math.min(1, v)); out[i] = x < 0 ? x * 0x8000 : x * 0x7fff; });
+  return out;
+}
+function onBlock(block) {
+  let sum = 0; for (const v of block) sum += v * v;
+  const rms = Math.sqrt(sum / block.length), pcm = toPcm(block);
+  if (mic.mode === "record") return recordBlock(pcm, rms);
+  mic.floor = mic.floor * 0.95 + Math.min(rms, 0.05) * 0.05; // ambient level, for end-of-speech
+  if (mic.mode === "wake") sendWake(pcm);
+}
+
+// wake word: blocks go to the emulator (microWakeWord) one request at a time, batched while one is out
+let wakeQ = [], wakeBusy = false, wakeReset = true;
+function sendWake(pcm) { wakeQ.push(pcm); if (!wakeBusy) flushWake(); }
+async function flushWake() {
+  wakeBusy = true;
+  while (wakeQ.length && mic.mode === "wake") {
+    const sent = wakeQ; wakeQ = [];
+    const body = new Int16Array(sent.reduce((n, a) => n + a.length, 0)); let o = 0;
+    for (const a of sent) { body.set(a, o); o += a.length; }
+    try {
+      const r = await fetch("/api/wake", { method: "POST", body: body.buffer,
+        headers: { "Content-Type": "application/octet-stream", ...(wakeReset ? { "X-Reset": "1" } : {}) } });
+      wakeReset = false;
+      if (r.status === 503) { setWake(false, "wake word not loaded in the emulator"); break; }
+      if ((await r.json()).hit && mic.mode === "wake") onWake();
+    } catch { await sleep(1000); }
+  }
+  wakeBusy = false;
+}
+function onWake() {
+  const tail = wakeQ; wakeQ = []; wakeReset = true; // audio after the wake word: the start of the command
+  if (busy()) { log("wake", "BARGE-IN", "wake word while busy: stopping"); turn++; chatAbort?.abort(); stopAudio(); }
+  log("wake", "WAKE", `"${wakeName.replace(/_/g, " ")}" heard`);
+  listen("wake", tail);
+}
+
+// recording: until 0.9 s of quiet after speech (or the button is released)
+function listen(why, pre = []) {
+  if (!mic.ctx) return;
+  rec = { why, pcm: [...pre], speech: false, quiet: 0, ms: 0 };
+  mic.mode = "record";
+  (why === "followup" ? EAR.followup : EAR.wake)();
+  setState("listening");
+}
+function recordBlock(pcm, rms) {
+  level = Math.min(1, rms * 8);
+  rec.pcm.push(pcm); rec.ms += 100;
+  if (rms > Math.max(0.015, mic.floor * 3)) { rec.speech = true; rec.quiet = 0; } else rec.quiet += 100;
+  if (rec.why === "ptt") return;
+  const giveUp = rec.why === "followup" ? 5000 : 4000;
+  if ((rec.speech && rec.quiet >= 900) || rec.ms >= 12000 || (!rec.speech && rec.ms >= giveUp)) finishRec();
+}
+async function finishRec() {
+  const r = rec; rec = null; level = 0;
+  mic.mode = wakeOn ? "wake" : "off";
+  if (!r) return;
+  if (!r.speech && r.why !== "ptt") { log("wake", "QUIET", r.why === "followup" ? "no answer: back to sleep" : "heard nothing"); return setState("idle"); }
+  EAR.heard(); setState("thinking");
+  const mine = ++turn;
+  const fd = await fetch("/api/stt", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav(r.pcm) }).catch(() => null);
+  if (mine !== turn) return;
+  if (!fd || !fd.ok) {
+    const detail = fd ? (await fd.json().catch(() => ({}))).detail || `HTTP ${fd.status}` : "hub unreachable";
+    return fail("STT", `speech-to-text failed: ${detail}`, cause(fd && fd.status !== 502 ? "transcribe" : detail));
+  }
+  const j = await fd.json(), text = j.text?.trim();
+  if (!text) { log("wake", "QUIET", "heard nothing"); return setState("idle"); }
+  if (j.heard) log("stt", "FIXED", `Whisper heard "${j.heard}"`);
+  converse(text);
+}
+function wav(blocks) {
+  const n = blocks.reduce((a, b) => a + b.length, 0);
+  const out = new DataView(new ArrayBuffer(44 + n * 2));
+  const str = (o, x) => [...x].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); out.setUint32(4, 36 + n * 2, true); str(8, "WAVEfmt "); out.setUint32(16, 16, true);
+  out.setUint16(20, 1, true); out.setUint16(22, 1, true); out.setUint32(24, RATE, true); out.setUint32(28, RATE * 2, true);
+  out.setUint16(32, 2, true); out.setUint16(34, 16, true); str(36, "data"); out.setUint32(40, n * 2, true);
+  let o = 44; for (const b of blocks) for (const v of b) { out.setInt16(o, v, true); o += 2; }
+  return new Blob([out.buffer], { type: "audio/wav" });
+}
+
+// ---- wake word switch ----
+async function setWake(on, why) {
+  wakeOn = on && !!wakeName;
+  $("wake").checked = wakeOn;
+  try { localStorage.setItem("sat.wake", wakeOn ? "1" : "0"); } catch {}
+  if (wakeOn) {
+    try { await micStart(); } catch { wakeOn = false; $("wake").checked = false; return fail("MIC", "microphone blocked or missing", "I can't use the microphone, sir."); }
+    if (mic.mode !== "record") mic.mode = "wake";
+    wakeReset = true;
+    log("wake", "WAKE WORD", `listening for "${wakeName.replace(/_/g, " ")}"`);
+  } else {
+    if (mic.mode === "wake") mic.mode = "off";
+    if (why) log("err", "WAKE WORD", why);
+  }
+}
+$("wake").addEventListener("change", (e) => setWake(e.target.checked));
+// the browser only starts audio after a click: resume then if the wake word was left on
+addEventListener("pointerdown", () => mic.ctx?.state === "suspended" && mic.ctx.resume(), true);
+
+// ---- push to talk (also barges in) ----
 async function down() {
   if (rec) return;
-  turn++; stopAudio();
-  try { rec = await startRec(); } catch (e) { log("err", "MIC", "microphone blocked or missing"); return setState("error"); }
-  $("btn").classList.add("down"); log("wake", "WAKE", "button pressed: listening"); setState("listening");
+  turn++; chatAbort?.abort(); stopAudio();
+  try { await micStart(); } catch { return fail("MIC", "microphone blocked or missing", "I can't use the microphone, sir."); }
+  $("btn").classList.add("down"); log("wake", "WAKE", "button pressed: listening");
+  listen("ptt");
 }
-async function up() {
-  if (!rec) return;
-  const r = rec; rec = null; $("btn").classList.remove("down"); setState("thinking");
-  const wav = await r.stop();
-  const fd = await fetch("/api/stt", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
-  const text = fd.ok ? (await fd.json()).text?.trim() : "";
-  if (!text) { log("err", "STT", fd.ok ? "heard nothing" : `speech-to-text failed (${fd.status})`); return setState("idle"); }
-  converse(text);
+function up() {
+  if (rec?.why !== "ptt") return;
+  $("btn").classList.remove("down"); finishRec();
 }
 $("btn").addEventListener("pointerdown", (e) => { e.preventDefault(); down(); });
 addEventListener("pointerup", up);
@@ -299,6 +482,37 @@ $("say").addEventListener("submit", (e) => {
   e.preventDefault(); const t = $("text").value.trim(); if (!t) return;
   $("text").value = ""; log("wake", "WAKE", "typed (as if spoken)"); converse(t);
 });
+
+// ---- announcements from the hub (timers, skills, calls, background answers) ----
+const announcements = [];
+async function drainAnnouncements() {
+  if (busy() || !announcements.length) return;
+  const a = announcements.shift();
+  const mine = ++turn;
+  log("tts", "ANNOUNCE", `${a.kind ? `[${a.kind}] ` : ""}${a.text}`);
+  EAR.announce(); setState("announcing");
+  await sleep(450);
+  const v = speaker(mine, "announcing");
+  v.add(a.text);
+  await v.done();
+  history = [...history, { role: "assistant", content: a.text }].slice(-8); // so "read it again" works
+  if (mine === turn) setState("idle");
+}
+async function events(info) {
+  let ws;
+  try {
+    const { ticket } = await fetch("/api/events-ticket", { method: "POST" }).then((r) => r.json());
+    ws = new WebSocket(info.events);
+    ws.onopen = () => ws.send(JSON.stringify({ ticket }));
+    ws.onmessage = (e) => {
+      const ev = JSON.parse(e.data);
+      if (ev.type === "subscribed") log("wake", "HUB", "connected: announcements on");
+      if (ev.type === "announce") { announcements.push(ev.data); drainAnnouncements(); }
+    };
+    ws.onclose = () => { log("err", "HUB", "announcement stream closed; retrying"); setTimeout(() => events(info), 5000); };
+  } catch { setTimeout(() => events(info), 5000); }
+}
+
 // Sendspin output: offered once the emulator's Sendspin server is up; shows the connected players
 async function sendspinStatus() {
   const s = await fetch("/api/sendspin/status").then((r) => r.json()).catch(() => null);
@@ -310,7 +524,15 @@ async function sendspinStatus() {
   if (opt.disabled && $("out").value === "sendspin") $("out").value = "speaker";
 }
 sendspinStatus(); setInterval(sendspinStatus, 5000);
-fetch("/api/info").then((r) => r.json()).then((i) => { $("name").textContent = `${i.name} · source=satellite · hub ${i.hub}`; });
+fetch("/api/info").then((r) => r.json()).then((i) => {
+  $("name").textContent = `${i.name} · source=satellite · hub ${i.hub}`;
+  wakeName = i.wake;
+  $("wake").disabled = !wakeName;
+  $("wakelabel").textContent = wakeName ? `wake word "${wakeName.replace(/_/g, " ")}"` : "wake word (run with uv run --script)";
+  let saved = null; try { saved = localStorage.getItem("sat.wake"); } catch {}
+  if (wakeName && saved !== "0") setWake(true);
+  events(i);
+}).catch(() => fail("HUB", "emulator not answering", null));
 </script>
 </body>
 </html>

@@ -26,7 +26,10 @@ from jarvis_hub.kb.tools import register_kb_tools, write_daily_summary
 from jarvis_hub.tools.utility import register_utility_tools
 from jarvis_hub.llm.client import LLMClient
 from jarvis_hub.mcp.registry import ToolRegistry
+from jarvis_hub.voice.announce import Announcer
 from jarvis_hub.voice.service import VoiceService
+from jarvis_hub.voice.session import Sessions
+from jarvis_hub.voice.vocab import Vocabulary
 
 log = logging.getLogger("jarvis_hub")
 
@@ -94,9 +97,13 @@ async def lifespan(app: FastAPI):
         voicestudio_key=s.voicestudio_api_key.get_secret_value(),
         voicestudio_model=s.voicestudio_tts_model, voicestudio_voice=s.voicestudio_voice,
         language=s.stt_language)
+    st.sessions = Sessions(s.voice_followup_s)
+    st.vocab = Vocabulary(st.kb_graph, st.audit)
+    st.announcer = Announcer(st.bus, s)
     st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(
         st.llm, st.tools, st.gate, st.audit, s.ask_for(), hidden=s.hidden_tools(),
-        selector=ToolSelector(embedder, s.embed_model, s.tool_select_k))
+        selector=ToolSelector(embedder, s.embed_model, s.tool_select_k),
+        sessions=st.sessions, voice_confirm=s.voice_confirm())
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     if s.agent != "echo":
