@@ -129,12 +129,16 @@ function useDecode(label, duration = 420) {
 }
 
 // Which KB pages an event touched, and whether it was a read or a write.
-const KB_WRITES = new Set(["kb_remember", "kb_journal", "kb_append_to_page", "kb_forget", "kb_clear_memory", "kb_delete_page", "kb_delete_item"]);
+// kind picks the map colour: read cyan, tasks green, write amber, erase red, fault (blocked/failed) pink.
+const KB_WRITES = new Set(["kb_remember", "kb_journal", "kb_append_to_page"]);
+const KB_ERASES = new Set(["kb_forget", "kb_clear_memory", "kb_delete_page", "kb_delete_item"]);
 function kbTouch(ev) {
   if (ev.type === "kb_retrieved") return { pages: ev.data?.pages || [], kind: "read", tool: "kb_search" };
   const tool = ev.data?.tool;
   if ((ev.type !== "tool_call" && ev.type !== "tool_result") || !tool?.startsWith("kb_")) return null;
-  const kind = KB_WRITES.has(tool) ? "write" : "read";
+  const st = ev.type === "tool_result" ? ev.data.status : null;
+  const kind = st && !["ok", "dry-run"].includes(st) ? "fault"
+    : KB_ERASES.has(tool) ? "erase" : KB_WRITES.has(tool) ? "write" : tool === "kb_tasks" ? "tasks" : "read";
   const pages = [];
   if (ev.type === "tool_call") {
     const args = ev.data.arguments || {};
@@ -151,7 +155,8 @@ function kbTouch(ev) {
     const j = p.match(/journal (.+?)\.\s*$/);
     if (j) pages.push(j[1]);
   }
-  return { pages, kind, tool, status: ev.type === "tool_result" ? ev.data.status : null };
+  return { pages, kind, tool, status: st,
+    label: `${describe(tool, ev.data.arguments).title} · ${st ? insight(tool, st, ev.data.preview) : "…"}` };
 }
 
 // The "why" line for a reply: which route answered it, the tools and who let them run, the time.
@@ -205,7 +210,6 @@ export default function Hud() {
   const [input, setInput] = useState("");
   const [timeline, setTimeline] = useState([]);
   const [approvals, setApprovals] = useState([]);
-  const [memory, setMemory] = useState([]);
   const [status, setStatus] = useState(null);
   const [models, setModels] = useState([]);
   const [switching, setSwitching] = useState(false);
@@ -235,7 +239,7 @@ export default function Hud() {
   };
   const [kbStats, setKbStats] = useState(null);
   // start-up: each source reports ok / fail; the boot screen leaves once all have, or after 12 s
-  const [boot, setBoot] = useState({ hub: null, audit: null, memory: null, events: null, graph: null });
+  const [boot, setBoot] = useState({ hub: null, audit: null, events: null, graph: null });
   const mark = useCallback((k, v) => setBoot((b) => (b[k] === v ? b : { ...b, [k]: v })), []);
   const [bootPhase, setBootPhase] = useState("on"); // on -> leaving -> off
   const kbTimer = useRef(null);
@@ -247,7 +251,7 @@ export default function Hud() {
   const recording = useRef(null);
   const turn = useRef(0); // newest question; older replies show but never speak over it
   const chatRef = useRef(null);
-  const [tab, setTab] = useState("talk"); // phone layout: talk | activity | memory
+  const [tab, setTab] = useState("talk"); // phone layout: talk | activity | map
   const stateLabel = useDecode(state.toUpperCase());
   // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
   // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
@@ -269,12 +273,11 @@ export default function Hud() {
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
   }, [toolsOpen, devOpen, skillOpen, guardOpen]);
-  const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
+  const [pinned, setPinned] = useState(null); // timeline | console | kb
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
-  // a write to JARVIS's own memory pages focuses the memory panel, any other KB use the graph
-  const memWrite = kbActive && kbPulse?.kind === "write" && /^kb_(remember|forget|clear_memory)$/.test(kbPulse?.tool || "");
-  const busy = memWrite ? "memory" : kbActive ? "kb" : consoleActive ? "console" : null;
+  // any knowledge-base tool enlarges the map; other tools the console
+  const busy = kbActive ? "kb" : consoleActive ? "console" : null;
   const holding = state === "thinking" || state === "speaking";
   if (busy) lastBusy.current = busy;
   else if (!holding) lastBusy.current = null;
@@ -339,19 +342,15 @@ export default function Hud() {
     return () => clearInterval(id);
   }, [waiting]);
 
-  // console: append lines, light the window up, let it settle after a few quiet seconds
+  // console: append lines. Only our tools light the window up (and let it settle after a few quiet
+  // seconds); "why" lines, hooks and skill notes are written without growing it.
+  const note = (...lines) => setConsoleLines((c) => [...c, ...lines.map(withId)].slice(-120));
   const echo = (...lines) => {
-    setConsoleLines((c) => [...c, ...lines.map(withId)].slice(-120));
+    note(...lines);
     setConsoleActive(true);
     clearTimeout(consoleTimer.current);
     consoleTimer.current = setTimeout(() => setConsoleActive(false), 6000);
   };
-
-  const refreshMemory = useCallback(async () => {
-    const r = await api("kb/memory?limit=15").catch(() => null);
-    if (r?.ok) setMemory(await r.json());
-    mark("memory", r?.ok ? "ok" : "fail");
-  }, [mark]);
 
   // initial data
   useEffect(() => {
@@ -361,7 +360,6 @@ export default function Hud() {
       // hold back the rest
       const parse = (x) => { try { return JSON.parse(x || "{}"); } catch { return {}; } };
       await Promise.all([
-        refreshMemory(),
         safe("audit?limit=30").then(async (a) => {
           mark("audit", a.ok ? "ok" : "fail");
           if (a.ok) mark("hub", "ok"); // the hub answered: linked, even before the slower status check
@@ -383,7 +381,7 @@ export default function Hud() {
         }),
       ]);
     })();
-  }, [refreshMemory, mark]);
+  }, [mark]);
 
   useEffect(() => { if (link === "online") mark("events", "ok"); }, [link, mark]);
   useEffect(() => { if (kbStats) mark("graph", "ok"); }, [kbStats, mark]);
@@ -426,21 +424,21 @@ export default function Hud() {
           if (ev.type === "approval_request") { flash("orange"); chime(); notifyApproval(ev.data); }
           if (ev.type === "hook_event") {
             setHookSeq((n) => n + 1);
-            echo({ kind: "info", text: `⚡ ${ev.data.kind}: ${ev.data.text}` });
+            note({ kind: "info", text: `⚡ ${ev.data.kind}: ${ev.data.text}` });
           }
           if (ev.type === "skill_run")
-            echo({ kind: "info", text: `⚙ skill "${ev.data.skill}" (${ev.data.why})${ev.data.dry_run ? " · dry run" : ""}` });
+            note({ kind: "info", text: `⚙ skill "${ev.data.skill}" (${ev.data.why})${ev.data.dry_run ? " · dry run" : ""}` });
           if (ev.type === "skill_done") {
             setHookSeq((n) => n + 1);
             if (ev.data.dry_run) { // nothing was done: show what would have been, don't speak it
-              echo({ kind: "info", text: `⚙ dry run of "${ev.data.skill}" would have: ${(ev.data.would || []).join("; ") || "done nothing"}` });
+              note({ kind: "info", text: `⚙ dry run of "${ev.data.skill}" would have: ${(ev.data.would || []).join("; ") || "done nothing"}` });
             } else {
               const line = ev.data.text || "Done.";
               setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.skill }]);
               if (speakRef.current) speakRef.current(line);
             }
           }
-          if (ev.type === "trace") echo({ kind: "info", text: why(ev.data) }); // how the reply came about
+          if (ev.type === "trace") note({ kind: "info", text: why(ev.data) }); // how the reply came about
           if (ev.type === "timer") {
             chime();
             const line = `Your ${ev.data.label || "timer"} timer is done, sir.`;
@@ -495,10 +493,18 @@ export default function Hud() {
     };
   }, []);
 
+  // Follow the reply as it grows (streaming and the typewriter both add text after the messages
+  // change), unless the user has scrolled up to read; sending a question re-attaches.
+  const stick = useRef(true);
   useEffect(() => {
     const el = chatRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+    if (!el) return;
+    const onScroll = () => { stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48; };
+    const follow = new MutationObserver(() => { if (stick.current) el.scrollTop = el.scrollHeight; });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    follow.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => { el.removeEventListener("scroll", onScroll); follow.disconnect(); };
+  }, []);
 
   const send = async (text) => {
     if (!text.trim()) return;
@@ -508,6 +514,7 @@ export default function Hud() {
     const history = [...messages, { role: "user", text, sent: withContext(text, attached),
       pages: attached.map((p) => p.name) }];
     setContext([]);
+    stick.current = true;
     setMessages(history);
     setInput("");
     setState("thinking");
@@ -554,7 +561,6 @@ export default function Hud() {
       }
       const reply = final ?? (shown || "No reply.");
       show(reply);
-      refreshMemory();
       if (mine !== turn.current) return; // superseded: shown, not spoken
       if (voice) {
         if (!shown.trim()) voice.add(reply); // a tool's own answer arrives whole
@@ -670,19 +676,6 @@ export default function Hud() {
     }
   };
 
-  // memory review: correct (prompt for the new wording) or forget one thing JARVIS learned
-  const editMemory = async (m, fact) => {
-    let next = null;
-    if (fact !== null) {
-      next = window.prompt("Correct this memory:", fact);
-      if (next === null || next.trim() === fact.trim()) return;
-    } else if (!window.confirm(`Forget "${m.text.split("\n")[0]}"?`)) return;
-    const r = await api("kb/memory/edit", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ page: m.page, text: m.text, new: next }) });
-    echo({ kind: "info", text: r.ok ? (next ? "✎ memory corrected" : "✕ memory forgotten") : "memory edit failed" });
-    refreshMemory();
-    setKbVersion((v) => v + 1);
-  };
 
   const decide = async (id, approved, allowMinutes) => {
     await api(`approvals/${id}`, {
@@ -709,7 +702,6 @@ export default function Hud() {
         { label: "Hub uplink", state: boot.hub },
         { label: "Event stream", state: boot.events },
         { label: "Action log", state: boot.audit },
-        { label: "Memory core", state: boot.memory },
         { label: "Knowledge graph", state: boot.graph },
       ]} />
     )}
@@ -845,7 +837,7 @@ export default function Hud() {
             <span className="sr-only">{state}</span>
             {approvals.length > 0
               ? <span className="state-sub alert">awaiting your approval</span>
-              : shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${{ kb: "knowledge graph", memory: "memory", timeline: "timeline" }[shown.focus] || "console"}`}</span>}
+              : shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${{ kb: "knowledge map", timeline: "timeline" }[shown.focus] || "console"}`}</span>}
           </div>
         </div>
         <div className="approvals">
@@ -910,68 +902,51 @@ export default function Hud() {
         </BorderBeam>
       </section>
 
-      <div className="side reveal" style={{ "--i": 3 }}>
-      <section className={`panel kb ${shown.kb ? "active" : ""} ${kbPulse?.kind === "write" && shown.kb ? "write" : ""}${shown.focus === "kb" ? " focused" : ""}${kbView === "min" ? " minimized" : ""}`}
-        aria-label="Knowledge graph">
+      <div className="side map-dock reveal" style={{ "--i": 3 }}>
+      <section className={`panel kb minimap${shown.kb ? ` active k-${kbPulse?.kind || "read"}` : ""}${shown.focus === "kb" ? " focused" : ""}${kbView === "min" ? " minimized" : ""}`}
+        aria-label="Knowledge map">
+        <i className="mm-corner tl" aria-hidden="true" /><i className="mm-corner tr" aria-hidden="true" />
+        <i className="mm-corner bl" aria-hidden="true" /><i className="mm-corner br" aria-hidden="true" />
         <div className="kb-head">
-          <h2 {...headProps(pinned === "kb", () => togglePin("kb"), "knowledge graph")}>
-            Knowledge graph
+          <h2 {...headProps(pinned === "kb", () => togglePin("kb"), "knowledge map")}>
+            Knowledge map
             <span className="kb-state">
-              {kbActive ? (kbPulse?.kind === "write" ? "writing" : "recall") : kbStats ? `${kbStats.pages} pages` : ""}
+              {kbActive ? ({ read: "recall", tasks: "tasks", write: "writing", erase: "erasing", fault: "fault" }[kbPulse?.kind] || "recall")
+                : kbStats ? `${kbStats.pages} pages` : ""}
               <b className="expand" aria-hidden="true" />
             </span>
           </h2>
           <div className="win-btns">
             <button type="button" onClick={() => setKbView((v) => (v === "min" ? "normal" : "min"))}
-              title={kbView === "min" ? "Restore" : "Minimise"} aria-label={kbView === "min" ? "Restore knowledge graph" : "Minimise knowledge graph"}>
+              title={kbView === "min" ? "Restore" : "Minimise"} aria-label={kbView === "min" ? "Restore knowledge map" : "Minimise knowledge map"}>
               {kbView === "min" ? "▢" : "–"}
             </button>
             <button type="button" onClick={() => setKbView("max")} title="Explore: read pages, add them to chat"
               aria-label="Open the knowledge graph explorer">⤢</button>
           </div>
         </div>
-        {kbView === "normal" && <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />}
-        {kbActive && kbPulse?.pages?.length > 0 && (
+        {kbView === "normal" && (
+          <div className="mm-view">
+            <KbGraph pulse={kbPulse} active={kbActive} version={kbVersion} onStats={setKbStats} />
+            <div className="mm-radar" aria-hidden="true" />
+            {kbActive && <div key={kbPulse?.seq} className="mm-ping" aria-hidden="true" />}
+          </div>
+        )}
+        {kbActive && (
           <div className="kb-touched" aria-live="polite">
-            {kbPulse.kind === "write" ? "✎ " : "◈ "}{[...new Set(kbPulse.pages)].slice(0, 4).join(" · ")}
+            {kbPulse?.label && <b>{kbPulse.label}</b>}
+            {kbPulse?.pages?.length > 0 && <span>{[...new Set(kbPulse.pages)].slice(0, 4).join(" · ")}</span>}
           </div>
         )}
       </section>
 
-      <section className={`panel memory${shown.focus === "memory" ? " focused" : ""}`}>
-        <h2 {...headProps(pinned === "memory", () => togglePin("memory"), "memory")}>
-          JARVIS memory<b className="expand" aria-hidden="true" />
-        </h2>
-        <ul>
-          {memory.map((m, i) => {
-            const fact = m.text.split("\n").filter((l) => !/^\s*\w+::/.test(l)).join(" ");
-            const via = m.text.match(/via::\s*(.+)/)?.[1];
-            const own = m.page.toLowerCase().startsWith("jarvis/"); // journal lines are edited in Logseq
-            return (
-              <li key={i} style={{ "--i": Math.min(i, 12) }}>
-                <a href={m.link} title="Open in Logseq">{m.page}</a>
-                {via && <span className={`via ${via.startsWith("said") || via.startsWith("edited") ? "yours" : ""}`}
-                  title="Where this came from">{via}</span>}
-                <p>{fact}</p>
-                {own && (
-                  <span className="mem-actions">
-                    <button type="button" onClick={() => editMemory(m, fact)} title="Correct it">edit</button>
-                    <button type="button" onClick={() => editMemory(m, null)} title="Forget it (kept in .trash)">forget</button>
-                  </span>
-                )}
-              </li>
-            );
-          })}
-          {!memory.length && <li className="empty">Nothing remembered yet.</li>}
-        </ul>
-      </section>
       </div>
 
       <nav className="mnav" aria-label="Sections">
         {[
           ["talk", "◉", "Talk", approvals.length > 0],
           ["activity", "⟐", "Activity", consoleActive],
-          ["memory", "◈", "Memory", kbActive],
+          ["map", "◈", "Map", kbActive],
         ].map(([id, glyph, label, live]) => (
           <button key={id} type="button" className={`${tab === id ? "on" : ""} ${live && tab !== id ? "live" : ""}`}
             aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>

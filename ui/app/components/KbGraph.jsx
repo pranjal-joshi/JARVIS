@@ -1,7 +1,8 @@
 "use client";
 
 // 3D knowledge-graph of the Logseq KB. Loaded client-only (next/dynamic, ssr: false)
-// from Hud.jsx. Pages touched by JARVIS light up: reads cyan, writes amber.
+// from Hud.jsx. Pages touched by JARVIS light up by tool kind: reads cyan, tasks green, writes amber,
+// erases red, blocked/failed pink.
 import { useEffect, useRef } from "react";
 import ForceGraph3D from "3d-force-graph";
 import { AdditiveBlending, CanvasTexture, Color, FogExp2, Group, Sprite, SpriteMaterial } from "three";
@@ -12,10 +13,14 @@ const C = {
   jarvis: "#7fe7ff",
   journal: "#b48bff",
   read: "#7fe7ff",
+  tasks: "#6dffa8",
   write: "#ffb347",
+  erase: "#ff6b6b",
+  fault: "#ff5c9a",
   link: "rgba(127,231,255,0.16)",
   select: "#eafcff",
 };
+const RANK = ["read", "tasks", "write", "erase", "fault"];
 const LIT_MS = 9000; // a touched page stays lit this long, then fades to ambient
 
 const esc = (s) =>
@@ -113,14 +118,14 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       })
       .linkColor((l) => {
         const k = litKind(l);
-        return k ? (k === "write" ? "rgba(255,179,71,0.75)" : "rgba(127,231,255,0.7)") : C.link;
+        return k ? C[k] : C.link;
       })
       .linkWidth((l) => (litKind(l) ? 0.8 : 0))
       .linkOpacity(0.55)
       .linkDirectionalParticles((l) => (litKind(l) && !reduced ? 3 : 0))
       .linkDirectionalParticleSpeed(0.007)
       .linkDirectionalParticleWidth(1.4)
-      .linkDirectionalParticleColor((l) => (litKind(l) === "write" ? C.write : C.read));
+      .linkDirectionalParticleColor((l) => C[litKind(l)] || C.read);
 
     function litKind(l) {
       const s = typeof l.source === "object" ? l.source.id : l.source;
@@ -128,7 +133,8 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       const a = lit.get(s);
       const b = lit.get(t);
       if (!a && !b) return null;
-      return a?.kind === "write" || b?.kind === "write" ? "write" : "read";
+      if (!a || !b) return (a || b).kind;
+      return RANK.indexOf(a.kind) >= RANK.indexOf(b.kind) ? a.kind : b.kind; // the stronger kind wins
     }
 
     graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -191,13 +197,14 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
         let op = 0.45;
         const picked = n.id === live.current.selected;
         n.__tag?.classList.toggle("lit", !!L);
-        n.__tag?.classList.toggle("write", L?.kind === "write");
+        for (const k of RANK) n.__tag?.classList.toggle(k, L?.kind === k);
         if (L) {
           const t = (now - L.at) / 1000;
           if (now - L.at > LIT_MS) { lit.delete(n.id); expired = true; continue; }
           const fade = Math.min(1, (LIT_MS - (now - L.at)) / 1500);
-          target = L.kind === "write" ? C.write : C.read;
-          const beat = reduced ? 0 : L.kind === "write" ? Math.abs(Math.sin(t * 5)) * 0.5 : Math.sin(t * 3) * 0.2;
+          target = C[L.kind] || C.read;
+          const strong = L.kind !== "read" && L.kind !== "tasks";
+          const beat = reduced ? 0 : strong ? Math.abs(Math.sin(t * 5)) * 0.5 : Math.sin(t * 3) * 0.2;
           scale = sz * (1 + (1.1 + beat) * fade);
           op = 0.55 + 0.45 * fade;
         } else if (picked) {
