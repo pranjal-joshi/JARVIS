@@ -1228,3 +1228,14 @@ header { position: relative; z-index: 20; }
   .mon, .mon-sweep, .mon-ping, .mon::after, .mon-meta .soon, .mon.running .mon-dot { animation: none !important; }
   .mon-sweep, .mon-ping { display: none; }
 }
+.watch-edit .wide-left { grid-column: 1 / -1; justify-self: start; opacity: 0.8; }
+.watch-qa { margin: 0; font-size: 11px; opacity: 0.75; }
+.watch-ask { border: 1px solid rgba(201, 167, 255, 0.45); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
+.watch-ask p { margin: 0 0 6px; color: #d9c4ff; }
+.watch-ask input { flex: 1; }
+.watch-summary { display: grid; gap: 3px; border: 1px solid var(--cyan-dim); border-radius: 6px; padding: 8px 10px; font-size: 11px;
+  background: rgba(127, 231, 255, 0.04); animation: mon-in 420ms var(--ease-out) both; }
+.watch-summary > b { font-size: 13px; color: var(--text); }
+.watch-summary > span { opacity: 0.75; }
+.watch-summary ul { margin: 2px 0 0; padding-left: 16px; list-style: disc; opacity: 0.8; }
+.watch-summary .warn { color: var(--amber); margin: 4px 0 0; }

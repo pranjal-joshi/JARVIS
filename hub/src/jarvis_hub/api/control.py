@@ -356,8 +356,9 @@ class WatcherBody(BaseModel):
 
 
 class DraftBody(BaseModel):
-    description: str
+    description: str  # what you want watched, in your words
     current: dict | None = None  # the watcher being edited, to refine rather than start over
+    answers: list[dict] = []  # [{question, answer}]: Claude's questions so far and your replies
 
 
 class NotifyBody(BaseModel):
@@ -436,7 +437,11 @@ async def notify_test(body: NotifyBody, request: Request, _: Source = Depends(re
 DRAFT_PROMPT = """You write one "watcher" for a home assistant on a Windows 11 laptop. A watcher is a look-only command
 that runs every few minutes; it prints JSON, and items not seen before notify the user.
 
-Reply with ONE JSON object and nothing else, with these fields:
+If something essential is missing and can't be found by a command (which repo or org, an Azure DevOps
+organisation URL or project, which mailbox folder...), reply with ONLY {"question": "<one short question>"}.
+Ask at most what you need, one question at a time; otherwise never ask.
+
+Else reply with ONE JSON object and nothing else, with these fields:
   name: lower-case-with-dashes, 2-41 characters
   description: one sentence, what it watches
   every: like "5m" or "1h" (at least 1m; pick something polite for the API, usually 5m-15m)
@@ -461,17 +466,11 @@ placeholders like <your-org> only when the request doesn't say; never invent tok
 The user's request: """
 
 
-@router.post("/watchers/draft")
-async def watcher_draft(body: DraftBody, request: Request, source: Source = Depends(require_approver)) -> dict:
-    """You asked Claude (pressing the button is the approval) to draft a watcher; it's tested, not saved."""
-    st = request.app.state
+async def _ask_claude_json(st, source: Source, question: str) -> tuple[dict, dict]:
     s = st.settings
     token = s.expert_bridge_token.get_secret_value()
     if not token or token == "change-me":
         raise HTTPException(400, "the expert bridge isn't configured (EXPERT_BRIDGE_TOKEN)")
-    question = DRAFT_PROMPT + body.description.strip()[:1500]
-    if body.current:
-        question += "\n\nRefine this current version rather than starting over:\n" + json.dumps(body.current)[:3000]
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(s.expert_timeout_s + 15, connect=5)) as c:
             r = await c.post(s.expert_bridge_url.rstrip("/") + "/v1/ask",
@@ -482,16 +481,41 @@ async def watcher_draft(body: DraftBody, request: Request, source: Source = Depe
     data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     answer = str(data.get("answer", ""))
     st.audit.record(request_id=uuid.uuid4().hex, source=source, tool="ask_claude", risk="external",
-                    arguments={"question": question[:1500]}, status="ok" if r.status_code == 200 else "error",
+                    arguments={"question": question[-1500:]}, status="ok" if r.status_code == 200 else "error",
                     approved_by=f"{source.value} (watcher draft)", result=answer[:2000])
     if r.status_code != 200:
         raise HTTPException(502, f"Claude unavailable: {data.get('detail') or r.status_code}")
     start, end = answer.find("{"), answer.rfind("}")
     try:
-        draft = json.loads(answer[start:end + 1])
+        return json.loads(answer[start:end + 1]), data
     except ValueError:
         raise HTTPException(502, f"Claude didn't return a watcher: {answer[:300]}")
+
+
+@router.post("/watchers/draft")
+async def watcher_draft(body: DraftBody, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """You describe it, Claude writes it (pressing the button is the approval). Claude may ask one question
+    back; a draft that fails its test goes back to Claude once with the error. Tested here, never saved."""
     from jarvis_hub.devices.tools import bridge_call
-    ok, res = await bridge_call(s, "watch_test", {"watcher": draft}, 120)
-    return {"draft": draft, "test": res if ok else None, "test_error": None if ok else str(res),
-            "model": data.get("model"), "seconds": data.get("seconds")}
+    st = request.app.state
+    question = DRAFT_PROMPT + body.description.strip()[:1500]
+    for qa in body.answers[-5:]:
+        question += f"\n\nYou asked: {str(qa.get('question', ''))[:300]}\nThe user answered: {str(qa.get('answer', ''))[:500]}"
+    if body.current:
+        question += "\n\nChange this current version rather than starting over:\n" + json.dumps(body.current)[:3000]
+    draft, data = await _ask_claude_json(st, source, question)
+    seconds = float(data.get("seconds") or 0)
+    if draft.get("question") and not draft.get("command"):
+        return {"question": str(draft["question"])[:300], "model": data.get("model"), "seconds": seconds}
+    ok, res = await bridge_call(st.settings, "watch_test", {"watcher": draft}, 120)
+    fixed = False
+    if not ok:  # one round of repair: Claude sees exactly why its draft failed
+        retry = (question + "\n\nYour draft was:\n" + json.dumps(draft)[:3000]
+                 + f"\nRunning it failed with: {str(res)[:600]}\nReply with the corrected watcher JSON only.")
+        draft2, data2 = await _ask_claude_json(st, source, retry)
+        seconds += float(data2.get("seconds") or 0)
+        if draft2.get("command"):
+            draft, fixed = draft2, True
+            ok, res = await bridge_call(st.settings, "watch_test", {"watcher": draft}, 120)
+    return {"draft": draft, "test": res if ok else None, "test_error": None if ok else str(res), "fixed": fixed,
+            "model": data.get("model"), "seconds": round(seconds, 1)}
