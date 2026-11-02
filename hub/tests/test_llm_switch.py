@@ -14,7 +14,8 @@ def _client(env, tmp_path):
 
 def test_switch_is_allow_listed_and_persists(env, tmp_path):
     with _client(env, tmp_path) as c:
-        assert c.get("/v1/llm", headers=WEB).json() == {"model": "small", "models": ["small", "big"]}
+        body = c.get("/v1/llm", headers=WEB).json()
+        assert (body["model"], body["models"]) == ("small", ["small", "big"])
         assert c.post("/v1/llm", json={"model": "nope"}, headers=WEB).status_code == 400
         assert c.post("/v1/llm", json={"model": "big"}, headers=SAT).status_code == 403  # voice can't switch
         assert c.post("/v1/llm", json={"model": "big"}, headers=WEB).json()["model"] == "big"

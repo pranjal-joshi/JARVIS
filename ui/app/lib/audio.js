@@ -128,18 +128,26 @@ export function chime() {
 
 // System notification for an approval while the HUD is in the background (another tab, phone
 // screen off), so a voice-only user hears "approve it on your phone" and finds it there.
-// Needs permission, asked on the first click (askToNotify). Android Chrome only shows them through
-// a service worker, which the HUD doesn't have: there the chime and the HA push (HA_NOTIFY_SERVICE) remain.
+// Needs permission, asked on the first click (askToNotify). Shown through the HUD's service worker
+// (public/sw.js) where there is one, since Android Chrome shows notifications no other way; no push
+// server is involved, so they only appear while the HUD is open in some tab.
+let swReady = null;
 export function askToNotify() {
   try {
+    if ("serviceWorker" in navigator && window.isSecureContext) swReady ??= navigator.serviceWorker.register("/sw.js")
+      .then(() => navigator.serviceWorker.ready).catch(() => null);
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
   } catch {}
 }
-export function notifyApproval(data) {
+export async function notifyApproval(data) {
   try {
     if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
-    const n = new Notification("JARVIS needs your approval", {
-      body: `${data.tool} (${data.risk}) asked by ${data.requested_by}`, tag: data.approval_id, requireInteraction: true });
+    const title = "JARVIS needs your approval";
+    const opts = { body: data.says ? `${data.says} (${data.risk})` : `${data.tool} (${data.risk}) asked by ${data.requested_by}`,
+      tag: data.approval_id, requireInteraction: true };
+    const reg = swReady && (await swReady);
+    if (reg) return reg.showNotification(title, opts);
+    const n = new Notification(title, opts);
     n.onclick = () => { window.focus(); n.close(); };
   } catch {
     navigator.vibrate?.([200, 100, 200]);

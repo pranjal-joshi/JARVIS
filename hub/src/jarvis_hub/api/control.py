@@ -322,7 +322,9 @@ class ModelBody(BaseModel):
 @router.get("/llm")
 async def llm_get(request: Request, _: Source = Depends(require_source)) -> dict:
     s = request.app.state
-    return {"model": s.llm.model, "models": s.settings.llm_choices()}
+    recent = sorted(s.latency)
+    return {"model": s.llm.model, "models": s.settings.llm_choices(), "loaded": await s.llm.loaded(),
+            "median_s": recent[len(recent) // 2] if recent else None}
 
 
 @router.post("/llm")

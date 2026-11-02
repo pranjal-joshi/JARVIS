@@ -112,10 +112,12 @@ class ToolAgent:
         on_event receives voice cues: {"tool": name} when a tool starts, {"say": text} for a line to
         speak at once (an approval to give elsewhere). session names a satellite's conversation.
         dry_run: tools that change anything or send data out are not run, only recorded (evals, new skills)."""
-        turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session, dry_run=dry_run)
+        turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session, dry_run=dry_run,
+                     model=str(getattr(self.llm, "model", "")))
         if session and self.sessions and (p := self.sessions.take(session)):
             yes = answer(_last_user(messages))
             if yes is not None:  # the answer to "Shall I go ahead, sir?"
+                turn.route = "confirm"
                 return await self._resume(p, yes, turn)
         # Client-supplied system prompts are dropped: the persona and rules are ours. The system prompt
         # is the same on every turn so Ollama can reuse its cached prefix; what changes (the time, hints)
@@ -138,6 +140,8 @@ class ToolAgent:
         return await self._loop(convo, turn)
 
     async def _loop(self, convo: list[dict], t: "_Turn") -> str:
+        if t.route != "confirm":
+            t.route = "model"
         schemas = [tool.openai_schema() for tool in await self.offered(convo)]
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0}))
         faked = claimed = False
@@ -286,6 +290,7 @@ class ToolAgent:
             facts.append((fact, re.sub(r"[^a-z]", "", topic.lower())[:20] or "memory"))
         if not facts:
             return None
+        t.route = "memory"
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0, "route": "memory"}))
         t.via = "said by you"
         saved = []
@@ -317,6 +322,7 @@ class ToolAgent:
             log.warning("fast path %s couldn't word the reply: %s", plan.intent, e)
             return None
         log.info("fast path: %s", plan.intent)
+        t.route, t.intent = "fast", plan.intent
         return self._reply(t, reply)
 
     def _needs_voice_yes(self, tool: Tool, args: dict, t: "_Turn") -> bool:
@@ -380,6 +386,7 @@ class ToolAgent:
         t.bus.publish(Event("tool_call", t.source, t.request_id,
                             {"tool": name, "origin": tool.origin, "risk": tool.risk, "arguments": args}))
         if t.dry_run and tool.risk is not Risk.READ:
+            t.trace.append({"tool": name, "decision": "dry-run", "rule": "dry run", "why": ""})
             return "dry-run"  # recorded, never run: no approval needed
         d = self.policy.decide(tool, args, t.source, self.audit)
         if hold and d.action in ("allow", "dry-run"):
@@ -443,6 +450,10 @@ class ToolAgent:
     @staticmethod
     def _reply(t: "_Turn", text: str) -> str:
         t.bus.publish(Event("reply", t.source, t.request_id, {"text": text}))
+        # how this reply came about, for the HUD's "why" line: route, tools and who allowed them, time
+        t.bus.publish(Event("trace", t.source, t.request_id, {
+            "route": t.route, "intent": t.intent, "model": t.model if t.route == "model" else "",
+            "seconds": round(time.time() - t.started, 1), "tools": t.trace, "dry_run": t.dry_run}))
         return text
 
 
@@ -461,6 +472,10 @@ class _Turn:
     tainted: list[str] = field(default_factory=list)  # outside text this turn (web, messages, files)
     trace: list[dict] = field(default_factory=list)  # policy decisions, for the HUD's "why" panel
     via: str = ""  # provenance for memories saved this turn
+    route: str = "model"  # fast | memory | confirm | model
+    intent: str = ""
+    model: str = ""
+    started: float = field(default_factory=time.time)
 
 
 def _tokens(m: dict) -> int:

@@ -22,6 +22,7 @@ class LLMClient:
         self._extra = extra_body or {}
         self._per_model = per_model or {}  # model -> extra fields overriding extra_body
         self._claude = None  # ClaudeChat, set by use_claude(); used while self.model is a Claude id
+        self._base = base_url.rstrip("/")
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -124,6 +125,17 @@ class LLMClient:
     def use_claude(self, api_key: str, effort: str) -> None:
         from jarvis_hub.llm.claude import ClaudeChat
         self._claude = ClaudeChat(api_key, effort)
+
+    async def loaded(self) -> bool | None:
+        """Is the current local model in memory (warm)? None when the server can't say (not Ollama)."""
+        if self.model.startswith("claude-"):
+            return None
+        try:
+            r = await self._http.get(self._base.removesuffix("/v1") + "/api/ps", timeout=3)
+            names = [m.get("name", "") for m in r.json().get("models", [])]
+        except (httpx.HTTPError, ValueError):
+            return None
+        return any(n == self.model or n.split(":")[0] == self.model for n in names)
 
     async def ping(self) -> bool:
         if self.model.startswith("claude-"):

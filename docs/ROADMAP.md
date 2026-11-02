@@ -126,6 +126,21 @@ hidden tools stay hidden; work data stays out of scope unless you configure it.
 - 3.6 Eval dashboard: the 0.1 suite results per model and over time.
 - 3.7 Satellite: "what can you do" spoken help, generated from the fast-path and router intents.
 
+## Status (2 November 2026)
+
+All four phases are built, with these changes from the plan:
+
+- 1.2: the JSON-schema router was measured and dropped (LFM3 chose "none" for 8/8 requests with it, and the
+  right tool for 7/7 with native calling). Schema-constrained output is used for memory capture instead.
+- 1.6: no automatic cascade. There is no second local model, and Claude is used only when the user asks.
+- 1.4: read-back happens after a write (the confirmation repeats the exact saved text) and before every
+  approval (the card and the satellite say what will happen); there is no extra spoken round for own-notes writes.
+- 3.5: notifications go through a service worker raised by the open HUD; there is no push server, so a HUD
+  tab must be open somewhere (the HA notify push covers the rest).
+
+Where things live: `agent/fastpath.py`, `agent/style.py`, `guard/policy.py` + `policy/policy.yaml`,
+`guard/hooks.py`, `scripts/eval/`, the HUD's guard chip, the console's "↳" lines, memory edit/forget.
+
 ## Not doing (and why)
 
 - Fine-tuning a router: no training data yet. Log router decisions for a month, then decide.

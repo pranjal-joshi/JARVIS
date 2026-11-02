@@ -7,9 +7,11 @@ const ALLOWED = [
   /^audit$/,
   /^status$/,
   /^llm$/,
-  /^kb\/(search|graph|memory|tasks|sync|daily-summary|page)$/,
+  /^kb\/(search|graph|memory|memory\/edit|tasks|sync|daily-summary|page)$/,
   /^audio\/(transcriptions|speech)$/,
-  /^skills(\/.+\/(enable|run))?$/,
+  /^skills(\/.+\/(enable|run|promote))?$/,
+  /^policy(\/grants\/[\w.*-]+)?$/,
+  /^evals$/,
   /^devices(\/pair(\/[a-f0-9]+)?|\/allow|\/disconnect)?$/,
 ];
 

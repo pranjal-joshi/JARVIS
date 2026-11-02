@@ -33,7 +33,8 @@ export default function SkillsPanel({ onCount, version }) {
     <div className="dev-panel">
       <p className="tools-note">
         Skills are knowledge-base pages under <b>skills/</b> with a <b>trigger::</b> property. They run only once you
-        enable them here; editing a page switches it off until you enable it again.
+        enable them here; editing a page switches it off until you enable it again. A newly enabled skill runs as a
+        <b>dry run</b> (it shows in the console what it would do) until you let it go live.
       </p>
       <ul className="skill-list">
         {(data?.skills || []).map((s) => (
@@ -47,6 +48,14 @@ export default function SkillsPanel({ onCount, version }) {
               </button>
               <button type="button" className="gate" disabled={!s.enabled} onClick={() => post(s.name, "run")}
                 title="Run it now">run</button>
+              {s.enabled && (
+                <button type="button" className={`gate ${s.dry_run ? "ask" : "auto"}`}
+                  onClick={() => post(s.name, "promote", { enabled: s.dry_run })}
+                  title={s.dry_run ? "Dry run: it only shows what it would do. Let it act for real."
+                    : "It acts for real. Back to dry run."}>
+                  {s.dry_run ? "dry run · go live" : "live"}
+                </button>
+              )}
             </div>
             <i>{when(s)}{s.last_run ? ` · ran ${new Date(s.last_run * 1000).toLocaleTimeString()}` : ""}</i>
             <small>{s.instructions}</small>

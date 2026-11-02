@@ -21,6 +21,7 @@ const KbGraph = dynamic(() => import("./KbGraph"), {
 const KbExplorer = dynamic(() => import("./KbExplorer"), { ssr: false });
 const DevicesPanel = dynamic(() => import("./DevicesPanel"), { ssr: false });
 const SkillsPanel = dynamic(() => import("./SkillsPanel"), { ssr: false });
+const GuardPanel = dynamic(() => import("./GuardPanel"), { ssr: false });
 const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explorer
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
@@ -153,6 +154,15 @@ function kbTouch(ev) {
   return { pages, kind, tool, status: ev.type === "tool_result" ? ev.data.status : null };
 }
 
+// The "why" line for a reply: which route answered it, the tools and who let them run, the time.
+const ROUTES = { fast: "fast path (no model)", memory: "memory capture", confirm: "spoken confirmation", model: "model" };
+function why(t) {
+  const route = t.route === "model" && t.model ? `model ${t.model}` : ROUTES[t.route] || t.route;
+  const tools = (t.tools || []).map((x) => `${x.tool} (${x.decision}${x.rule && x.rule !== x.decision ? `: ${x.rule}` : ""})`);
+  return `↳ ${route}${t.intent ? ` · ${t.intent}` : ""} · ${t.seconds} s${tools.length ? ` · ${tools.join(", ")}` : ""}`
+    + `${t.dry_run ? " · dry run" : ""}`;
+}
+
 // Stable keys so newly pushed timeline rows animate in (index keys would not).
 let seq = 0;
 const withId = (item) => ({ ...item, id: ++seq });
@@ -247,13 +257,18 @@ export default function Hud() {
   const [devCount, setDevCount] = useState(null);
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillCount, setSkillCount] = useState(null);
+  const [guardOpen, setGuardOpen] = useState(false);
+  const [llmInfo, setLlmInfo] = useState(null); // { loaded, median_s }: the model badge
   const [hookSeq, setHookSeq] = useState(0); // bumps on hook events so open panels refresh
+  const openOnly = (which) => { // one header dropdown at a time
+    setToolsOpen(which === "tools"); setDevOpen(which === "dev"); setSkillOpen(which === "skill"); setGuardOpen(which === "guard");
+  };
   useEffect(() => { // close the tools list on any click outside it
-    if (!toolsOpen && !devOpen && !skillOpen) return;
-    const off = (e) => { if (!e.target.closest?.(".tools-pick")) { setToolsOpen(false); setDevOpen(false); setSkillOpen(false); } };
+    if (!toolsOpen && !devOpen && !skillOpen && !guardOpen) return;
+    const off = (e) => { if (!e.target.closest?.(".tools-pick")) openOnly(null); };
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
-  }, [toolsOpen, devOpen, skillOpen]);
+  }, [toolsOpen, devOpen, skillOpen, guardOpen]);
   const [pinned, setPinned] = useState(null); // timeline | console | kb | memory
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
@@ -310,10 +325,19 @@ export default function Hud() {
       return next;
     });
   const [now, setNow] = useState(() => Date.now() / 1000);
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now() / 1000), 15000);
+  useEffect(() => { // model badge: warm or cold, and how long replies take lately
+    const poll = async () => {
+      const r = await api("llm").catch(() => null);
+      if (r?.ok) { const j = await r.json(); setLlmInfo({ loaded: j.loaded, median_s: j.median_s }); }
+    };
+    const id = setInterval(poll, 30000);
     return () => clearInterval(id);
   }, []);
+  const waiting = approvals.length > 0;
+  useEffect(() => { // every second while an approval card counts down, else every 15 s
+    const id = setInterval(() => setNow(Date.now() / 1000), waiting ? 1000 : 15000);
+    return () => clearInterval(id);
+  }, [waiting]);
 
   // console: append lines, light the window up, let it settle after a few quiet seconds
   const echo = (...lines) => {
@@ -347,7 +371,12 @@ export default function Hud() {
             risk: r.risk, status: r.status, preview: r.result || "", source: r.source, by: r.approved_by })));
         }),
         safe("approvals").then(async (p) => p.ok && setApprovals(await p.json())),
-        safe("llm").then(async (l) => l.ok && setModels((await l.json()).models || [])),
+        safe("llm").then(async (l) => {
+          if (!l.ok) return;
+          const j = await l.json();
+          setModels(j.models || []);
+          setLlmInfo({ loaded: j.loaded, median_s: j.median_s });
+        }),
         safe("status").then(async (st) => {
           if (st.ok) mark("hub", "ok");
           if (st.ok) setStatus(await st.json());
@@ -399,20 +428,26 @@ export default function Hud() {
             setHookSeq((n) => n + 1);
             echo({ kind: "info", text: `⚡ ${ev.data.kind}: ${ev.data.text}` });
           }
-          if (ev.type === "skill_run") echo({ kind: "info", text: `⚙ skill "${ev.data.skill}" (${ev.data.why})` });
+          if (ev.type === "skill_run")
+            echo({ kind: "info", text: `⚙ skill "${ev.data.skill}" (${ev.data.why})${ev.data.dry_run ? " · dry run" : ""}` });
           if (ev.type === "skill_done") {
             setHookSeq((n) => n + 1);
-            const line = ev.data.text || "Done.";
-            setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.skill }]);
-            if (speakRef.current) speakRef.current(line);
+            if (ev.data.dry_run) { // nothing was done: show what would have been, don't speak it
+              echo({ kind: "info", text: `⚙ dry run of "${ev.data.skill}" would have: ${(ev.data.would || []).join("; ") || "done nothing"}` });
+            } else {
+              const line = ev.data.text || "Done.";
+              setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.skill }]);
+              if (speakRef.current) speakRef.current(line);
+            }
           }
+          if (ev.type === "trace") echo({ kind: "info", text: why(ev.data) }); // how the reply came about
           if (ev.type === "timer") {
             chime();
             const line = `Your ${ev.data.label || "timer"} timer is done, sir.`;
             setMessages((m) => [...m, { role: "assistant", text: line }]);
             if (speakRef.current) speakRef.current(line);
           }
-          if (ev.type === "tool_result") flash(ev.data.status === "ok" ? "green" : "red");
+          if (ev.type === "tool_result") flash(ev.data.status === "ok" || ev.data.status === "dry-run" ? "green" : ev.data.status === "blocked" ? "orange" : "red");
           if (ev.type === "tool_call")
             push({ ts: ev.ts, req: ev.request_id, tool: ev.data.tool, args: ev.data.arguments, risk: ev.data.risk,
               status: "running", source: ev.source });
@@ -635,11 +670,25 @@ export default function Hud() {
     }
   };
 
-  const decide = async (id, approved) => {
+  // memory review: correct (prompt for the new wording) or forget one thing JARVIS learned
+  const editMemory = async (m, fact) => {
+    let next = null;
+    if (fact !== null) {
+      next = window.prompt("Correct this memory:", fact);
+      if (next === null || next.trim() === fact.trim()) return;
+    } else if (!window.confirm(`Forget "${m.text.split("\n")[0]}"?`)) return;
+    const r = await api("kb/memory/edit", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page: m.page, text: m.text, new: next }) });
+    echo({ kind: "info", text: r.ok ? (next ? "✎ memory corrected" : "✕ memory forgotten") : "memory edit failed" });
+    refreshMemory();
+    setKbVersion((v) => v + 1);
+  };
+
+  const decide = async (id, approved, allowMinutes) => {
     await api(`approvals/${id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ approved, ...(allowMinutes ? { allow_minutes: allowMinutes } : {}) }),
     });
     // play the exit animation, then drop the card (instant under reduced motion)
     setLeaving((s) => new Set(s).add(id));
@@ -672,8 +721,11 @@ export default function Hud() {
           <button type="button" className="chip new-session" onClick={newSession}
             title="Clear this conversation and start fresh (JARVIS forgets the chat; memory pages stay)">⟲ new session</button>
           {models.length > 1 && (
-            <label className={`chip model-pick${switching ? " busy" : ""}`} title="Language model">
-              llm
+            <label className={`chip model-pick${switching ? " busy" : ""}`}
+              title={`Language model${llmInfo?.loaded === false ? " · not loaded: the next reply waits ~13 s"
+                : llmInfo?.loaded ? " · loaded" : ""}${llmInfo?.median_s ? ` · replies take about ${llmInfo.median_s} s` : ""}`}>
+              {llmInfo?.loaded != null && <span className={`warm ${llmInfo.loaded ? "on" : ""}`} aria-hidden="true" />}
+              llm{llmInfo?.median_s ? <small> {llmInfo.median_s}s</small> : null}
               <select value={status?.llm?.model || ""} disabled={switching} aria-label="Language model"
                 onChange={(e) => switchModel(e.target.value)}>
                 {models.map((m) => <option key={m} value={m}>{modelLabel(m)}</option>)}
@@ -683,7 +735,7 @@ export default function Hud() {
           {status && (
             <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={skillOpen}
-                onClick={() => { setSkillOpen((o) => !o); setToolsOpen(false); setDevOpen(false); }}
+                onClick={() => openOnly(skillOpen ? null : "skill")}
                 title="Skills: knowledge-base pages that run on events">
                 skills{skillCount != null ? ` ${skillCount}` : ""} {skillOpen ? "▴" : "▾"}
               </button>
@@ -696,8 +748,22 @@ export default function Hud() {
           )}
           {status && (
             <div className="tools-pick">
+              <button type="button" className="chip" aria-expanded={guardOpen}
+                onClick={() => openOnly(guardOpen ? null : "guard")}
+                title="What JARVIS may do without asking, grants you gave, and eval scores">
+                guard {guardOpen ? "▴" : "▾"}
+              </button>
+              {guardOpen && (
+                <div className="tools-list" role="dialog" aria-label="Guard">
+                  <GuardPanel version={hookSeq} />
+                </div>
+              )}
+            </div>
+          )}
+          {status && (
+            <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={devOpen}
-                onClick={() => { setDevOpen((o) => !o); setToolsOpen(false); setSkillOpen(false); }} title="Android devices and QR pairing">
+                onClick={() => openOnly(devOpen ? null : "dev")} title="Android devices and QR pairing">
                 devices{devCount != null ? ` ${devCount}` : ""} {devOpen ? "▴" : "▾"}
               </button>
               {devOpen && (
@@ -710,7 +776,7 @@ export default function Hud() {
           {status && (
             <div className="tools-pick">
               <button type="button" className="chip" aria-expanded={toolsOpen}
-                onClick={() => { setToolsOpen((o) => !o); setDevOpen(false); setSkillOpen(false); }} title="Show the tools JARVIS can use">
+                onClick={() => openOnly(toolsOpen ? null : "tools")} title="Show the tools JARVIS can use">
                 tools {status.tools?.length} {toolsOpen ? "▴" : "▾"}
               </button>
               {toolsOpen && (
@@ -789,11 +855,23 @@ export default function Hud() {
               <div key={a.approval_id} className={`approval ${a.risk}${out ? " leaving" : ""}`}
                 role="group" aria-label={`Approval required for ${a.tool}`}>
                 <div className="title">APPROVAL REQUIRED · {a.risk.toUpperCase()}</div>
-                <div className="tool">{a.tool}</div>
-                <pre>{JSON.stringify(a.arguments, null, 1)}</pre>
-                <div className="meta">requested via {a.requested_by}</div>
+                <div className="tool">{a.says ? <>{a.says.charAt(0).toUpperCase() + a.says.slice(1)}</> : a.tool}</div>
+                {a.reason && <div className="reason">⚠ Held because it {a.reason}.</div>}
+                <details>
+                  <summary>{a.tool} · details</summary>
+                  <pre>{JSON.stringify(a.arguments, null, 1)}</pre>
+                </details>
+                <div className="meta">
+                  requested via {a.requested_by}
+                  {a.orphan ? " · left over from before a restart: approving runs it now"
+                    : a.expires ? ` · ${Math.max(0, Math.round(a.expires - now))} s left` : ""}
+                </div>
                 <div className="buttons">
                   <button onClick={() => decide(a.approval_id, true)} disabled={out}>Approve</button>
+                  {!a.reason && !a.orphan && (
+                    <button className="grant" onClick={() => decide(a.approval_id, true, 60)} disabled={out}
+                      title={`Approve, and let ${a.tool} run without asking for the next hour`}>Allow 1 h</button>
+                  )}
                   <button className="deny" onClick={() => decide(a.approval_id, false)} disabled={out}>Deny</button>
                 </div>
               </div>
@@ -865,12 +943,25 @@ export default function Hud() {
           JARVIS memory<b className="expand" aria-hidden="true" />
         </h2>
         <ul>
-          {memory.map((m, i) => (
-            <li key={i} style={{ "--i": Math.min(i, 12) }}>
-              <a href={m.link} title="Open in Logseq">{m.page}</a>
-              <p>{m.text}</p>
-            </li>
-          ))}
+          {memory.map((m, i) => {
+            const fact = m.text.split("\n").filter((l) => !/^\s*\w+::/.test(l)).join(" ");
+            const via = m.text.match(/via::\s*(.+)/)?.[1];
+            const own = m.page.toLowerCase().startsWith("jarvis/"); // journal lines are edited in Logseq
+            return (
+              <li key={i} style={{ "--i": Math.min(i, 12) }}>
+                <a href={m.link} title="Open in Logseq">{m.page}</a>
+                {via && <span className={`via ${via.startsWith("said") || via.startsWith("edited") ? "yours" : ""}`}
+                  title="Where this came from">{via}</span>}
+                <p>{fact}</p>
+                {own && (
+                  <span className="mem-actions">
+                    <button type="button" onClick={() => editMemory(m, fact)} title="Correct it">edit</button>
+                    <button type="button" onClick={() => editMemory(m, null)} title="Forget it (kept in .trash)">forget</button>
+                  </span>
+                )}
+              </li>
+            );
+          })}
           {!memory.length && <li className="empty">Nothing remembered yet.</li>}
         </ul>
       </section>

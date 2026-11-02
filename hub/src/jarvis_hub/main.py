@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, timedelta
@@ -114,6 +115,9 @@ async def lifespan(app: FastAPI):
     st.sessions = Sessions(s.voice_followup_s)
     st.vocab = Vocabulary(st.kb_graph, st.audit)
     st.announcer = Announcer(st.bus, s)
+    st.latency = deque(maxlen=20)  # seconds per model-answered reply, for the HUD's model badge
+    st.bus.tap(lambda ev: ev.type == "trace" and ev.data.get("route") == "model" and not ev.data.get("dry_run")
+               and st.latency.append(ev.data["seconds"]))
     st.agent = EchoAgent() if s.agent == "echo" else ToolAgent(
         st.llm, st.tools, st.gate, st.audit, s.ask_for(), hidden=s.hidden_tools(),
         selector=ToolSelector(embedder, s.embed_model, s.tool_select_k),

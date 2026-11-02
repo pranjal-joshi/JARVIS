@@ -64,7 +64,8 @@ export function describe(tool = "", args = {}) {
 
 // One short insight from a tool result preview.
 export function insight(tool, status, preview = "") {
-  if (status === "denied") return "BLOCKED";
+  if (status === "denied" || status === "blocked") return "BLOCKED";
+  if (status === "dry-run") return "DRY RUN"; // recorded, not done (evals, new skills)
   if (status === "timeout") return "EXPIRED";
   if (status === "error") return "FAULT";
   if (status === "pending") return "AWAITING CLEARANCE";

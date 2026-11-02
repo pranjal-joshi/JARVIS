@@ -1080,3 +1080,29 @@ header { position: relative; z-index: 20; }
   .boot-ring, .boot-ring::after, .boot-steps li i { animation: none; }
   .boot { transition: none; }
 }
+
+/* ---- phase 3: approval read-back, grants, memory provenance, model badge, guard panel ---- */
+.approval .reason { font-size: 11px; color: var(--amber); margin: 4px 0; }
+.approval details { font-size: 11px; opacity: 0.75; }
+.approval details summary { cursor: pointer; }
+.approval .buttons button.grant { background: transparent; border: 1px solid var(--cyan-dim); color: var(--cyan); }
+.memory .via { display: inline-block; margin-left: 8px; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 8px; border: 1px solid rgba(255, 179, 71, 0.5); color: var(--amber); }
+.memory .via.yours { border-color: rgba(109, 255, 168, 0.45); color: #6dffa8; }
+.memory .mem-actions { display: inline-flex; gap: 6px; opacity: 0; transition: opacity 160ms; }
+.memory li:hover .mem-actions, .memory li:focus-within .mem-actions { opacity: 1; }
+.memory .mem-actions button { background: none; border: 0; padding: 0; color: var(--cyan-dim); font: inherit; font-size: 10px;
+  cursor: pointer; text-decoration: underline; }
+@media (hover: none) { .memory .mem-actions { opacity: 1; } }
+.model-pick .warm { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.model-pick .warm.on { background: #6dffa8; box-shadow: 0 0 6px #6dffa8; }
+.model-pick small { opacity: 0.6; font-size: 10px; }
+.guard-panel h4 { margin: 12px 0 6px; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan-dim); }
+.guard-panel h4:first-child { margin-top: 0; }
+.guard-defaults { display: flex; flex-wrap: wrap; gap: 6px 14px; list-style: none; padding: 0; margin: 0; font-size: 11px; }
+.guard-rules, .guard-evals { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; font-size: 11px; }
+.guard-rules li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.guard-rules small, .guard-evals small { flex-basis: 100%; opacity: 0.7; }
+.guard-evals details { margin-top: 4px; opacity: 0.8; }
+.guard-evals details div { margin: 2px 0 2px 8px; }
+@media (prefers-reduced-motion: reduce) { .memory .mem-actions { transition: none; } }
