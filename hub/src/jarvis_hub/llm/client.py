@@ -3,6 +3,7 @@ llama.cpp, vLLM or a cloud endpoint; nothing here is Ollama-specific."""
 
 import json
 import logging
+import os
 from collections.abc import Callable
 
 import anthropic
@@ -17,7 +18,8 @@ class LLMError(RuntimeError):
 
 class LLMClient:
     def __init__(self, base_url: str, api_key: str, model: str, timeout_s: float = 180,
-                 extra_body: dict | None = None, per_model: dict | None = None) -> None:
+                 extra_body: dict | None = None, per_model: dict | None = None,
+                 endpoints: dict | None = None) -> None:
         self.model = model
         self._extra = extra_body or {}
         self._per_model = per_model or {}  # model -> extra fields overriding extra_body
@@ -28,6 +30,18 @@ class LLMClient:
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=httpx.Timeout(timeout_s, connect=10),
         )
+        # models served elsewhere (LLM_ENDPOINTS): picker name -> (client, model id on that server)
+        self._remote: dict[str, tuple[httpx.AsyncClient, str]] = {}
+        for name, ep in (endpoints or {}).items():
+            key = os.environ.get(ep.get("key_env") or "", "") or "none"
+            self._remote[name] = (httpx.AsyncClient(base_url=ep["base_url"].rstrip("/"),
+                                                    headers={"Authorization": f"Bearer {key}"},
+                                                    timeout=httpx.Timeout(timeout_s, connect=10)),
+                                  ep.get("model") or name)
+
+    def _route(self) -> tuple[httpx.AsyncClient, str]:
+        """The server and model id for the selected model."""
+        return self._remote.get(self.model, (self._http, self.model))
 
     async def chat(self, messages: list[dict], tools: list[dict] | None = None,
                    on_text: Callable[[str], None] | None = None) -> dict:
@@ -40,7 +54,8 @@ class LLMClient:
                 return await self._claude.chat(self.model, messages, tools, on_text)
             except anthropic.APIError as e:
                 raise LLMError(f"Claude request failed: {type(e).__name__}: {getattr(e, 'message', e)}") from e
-        body = {"model": self.model, "messages": messages, **self._extra, **self._per_model.get(self.model, {})}
+        http, model_id = self._route()
+        body = {"model": model_id, "messages": messages, **self._extra, **self._per_model.get(self.model, {})}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -54,10 +69,10 @@ class LLMClient:
                 return await self._stream({k: v for k, v in body.items() if k not in ("tools", "tool_choice")},
                                           on_text)
         try:
-            r = await self._http.post("/chat/completions", json=body)
+            r = await http.post("/chat/completions", json=body)
             if r.status_code == 500 and tools:  # Ollama can't parse the model's tool call: answer without tools
                 log.warning("tool call unparseable (%s); retrying without tools", r.text[:200])
-                r = await self._http.post("/chat/completions", json={k: v for k, v in body.items()
+                r = await http.post("/chat/completions", json={k: v for k, v in body.items()
                                                                       if k not in ("tools", "tool_choice")})
             r.raise_for_status()
         except httpx.HTTPError as e:
@@ -74,11 +89,12 @@ class LLMClient:
         """A reply that is always valid JSON for schema (Ollama enforces it while decoding). Local models only."""
         if self.model.startswith("claude-"):
             raise LLMError("schema-constrained output is used with local models only")
-        body = {"model": self.model, "messages": messages, **self._extra, **self._per_model.get(self.model, {}),
+        http, model_id = self._route()
+        body = {"model": model_id, "messages": messages, **self._extra, **self._per_model.get(self.model, {}),
                 "temperature": 0, "response_format": {"type": "json_schema",
                                                       "json_schema": {"name": "out", "schema": schema}}}
         try:
-            r = await self._http.post("/chat/completions", json=body)
+            r = await http.post("/chat/completions", json=body)
             r.raise_for_status()
             return json.loads(r.json()["choices"][0]["message"]["content"] or "{}")
         except (httpx.HTTPError, ValueError, KeyError) as e:
@@ -87,7 +103,7 @@ class LLMClient:
     async def _stream(self, body: dict, on_text: Callable[[str], None]) -> dict:
         content, calls = "", {}  # tool calls arrive in pieces keyed by index
         try:
-            async with self._http.stream("POST", "/chat/completions", json={**body, "stream": True}) as r:
+            async with self._route()[0].stream("POST", "/chat/completions", json={**body, "stream": True}) as r:
                 r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line.startswith("data:") or line.strip() == "data: [DONE]":
@@ -128,7 +144,7 @@ class LLMClient:
 
     async def loaded(self) -> bool | None:
         """Is the current local model in memory (warm)? None when the server can't say (not Ollama)."""
-        if self.model.startswith("claude-"):
+        if self.model.startswith("claude-") or self.model in self._remote:
             return None
         try:
             r = await self._http.get(self._base.removesuffix("/v1") + "/api/ps", timeout=3)
@@ -141,10 +157,12 @@ class LLMClient:
         if self.model.startswith("claude-"):
             return self._claude is not None
         try:
-            r = await self._http.get("/models", timeout=5)
+            r = await self._route()[0].get("/models", timeout=5)
             return r.status_code == 200
         except httpx.HTTPError:
             return False
 
     async def aclose(self) -> None:
         await self._http.aclose()
+        for http, _ in self._remote.values():
+            await http.aclose()

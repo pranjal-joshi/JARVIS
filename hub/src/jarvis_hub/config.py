@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     llm_extra_body: str = "{}"
     # per-model overrides of llm_extra_body, JSON {"model": {...}} (e.g. thinking on for one model)
     llm_model_extra: str = "{}"
+    # models on other OpenAI-compatible servers (vLLM, llama.cpp, LM Studio...), shown in the model picker
+    # beside the local ones: JSON {"name": {"base_url": "http://host:port/v1", "model": "id on that server",
+    # "key_env": "ENV_VAR_WITH_ITS_KEY"}}. "model" defaults to the name; "key_env" may be left out.
+    llm_endpoints: str = "{}"
     approval_timeout_s: float = 90
     # Claude models (ids starting "claude-") go to the Anthropic API instead of llm_base_url.
     # Empty key = Claude models are hidden from the model picker and never used.
@@ -141,12 +145,19 @@ class Settings(BaseSettings):
     def llm_per_model(self) -> dict:
         return json.loads(self.llm_model_extra or "{}")
 
+    def llm_endpoints_map(self) -> dict:
+        try:
+            data = json.loads(self.llm_endpoints or "{}")
+        except ValueError:
+            return {}
+        return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("base_url")}
+
     def claude_ready(self) -> bool:
         return bool(self.anthropic_api_key.get_secret_value())
 
     def llm_choices(self) -> list[str]:
         extra = [m.strip() for m in self.llm_models.split(",") if m.strip()]
-        models = list(dict.fromkeys([self.llm_model, *extra]))
+        models = list(dict.fromkeys([self.llm_model, *extra, *self.llm_endpoints_map()]))
         return [m for m in models if not m.startswith("claude-") or self.claude_ready()]
 
     def default_llm(self) -> str:

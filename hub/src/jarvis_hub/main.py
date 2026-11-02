@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     st.policy = Policy(s.policy_file, s.ask_for(), s.hub_db_path)
     st.tools = ToolRegistry()
     st.llm = LLMClient(s.llm_base_url, s.llm_api_key.get_secret_value(), s.default_llm(),
-                       s.llm_timeout_s, s.llm_extra(), s.llm_per_model())
+                       s.llm_timeout_s, s.llm_extra(), s.llm_per_model(), s.llm_endpoints_map())
     if s.claude_ready():
         st.llm.use_claude(s.anthropic_api_key.get_secret_value(), s.claude_effort)
     # the model picked in the HUD survives restarts (only if still allowed)
