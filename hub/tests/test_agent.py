@@ -185,3 +185,33 @@ def test_streamed_text_is_reset_when_a_tool_follows(parts):
     reply = asyncio.run(agent.run(messages=[{"role": "user", "content": "lamp?"}], source=Source.WEB,
                                   request_id="r1", bus=bus, on_text=got.append))
     assert got == ["Let me check.", None, "It is off, sir."] and reply == "It is off, sir."
+
+
+def test_claimed_save_without_a_tool_is_sent_back_then_refused(parts):
+    bus, gate, audit, reg, calls = parts
+    # claims "noted" after only a read: nudged once, then it really calls the tool
+    llm = FakeLLM([call("ha__GetLiveContext"), say("Noted, sir. I've saved that."), call("ha__HassTurnOn", name="x"),
+                   say("Saved, sir.")])
+    assert asyncio.run(run(ToolAgent(llm, reg, gate, audit, ask_for=frozenset()), bus)) == "Saved, sir."
+    assert calls == [{"name": "x"}]
+    assert any("no tool that changes anything ran" in m["content"] for m in llm.seen[-1] if m["role"] == "user")
+    # claims it twice: the claim never reaches the user
+    llm = FakeLLM([say("I'll remember that, sir."), say("Noted.")])
+    assert asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus)).startswith("I haven't actually saved")
+
+
+def test_answers_that_only_mention_notes_are_not_claims(parts):
+    bus, gate, audit, reg, _ = parts
+    for text in ["You take it black, as noted on your preferences page.", "The lamp is on, sir.",
+                 "It was added to the calendar last week, by the look of it."]:
+        assert asyncio.run(run(ToolAgent(FakeLLM([say(text)]), reg, gate, audit), bus)) == text
+
+
+def test_stated_facts_get_a_remember_hint(parts):
+    bus, gate, audit, reg, _ = parts
+    for text, hinted in [("my sister Chiku's birthday is 9 June", True),
+                         ("I prefer window seats on flights, keep that in mind", True),
+                         ("what is my wifi password?", False), ("turn on the lamp", False)]:
+        llm = FakeLLM([say("Very good, sir.")])
+        asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus, text=text))
+        assert ("call remember" in llm.seen[0][0]["content"]) is hinted, text

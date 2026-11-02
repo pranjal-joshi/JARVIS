@@ -57,7 +57,8 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
         page = graph.write_jarvis_page(topic, f"{fact}\n  learned:: [[{_today_title(graph)}]]")
         graph.append_journal(f"Learned: {fact} (see [[{page}]]) #jarvis")
         await index.sync()
-        return f"Saved to [[{page}]] and today's journal."
+        # the exact words saved, so the spoken confirmation repeats them (a misheard date shows up)
+        return f'Saved "{fact}" to [[{page}]] and today\'s journal. Confirm it to the user in these words.'
 
     async def kb_journal(args: dict, ctx: ToolCtx) -> str:
         text = str(args.get("text", "")).strip()
@@ -65,7 +66,7 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
             return "ERROR: empty text"
         title = graph.append_journal(f"{text} #jarvis")
         await index.sync()
-        return f"Noted in journal {title}."
+        return f'Noted "{text}" in journal {title}.'
 
     async def kb_append_to_page(args: dict, ctx: ToolCtx) -> str:
         page, text = str(args.get("page", "")), str(args.get("text", ""))
@@ -74,7 +75,7 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
         else:
             graph.append_to_user_page(page, text)
         await index.sync()
-        return f"Appended to [[{page}]]."
+        return f'Added "{text}" to [[{page}]].'
 
     reg.add(Tool("kb_search", "builtin",
                  "Search the user's notes and your memories. Use for: 'what did I decide about X', 'how do I "

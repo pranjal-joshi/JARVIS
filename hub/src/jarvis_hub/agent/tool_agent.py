@@ -5,6 +5,7 @@ import asyncio
 import difflib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +29,26 @@ SLOW_ORIGINS = ("expert",)  # tools that can take minutes: run in the background
 FAKE_TOOL_MARKERS = ("<tool_result", "</tool_result>", "<tool_call", "<function_call", "<function=")
 FAKE_TOOL_NUDGE = ("(system) Your last message wrote a tool call or tool result as plain text; no tool ran. "
                    "Call the tool through the tools interface, or answer without claiming any action happened.")
+# A reply that says something was done ("Noted, sir.", "I've saved that..."). Checked against the tools
+# that actually ran: small models often skip the tool and claim the action anyway.
+CLAIMS_ACTION = re.compile(
+    r"^\W*(noted|saved|stored|added|sent|done|remembered|logged|recorded|deleted|removed)\b"
+    r"|\bI(?:'ve| have|'ll| will)?\s+(?:just\s+|now\s+|also\s+)?(?:saved|noted|stored|remembered|added|logged|"
+    r"recorded|written|jotted|made a note|sent|deleted|removed|updated|turned|switched|scheduled)\b"
+    r"|\b(?:I'll|I will) (?:remember|keep (?:that|this|it) in mind)", re.I)
+CLAIM_NUDGE = ("(system) Your reply says you did something, but no tool that changes anything ran this turn. "
+               "If the user wanted it saved or done, call the tool now (remember, for a fact about the user). "
+               "Otherwise answer without claiming you did it.")
+NOT_DONE = 'I haven\'t actually saved or changed anything, sir. Say "remember ..." and I will.'
+# A message that tells JARVIS something about the user without saying "remember".
+STATES_A_FACT = re.compile(
+    r"\b(?:my|our)\s+(?:[\w']+\s+){0,3}(?:is|are|was|were)\b"
+    r"|\bI\s+(?:prefer|like|love|hate|don'?t like|always|never|usually|am allergic|take|drink|eat|live|work"
+    r"|was born)\b|\bI'm allergic\b"
+    r"|\bkeep (?:that|this|it) in mind\b|\bdon'?t forget\b|\bfor (?:future|later) reference\b|\bfor the record\b",
+    re.I)
+FACT_HINT = ("\nThe user's last message tells you something about them. If it is worth keeping, call remember "
+             "with it (exact names, dates and numbers) before you answer.")
 
 
 class ToolAgent:
@@ -68,15 +89,17 @@ class ToolAgent:
             if yes is not None:  # the answer to "Shall I go ahead, sir?"
                 return await self._resume(p, yes, turn)
         # Client-supplied system prompts are dropped: the persona and rules are ours.
+        said = _last_user(messages)
+        hint = FACT_HINT if STATES_A_FACT.search(said) and not said.rstrip().endswith("?") else ""
         convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)
-                  + f"\nCurrent local time: {datetime.now():%A %d %B %Y, %H:%M}."}]
+                  + f"\nCurrent local time: {datetime.now():%A %d %B %Y, %H:%M}." + hint}]
         convo += [m for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
         return await self._loop(convo, turn)
 
     async def _loop(self, convo: list[dict], t: "_Turn") -> str:
         schemas = [tool.openai_schema() for tool in await self.offered(convo)]
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0}))
-        faked = False
+        faked = claimed = False
         for step in range(MAX_STEPS):
             streamed = []
             try:
@@ -101,6 +124,17 @@ class ToolAgent:
                     faked = True
                     convo.append({"role": "assistant", "content": text})
                     convo.append({"role": "user", "content": FAKE_TOOL_NUDGE})
+                    continue
+                if CLAIMS_ACTION.search(text) and not t.changed:
+                    # "Noted, sir." with nothing saved: send it back once, then don't pass the claim on.
+                    log.warning("reply claims an action no tool did: %.200s", text)
+                    if streamed:
+                        t.on_text(None)
+                    if claimed:
+                        return self._reply(t, NOT_DONE)
+                    claimed = True
+                    convo.append({"role": "assistant", "content": text})
+                    convo.append({"role": "user", "content": CLAIM_NUDGE})
                     continue
                 return self._reply(t, text or "Done, sir.")
             asked = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": [],
@@ -241,6 +275,8 @@ class ToolAgent:
             log.exception("tool %s failed", name)
             output, status = f"ERROR: {e}", "error"
         output = output[:MAX_TOOL_RESULT_CHARS]
+        if status == "ok" and (tool.risk is not Risk.READ or "screenshot" in name):  # a screenshot is saved too
+            t.changed = True
         self.audit.record(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk,
                           arguments=args, status=status, approved_by=approved_by,
                           result=output[:2000])
@@ -269,6 +305,7 @@ class _Turn:
     on_text: Callable[[str | None], None] | None = None
     on_event: Callable[[dict], None] = lambda e: None
     session: str | None = None
+    changed: bool = False  # a tool that changes something ran successfully this turn
 
 
 # How a confirmation or approval reads the action back, e.g. "send a text to Chiku saying on my way".
