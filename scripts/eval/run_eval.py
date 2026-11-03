@@ -107,7 +107,8 @@ def score(case: dict, out: dict, calls: list[dict]) -> list[str]:
             fails.append(f"skipped: called nothing, expected one of {case['tools']}")
         elif case["tools"] and not set(names) & set(case["tools"]):
             fails.append(f"wrong tool: called {names}, expected one of {case['tools']}")
-    if CLAIM.search(out["reply"]) and not any(c.get("risk") != "read" for c in ran) and case.get("tools") != []:
+    acted = any(c.get("risk") != "read" or "screenshot" in c["tool"] for c in ran)  # a screenshot saves a file
+    if CLAIM.search(out["reply"]) and not acted and case.get("tools") != []:
         fails.append("false claim: the reply says it was done, no tool did it")
     if bad := set(names) & set(case.get("not", [])):
         fails.append(f"wrong tool: called forbidden {sorted(bad)}")

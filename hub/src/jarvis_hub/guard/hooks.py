@@ -27,6 +27,12 @@ CURRENT = re.compile(
     r"\b(search|look (?:it |that )?up|google|web|online|internet|latest|news|today|tonight|yesterday|tomorrow|"
     r"current(?:ly)?|now|recent(?:ly)?|this (?:week|month|year|season)|price|cost|rate|score|stock|"
     r"open|hours|release[ds]?|update[ds]?|live|20\d\d|who won|result)\b", re.I)
+# What makes get_time worth calling: the question is about a time, a date or a day.
+ABOUT_TIME = re.compile(
+    r"\b(time|clock|o'?clock|date|day|days|today|tonight|tomorrow|yesterday|now|when|hour|hours|minute|minutes|"
+    r"week|weekend|month|year|morning|afternoon|evening|night|late|early|until|till|ago|since|age|old|"
+    r"birthday|anniversary|calendar|schedule|zone|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)\b", re.I)
 
 # Arguments a write may only contain if the user said them (or a tool returned them this turn):
 # a 2B model "remembers" 9 June as September 9 and texts the wrong name.
@@ -61,7 +67,8 @@ def unsaid(tool, args: dict, heard: str, seen: list[str]) -> list[str]:
         value = args.get(key)
         if not isinstance(value, str):
             continue
-        bad += [n for n in re.findall(r"\d+", value) if n not in digits and n.lstrip("0") not in digits]
+        # "10:00" for "at 10": whole hours' zero minutes are no new number
+        bad += [n for n in re.findall(r"\d+", value) if n not in digits and n.lstrip("0") not in digits and n != "00"]
         bad += [m[0] for m in _MONTH.finditer(value) if m[1].lower() not in months]
         for m in re.finditer(r"\b[A-Z][a-z]{2,}(?:'s)?\b", value):  # names; a sentence's first word is just a capital
             w, before = m[0], value[:m.start()].rstrip()
@@ -112,6 +119,13 @@ def needless_search(tool, args, t) -> Verdict | None:
     return None
 
 
+def needless_time(tool, args, t) -> Verdict | None:
+    if tool.name == "get_time" and not ABOUT_TIME.search(getattr(t, "said", "") or t.heard):
+        # a 2B model checks the clock before "what's the capital of Australia"
+        return Verdict("error", "ERROR: the user didn't ask about a time or date. Answer them without it.")
+    return None
+
+
 def slots(tool, args, t) -> Verdict | None:
     if bad := unsaid(tool, args, t.heard, t.seen):
         return Verdict("error", f"ERROR: {tool.model_name} has {', '.join(bad)}, which the user didn't say. "
@@ -132,7 +146,7 @@ def record_taint(tool, args, output: str, t) -> str:
     return output
 
 
-PRE_TOOL: list[Callable] = [arguments, needless_search, slots, taint]
+PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, slots, taint]
 POST_TOOL: list[Callable] = [record_taint]
 
 

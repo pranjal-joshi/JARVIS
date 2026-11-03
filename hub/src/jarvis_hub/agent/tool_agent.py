@@ -79,6 +79,8 @@ ABOUT_ME = re.compile(r"\b(?:my|me|mine|I|I'm|am I)\b", re.I)
 # names a memory topic: the notes are searched first whatever other tool also matches ("dates" ~ get_time)
 TOPIC = re.compile(r"\b(?:family|relatives?|birthdays?|anniversar(?:y|ies)|(?:important|key) dates|"
                    r"(?:upcoming|coming) (?:events|plans)|festivals?)\b", re.I)
+# a follow-up that points back at someone ("how old is he", "and her birthday?")
+FOLLOW_UP = re.compile(r"\b(?:he|she|him|his|her|hers|they|them|their)\b", re.I)
 QUESTION = re.compile(r"\?\s*$|^\s*(?:what|when|where|who|whose|which|how|do|does|did|is|are|was|were|have|has|"
                       r"remind me|tell me)\b", re.I)
 # below this, the best-matching tool is only a loose match ("remind me what I'm called" ~ set_timer 0.50),
@@ -159,6 +161,8 @@ class ToolAgent:
         # rides on the latest user message instead.
         said = _last_user(messages)
         turn.said = said
+        users = [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
+        turn.before = users[-2] if len(users) > 1 else ""
         turn.heard = " ".join(m["content"] for m in messages if m.get("role") == "user")[-1500:]
         if self.fast and (plan := self.fast.match(said)):
             if (reply := await self._fast(plan, turn)) is not None:
@@ -289,7 +293,8 @@ class ToolAgent:
                 if tool and tool.final_answer and body is not None and not body.startswith("ERROR"):
                     final = body
                 ok = tool and body is not None and not body.startswith("ERROR") and not isinstance(prep, str)
-                done.append(_done(tool.name, prep[1], body.startswith("(dry run")) if ok and tool.name in _DONE else None)
+                done.append(None if not ok else _done(tool.name, prep[1], body.startswith("(dry run"))
+                            if tool.name in _DONE else _status(tool.name, prep[1], body))
             if t.repeats > 1:
                 break
             convo += [asked, *answers]
@@ -348,9 +353,12 @@ class ToolAgent:
         # a memory topic ("important dates", "family") always; "my ..." only if no other tool fits clearly
         # ("what's my phone battery" is for phone_status)
         loose = t.ranking is not None and (t.ranking.best[0] == "kb_search" or t.ranking.best[1] < WEAK_MATCH)
-        if not (TOPIC.search(said) or (ABOUT_ME.search(said) and loose)):
+        # "and his birthday?" after "who is Pranav": the question is about whoever the last one was about
+        follow = bool(FOLLOW_UP.search(said)) and bool(t.before) and _personal(t.before)
+        if not (TOPIC.search(said) or follow or ABOUT_ME.search(said) and loose):
             return []
-        args = {"query": _keywords(said)[:200]}
+        args = {"query": (_keywords(t.before) + " " if follow else "") + _keywords(said)}
+        args["query"] = args["query"].strip()[:200]
         if not args["query"] and (page := self.tools.get("kb_read_page")) and page.name not in self.hidden:
             # "what do you know about me": no keywords to search on, so read what JARVIS keeps about them
             tool, args = page, {"page": ABOUT_PAGE}
@@ -617,6 +625,7 @@ class _Turn:
     model: str = ""
     started: float = field(default_factory=time.time)
     said: str = ""  # the user's latest words
+    before: str = ""  # the user's words the turn before (follow-ups)
     ranking: Ranking | None = None  # which tools the request matched, and how closely
     called: bool = False  # some tool ran this turn
     calls_made: set = field(default_factory=set)  # (name, arguments) already called: no repeats
@@ -634,6 +643,11 @@ def _keywords(said: str) -> str:
     the whole of "remind me what I'm called again"."""
     words = [_SAME.get(w, w) for w in re.findall(r"[a-z0-9']+", said.lower()) if w not in _FILLER]
     return " ".join(words)
+
+
+def _personal(said: str) -> bool:
+    """The earlier question was about the user's life or someone in it ("who is Pranav", "my sister")."""
+    return bool(TOPIC.search(said) or ABOUT_ME.search(said) or re.search(r"\bwho(?:'s| is| was)\b", said, re.I))
 
 
 def _signature(call: dict) -> tuple[str, str]:
@@ -702,6 +716,42 @@ _DONE = {
 def _done(name: str, args: dict, dry_run: bool) -> str:
     said = _DONE[name](args)
     return f"I would have {said}, sir (dry run)." if dry_run else f"I've {said}, sir."
+
+
+# Status reads answered with a fixed sentence built from the result: a 2B model rewords these numbers wrongly
+# ("620 GB used of 332 GB? Wait..."). None when the result isn't in the expected shape: the model answers.
+def _laptop(body: str) -> str | None:
+    m = re.match(r"Battery (\S+), (charging|on battery); memory (\d+)% used of ([\d.]+) GB; up [^;]*; "
+                 r"active window: (.*)$", body.strip())
+    if not m:
+        return None
+    power = "charging" if m[2] == "charging" else "on battery"
+    return (f"Your laptop is at {m[1]} and {power}, with memory {m[3]}% used of {m[4]} GB; "
+            f"the active window is {m[5]}, sir.")
+
+
+def _phone(body: str) -> str | None:
+    m = re.match(r".*?: battery (\S+?)(, charging)?; foreground app: (.*)$", body.strip())
+    if not m:
+        return None
+    return f"Your phone is at {m[1]}{' and charging' if m[2] else ''}, with {m[3]} on screen, sir."
+
+
+def _disk(args: dict, body: str) -> str | None:
+    if str(args.get("check", "")).lower() != "disk_space":
+        return None
+    drives = re.findall(r"Drive (\w+): ([\d.]+) GB free of ([\d.]+) GB \((\d+)% used\)", body)
+    if not drives:
+        return None
+    return "; ".join(f"Drive {d} has {free} GB free of {size} GB ({used}% used)" for d, free, size, used in drives) \
+        + ", sir."
+
+
+_STATUS = {"win_info": lambda a, b: _laptop(b), "adb_info": lambda a, b: _phone(b), "win_ps_read": _disk}
+
+
+def _status(name: str, args: dict, body: str) -> str | None:
+    return _STATUS[name](args, body) if name in _STATUS else None
 
 
 def _describe(tool: Tool, args: dict) -> str:

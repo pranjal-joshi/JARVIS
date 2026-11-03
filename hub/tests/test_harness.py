@@ -201,3 +201,90 @@ def test_search_returns_the_memory_page_a_question_names(tmp_path):
     assert "jarvis/events" in pages("what are upcoming events")
     assert pages("any relatives I should call") == {"jarvis/family"}
     assert pages("Diwali") == {"jarvis/events"}  # nothing named: plain word match
+
+
+# ---------- memory that stays right ----------
+def kb(tmp_path):
+    from jarvis_hub.kb.graph import LogseqGraph
+    from jarvis_hub.kb.tools import register_kb_tools
+    from jarvis_hub.mcp.registry import ToolCtx
+    g = LogseqGraph(str(tmp_path))
+    reg = ToolRegistry()
+    register_kb_tools(reg, g, NoIndex())
+    ctx = ToolCtx(EventBus(), Source.WEB, "r")
+    return g, (lambda name, **args: asyncio.run(reg.get(name).call(args, ctx)))
+
+
+def test_days_in_a_fact_are_saved_as_dates():
+    from datetime import date
+    from jarvis_hub.kb.tools import dated
+    tue = date(2026, 11, 3)  # a Tuesday
+    assert dated("Today is Pranav's birthday", tue) == "Pranav's birthday is on 3 November."
+    assert dated("We fly to Goa tomorrow.", tue) == "We fly to Goa on 4 November 2026."
+    assert dated("Dinner with Chiku next Friday", tue) == "Dinner with Chiku on 6 November 2026"
+    assert dated("My son was born on 13 May", tue) == "My son was born on 13 May"  # nothing relative
+
+
+def test_remember_skips_a_fact_it_has_and_replaces_one_that_says_less(tmp_path):
+    g, run = kb(tmp_path)
+    run("remember", fact="My wife's name is Sanika.")
+    assert run("remember", fact="my wife's name is Sanika").startswith("Already remembered")
+    run("remember", fact="My wife's name is Sanika and she is a doctor.")
+    texts = [b.text.split("\n")[0] for b in g.page("jarvis/memory").blocks]
+    assert texts == ["My wife's name is Sanika and she is a doctor."]
+    run("remember", fact="My wife's name is Tanika.")  # a different fact is kept beside it
+    assert len(g.page("jarvis/memory").blocks) == 2
+
+
+def test_correct_memory_keeps_only_the_right_part_and_one_copy(tmp_path):
+    g, run = kb(tmp_path)
+    g.write_jarvis_page("jarvis/people", "My wife's name is Tanika.")
+    g.write_jarvis_page("jarvis/people", "My wife's name is Sanika.")  # memory capture got there first
+    run("correct_memory", wrong="Tanika", fact="My wife's name is Sanika, not Tanika.")
+    texts = [b.text.split("\n")[0] for b in g.page("jarvis/people").blocks]
+    assert texts == ["My wife's name is Sanika."]
+
+
+def test_notes_are_said_back_in_the_second_person(tmp_path):
+    from jarvis_hub.kb.tools import second_person
+    assert second_person("My wife's name is Sanika and I love her") == "Your wife's name is Sanika and you love her"
+    assert second_person("The user's son Chiku. I'm vegetarian.") == "Your son Chiku. You're vegetarian."
+
+
+# ---------- fewer wrong calls, fixed status replies ----------
+def test_get_time_is_refused_when_the_question_isnt_about_time():
+    llm = ScriptLLM([call("get_time"), say("Canberra, sir.")])
+    a, ran = setup(llm)
+    assert ask(a, "what's the capital of Australia?") == "Canberra, sir."
+    assert ran == [] and "didn't ask about a time" in llm.seen[1][-1]["content"]
+
+
+def test_status_reads_get_a_fixed_reply():
+    from jarvis_hub.agent.tool_agent import _status
+    assert _status("win_ps_read", {"check": "disk_space"}, "Drive C: 342.1 GB free of 952 GB (64% used)") == \
+        "Drive C has 342.1 GB free of 952 GB (64% used), sir."
+    assert _status("adb_info", {}, "Pixel 8 (Android 15): battery 54%, charging; foreground app: com.whatsapp") == \
+        "Your phone is at 54% and charging, with com.whatsapp on screen, sir."
+    assert _status("win_info", {}, "Battery 81%, on battery; memory 62% used of 15.7 GB; up 3 h 2 min; "
+                   "active window: Spotify") == ("Your laptop is at 81% and on battery, with memory 62% used of "
+                                                 "15.7 GB; the active window is Spotify, sir.")
+    assert _status("win_ps_read", {"check": "top_cpu"}, "Name Id") is None  # the model words the rest
+
+
+def test_a_follow_up_searches_for_who_the_last_question_was_about():
+    llm = ScriptLLM([say("13 May, sir.")])
+    a, ran = setup(llm, ToolSelector(WordEmbedder(), "m", k=1))
+    asyncio.run(a.run(messages=[{"role": "user", "content": "who is Pranav?"}, say("Your nephew, sir."),
+                                {"role": "user", "content": "how old is he?"}],
+                      source=Source.WEB, request_id="r1", bus=EventBus()))
+    assert ran[0] == ("kb_search", {"query": "pranav old he"})
+
+
+def test_todays_date_copied_into_a_journal_note_is_dropped():
+    from datetime import date
+    from jarvis_hub.kb.tools import without_today
+    d = date(2026, 11, 3)
+    assert without_today("Nov 03, 2026 00:00 - Plumber comes Friday at 10", d) == "Plumber comes Friday at 10"
+    assert without_today("Plumber comes Friday at 10 (Tuesday 03 November 2026, 13:58)", d) == \
+        "Plumber comes Friday at 10"
+    assert without_today("Plumber comes on 7 November 2026", d) == "Plumber comes on 7 November 2026"

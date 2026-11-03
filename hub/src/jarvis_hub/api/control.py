@@ -91,6 +91,16 @@ async def audit(request: Request, limit: int = 50,
     return request.app.state.audit.recent(min(limit, 500))
 
 
+@router.get("/tools/rank")
+async def tools_rank(say: str, request: Request, before: str = "",
+                     _: Source = Depends(require_approver)) -> dict:
+    """The tools a request would be offered and every tool's match score (scripts/eval/rank_tools.py)."""
+    msgs = [{"role": "user", "content": x} for x in (before, say) if x]
+    r = await request.app.state.agent.ranked(msgs)
+    return {"offered": [t.name for t in r.tools],
+            "scores": dict(sorted(r.scores.items(), key=lambda kv: -kv[1]))}
+
+
 # ---------- knowledge base ----------
 @router.get("/kb/search")
 async def kb_search(q: str, request: Request, limit: int = 8,

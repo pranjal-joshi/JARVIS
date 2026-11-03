@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     model_hidden_tools: str = "adb_tap,adb_type,adb_shell,adb_install,adb_uninstall,adb_connect"
     # local models get only this many request-relevant tools (plus a few always-on ones); 0 = all tools.
     # Claude models always get every visible tool.
-    tool_select_k: int = 6
+    tool_select_k: int = 4  # plus the core tools and the best one's family: 6-9 offered
     # the local model's context window (OLLAMA_CONTEXT_LENGTH): conversations are trimmed to fit; 0 = off
     llm_context_tokens: int = 8192
     # notes scoring below this are not returned by search_notes (nomic cosine)
