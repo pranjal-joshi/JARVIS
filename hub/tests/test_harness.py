@@ -61,6 +61,7 @@ def setup(llm, selector=None):
     tool("win_media", {"key": {"type": "string", "enum": ["play_pause", "next"]}, "times": {"type": "integer"}},
          Risk.WRITE, "media keys")
     tool("get_time", {}, desc="time now")
+    tool("kb_correct", {"wrong": {"type": "string"}, "fact": {"type": "string"}}, Risk.WRITE, "fix a memory")
     a = ToolAgent(llm, reg, ApprovalGate(EventBus(), 2), AuditStore(":memory:"), ask_for=frozenset(),
                   selector=selector)
     return a, ran
@@ -148,3 +149,37 @@ def test_the_same_call_twice_is_stopped():
     a, ran = setup(llm)
     assert "going in circles" in ask(a, "time?")
     assert ran == [("get_time", {})]
+
+
+# ---------- correcting a memory ----------
+class NoIndex:
+    async def sync(self):
+        return {}
+
+
+def test_correct_memory_replaces_the_wrong_fact_and_keeps_the_rest(tmp_path):
+    from jarvis_hub.kb.graph import LogseqGraph
+    from jarvis_hub.kb.tools import register_kb_tools
+    from jarvis_hub.mcp.registry import ToolCtx
+    g = LogseqGraph(str(tmp_path))
+    for fact in ("The user's wife's name is Tanika.", "Wife's name is Zanika.", "My name is Pranjal"):
+        g.write_jarvis_page("jarvis/people", f"{fact}\n  learned:: [[Nov 3rd, 2026]]")
+        g.append_journal(f"Learned: {fact} (see [[jarvis/people]]) #jarvis")
+    reg = ToolRegistry()
+    register_kb_tools(reg, g, NoIndex())
+    tool = reg.get("correct_memory")
+    ctx = ToolCtx(EventBus(), Source.WEB, "r")
+    out = asyncio.run(tool.call({"wrong": "wife's name", "fact": "The user's wife's name is Sanika."}, ctx))
+    assert out.startswith("Corrected [[jarvis/people]]") and "Tanika" in out and "Zanika" in out
+    texts = [b.text for b in g.page("jarvis/people").blocks]
+    assert not any("anika." in t and "Sanika" not in t for t in texts)
+    assert any(t.startswith("The user's wife's name is Sanika.") and "corrected by you" in t for t in texts)
+    assert any(t.startswith("My name is Pranjal") for t in texts)  # untouched
+    assert "no memory contains" in asyncio.run(tool.call({"wrong": "car colour", "fact": "x"}, ctx))
+
+
+def test_a_correction_is_not_captured_as_a_new_fact():
+    llm = ScriptLLM([say("Very good, sir.")])
+    a, _ = setup(llm)
+    ask(a, "no, my wife's name is Sanika, not Tanika")
+    assert "correct_memory" in llm.seen[0][-1]["content"]  # the hint rides on the user turn

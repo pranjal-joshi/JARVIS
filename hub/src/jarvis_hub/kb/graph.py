@@ -249,6 +249,12 @@ class LogseqGraph:
         notes = sum(self._drop_blocks(p, _is_memory_note) for p in self.pages() if p.is_journal)
         return [p.name for p in gone], notes
 
+    def memory_items(self, match: str) -> list[tuple[str, str]]:
+        """(page, text) of the remembered facts on jarvis/ pages that contain `match`, ignoring case."""
+        m = _check_match(match)
+        return [(p.name, b.text) for p in self.pages() if not p.is_journal and p.name.lower().startswith(JARVIS_NS)
+                for b in p.blocks if m in b.text.lower()]
+
     def delete_memory_items(self, match: str) -> list[tuple[str, int]]:
         """Remove memory items containing `match` from jarvis/ pages and #jarvis journal notes.
         Returns (page, count) for each page that changed."""

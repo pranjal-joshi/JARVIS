@@ -58,6 +58,12 @@ STATES_A_FACT = re.compile(
     r"|was born)\b|\bI'm allergic\b"
     r"|\bkeep (?:that|this|it) in mind\b|\bdon'?t forget\b|\bfor (?:future|later) reference\b|\bfor the record\b",
     re.I)
+# "No, it's Sanika, not Tanika": a correction goes to correct_memory, not to memory capture (which would
+# save the new fact beside the wrong one)
+CORRECTS = re.compile(r"^\W*no\b|\bnot\s+\w+\W*$|\b(?:wrong|incorrect|actually|mistake|misheard|correct(?:ion)?|"
+                      r"fix (?:it|that|this)|update what you know)\b", re.I)
+CORRECT_HINT = ("\nThe user is correcting something you remembered. Call correct_memory with a few words from the "
+                "wrong memory and the corrected fact.")
 CAPTURE_PROMPT = ("Extract the facts the user states about themselves, their people, home or preferences, worth "
                   "remembering later. Keep the user's own words, names, dates and numbers; write each as a short "
                   "sentence in the third person (\"The user's sister Chiku's birthday is 9 June.\"). topic: one "
@@ -154,10 +160,11 @@ class ToolAgent:
         if self.fast and (plan := self.fast.match(said)):
             if (reply := await self._fast(plan, turn)) is not None:
                 return reply
-        states = STATES_A_FACT.search(said) and not said.rstrip().endswith("?")
+        corrects = bool(CORRECTS.search(said)) and self.tools.get("kb_correct") is not None
+        states = STATES_A_FACT.search(said) and not said.rstrip().endswith("?") and not corrects
         if states and not self._is_claude() and (reply := await self._capture(said, turn)):
             return reply
-        hint = FACT_HINT if states else ""
+        hint = CORRECT_HINT if corrects else FACT_HINT if states else ""
         convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source)}]
         convo += [dict(m) for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
         for m in reversed(convo):

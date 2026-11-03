@@ -7,6 +7,7 @@ MODEL_NAMES = {
     "kb_read_page": "read_page",
     "kb_tasks": "list_tasks",
     "kb_remember": "remember",
+    "kb_correct": "correct_memory",
     "kb_journal": "add_to_journal",
     "kb_append_to_page": "add_to_page",
     "kb_forget": "forget_memory_page",
