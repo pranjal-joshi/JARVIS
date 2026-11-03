@@ -45,6 +45,8 @@ class KBIndex:
             try:
                 if changed or removed or not self.vector_ready:
                     await self._ensure_collection()
+                    if not self.vector_ready:  # first sync since start: pages deleted while the hub was down
+                        stats["removed"] += await self._drop_orphans({p.name for p in pages})
                     for name in removed:
                         await self._delete_page(name)
                         self._digests.pop(name, None)
@@ -80,6 +82,17 @@ class KBIndex:
         r = await self._qdrant.post(f"/collections/{COLLECTION}/points/delete?wait=true", json={
             "filter": {"must": [{"key": "page", "match": {"value": name}}]}})
         r.raise_for_status()
+
+    async def _drop_orphans(self, names: set[str]) -> int:
+        """Delete points of pages no longer in the graph; returns how many pages they belonged to."""
+        flt = {"must_not": [{"key": "page", "match": {"any": sorted(names)}}]} if names else {}
+        r = await self._qdrant.post(f"/collections/{COLLECTION}/points/scroll", json={
+            "filter": flt, "limit": 10000, "with_payload": ["page"], "with_vector": False})
+        r.raise_for_status()
+        gone = {p["payload"]["page"] for p in r.json()["result"]["points"]}
+        for name in gone:
+            await self._delete_page(name)
+        return len(gone)
 
     async def _index_page(self, page: Page) -> None:
         await self._delete_page(page.name)

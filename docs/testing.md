@@ -47,7 +47,6 @@ In the HUD (http://localhost:3000):
 curl -s -H "$H" -X POST localhost:8700/v1/kb/sync                     # "vector": true once nomic-embed-text is pulled
 curl -s -H "$H" "localhost:8700/v1/kb/search?q=evening%20drink"        # jarvis/preferences first
 curl -s -H "$H" localhost:8700/v1/kb/tasks                            # Renew car insurance (2026-11-03), NVMe (deadline)
-curl -s -H "$H" -X POST localhost:8700/v1/kb/daily-summary            # writes jarvis/daily/<today>
 ```
 
 HUD prompts: *"What are my open tasks?"*, *"Remember that I like the study at 22 degrees."*

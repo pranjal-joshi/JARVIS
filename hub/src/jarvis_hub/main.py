@@ -2,7 +2,6 @@ import asyncio
 from collections import deque
 import logging
 from contextlib import asynccontextmanager, suppress
-from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -25,7 +24,7 @@ from jarvis_hub.automation.skills import SkillEngine
 from jarvis_hub.devices.tools import register_device_tools
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
-from jarvis_hub.kb.tools import register_kb_tools, write_daily_summary
+from jarvis_hub.kb.tools import register_kb_tools
 from jarvis_hub.automation.notify import Notifier, register_notify_tool
 from jarvis_hub.automation.watchers import WatchEngine
 from jarvis_hub.tools.utility import register_utility_tools
@@ -46,21 +45,6 @@ async def _kb_sync_loop(index: KBIndex, every_s: int) -> None:
         except Exception:
             log.exception("kb sync failed")
         await asyncio.sleep(every_s)
-
-
-async def _daily_summary_loop(graph: LogseqGraph, audit: AuditStore, index: KBIndex) -> None:
-    """Write jarvis/daily/<date> at 23:55 local time every day."""
-    while True:
-        now = datetime.now()
-        target = now.replace(hour=23, minute=55, second=0, microsecond=0)
-        if target <= now:
-            target += timedelta(days=1)
-        await asyncio.sleep((target - now).total_seconds())
-        try:
-            write_daily_summary(graph, audit, date.today())
-            await index.sync()
-        except Exception:
-            log.exception("daily summary failed")
 
 
 async def _warm(llm: LLMClient) -> None:
@@ -145,7 +129,6 @@ async def lifespan(app: FastAPI):
     if s.agent != "echo":
         tasks.append(asyncio.create_task(_warm(st.llm)))
         tasks.append(asyncio.create_task(_kb_sync_loop(st.kb_index, s.kb_sync_interval_s)))
-        tasks.append(asyncio.create_task(_daily_summary_loop(st.kb_graph, st.audit, st.kb_index)))
     log.info("hub %s ready: agent=%s model=%s tools=%d", __version__, s.agent, s.llm_model,
              len(st.tools.all()))
     try:

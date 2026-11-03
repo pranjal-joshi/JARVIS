@@ -15,7 +15,6 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
 | Audit | every call logged with source, risk, status, approver | `/v1/audit`, HUD timeline |
 | Logseq KB | file-graph read, tasks with SCHEDULED/DEADLINE, `jarvis/` memory + journal writes, user-page edits gated | tests + live |
 | Qdrant | nomic-embed-text embeddings, semantic search ("evening drink" → tea preference) | `/v1/kb/search` |
-| Daily summary | audit log → `jarvis/daily/<date>` (23:55 nightly, or `POST /v1/kb/daily-summary`) | test |
 | Prompt injection | "Untrusted Clipping" page: JARVIS reports the injected command and does not act | HUD |
 | Voice (hub path) | Piper TTS (4 s) → Whisper STT (3 s) round trip, exact transcript | curl |
 | HUD | orb, chat with typewriter, timeline (calls/results/recalls/audit), approval cards, memory panel with `logseq://` links, voice toggle, mic button, mobile layout, reduced motion | built-in browser |

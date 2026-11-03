@@ -5,7 +5,6 @@ import json
 import logging
 import time
 import uuid
-from datetime import date
 from pathlib import Path
 
 import httpx
@@ -17,7 +16,7 @@ from pydantic import BaseModel
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.approval.gate import APPROVER_SOURCES
 from jarvis_hub.config import Source
-from jarvis_hub.kb.tools import _today_title, recent_memory, write_daily_summary
+from jarvis_hub.kb.tools import _today_title, recent_memory
 from jarvis_hub.voice.service import VoiceError
 from jarvis_hub.voice.speakable import for_ear, to_speech
 
@@ -153,14 +152,6 @@ async def kb_tasks(request: Request, _: Source = Depends(require_source)) -> lis
 @router.post("/kb/sync")
 async def kb_sync(request: Request, _: Source = Depends(require_approver)) -> dict:
     return await request.app.state.kb_index.sync()
-
-
-@router.post("/kb/daily-summary")
-async def daily_summary(request: Request, day: date | None = None,
-                        _: Source = Depends(require_approver)) -> dict:
-    page = write_daily_summary(request.app.state.kb_graph, request.app.state.audit, day)
-    await request.app.state.kb_index.sync()
-    return {"page": page}
 
 
 # ---------- voice (web/phone path) ----------

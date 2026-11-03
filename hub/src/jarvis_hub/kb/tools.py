@@ -1,15 +1,13 @@
-"""Knowledge-base tools for the agent, plus the daily summary job.
+"""Knowledge-base tools for the agent.
 
 Risk model (see mcp/servers.yaml for the same idea applied to MCP servers):
 - searching and reading pages: read
 - writing to the agent's own jarvis/ namespace and the journal: self-scoped, auto-approved, audited
 - editing any of the user's own pages: write, needs approval"""
 
-import json
-from datetime import date, datetime
+from datetime import date
 
 from jarvis_hub.approval.gate import Risk
-from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.events.bus import Event
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
@@ -119,30 +117,6 @@ def missing_page(graph: LogseqGraph, name: str, tool: str) -> str:
 def _today_title(graph: LogseqGraph) -> str:
     from jarvis_hub.kb.graph import journal_title
     return journal_title(date.today())
-
-
-def write_daily_summary(graph: LogseqGraph, audit: AuditStore, day: date | None = None) -> str:
-    """Audit log for one day -> jarvis/daily/<date> page (replaced, so re-running is safe)."""
-    day = day or date.today()
-    start = datetime.combine(day, datetime.min.time()).timestamp()
-    rows = [r for r in audit.between(start, start + 86400)]
-    lines = [f"date:: [[{_journal(day)}]]", f"actions:: {len(rows)}", ""]
-    if not rows:
-        lines.append("- No tool activity today.")
-    for r in rows:
-        args = json.loads(r["arguments"] or "{}")
-        brief = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
-        who = f" approved by {r['approved_by']}" if r["approved_by"] not in (None, "policy") else ""
-        lines.append(f"- {datetime.fromtimestamp(r['ts']):%H:%M} `{r['tool']}` ({r['risk']}, "
-                     f"{r['status']}{who}) from {r['source']}: {brief}")
-    name = f"jarvis/daily/{day:%Y-%m-%d}"
-    graph.write_jarvis_page(name, "\n".join(lines), replace=True)
-    return name
-
-
-def _journal(day: date) -> str:
-    from jarvis_hub.kb.graph import journal_title
-    return journal_title(day)
 
 
 def recent_memory(graph: LogseqGraph, limit: int = 20) -> list[dict]:

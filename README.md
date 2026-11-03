@@ -12,7 +12,7 @@ nothing is exposed to the internet.
  browser HUD ──► ui (Next.js) ──► hub (FastAPI) ──► Ollama (qwen3.5:2b on GPU, nomic-embed-text)
    mic/TTS        server proxy     │  agent loop ─► tool registry ─► MCP: Home Assistant
                                    │  approval gate (web/phone approve, never voice)
-                                   │  audit log (SQLite) ─► jarvis/daily/<date>
+                                   │  audit log (SQLite)
                                    └► Logseq graph (markdown) ◄─► Qdrant index
 ```
 

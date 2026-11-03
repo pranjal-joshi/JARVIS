@@ -4,10 +4,9 @@ from datetime import date
 import pytest
 
 from conftest import auth
-from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.kb.graph import LogseqGraph, journal_title, parse_blocks
 from jarvis_hub.kb.index import KBIndex
-from jarvis_hub.kb.tools import recent_memory, write_daily_summary
+from jarvis_hub.kb.tools import recent_memory
 
 
 def test_parse_blocks_links_and_props():
@@ -49,15 +48,9 @@ def test_keyword_fallback_search(graph_dir):
     assert {"home", "zigbee", "jarvis", "jarvis/preferences"} <= ids
 
 
-def test_daily_summary_and_memory(graph_dir, tmp_path):
+def test_memory(graph_dir):
     g = LogseqGraph(str(graph_dir))
-    audit = AuditStore(str(tmp_path / "a.db"))
-    audit.record(request_id="r", source="web", tool="ha__HassTurnOn", risk="write",
-                 arguments={"name": "desk lamp"}, status="ok", approved_by="web")
-    page = write_daily_summary(g, audit)
-    assert page == f"jarvis/daily/{date.today():%Y-%m-%d}"
-    text = g.page(page).blocks[0].text
-    assert "ha__HassTurnOn" in text and "approved by web" in text
+    g.write_jarvis_page("jarvis/preferences", "- likes tea", replace=True)
     mem = recent_memory(g)
     assert any(m["page"].startswith("jarvis/") for m in mem)
     assert all(m["link"].startswith("logseq://graph/") for m in mem)
@@ -68,5 +61,4 @@ def test_kb_endpoints(client):
     assert client.get("/v1/kb/search", params={"q": "focus mode"}, headers=h).json()[0]["page"] == "Study"
     assert client.get("/v1/kb/graph", headers=h).json()["nodes"]
     assert client.get("/v1/kb/memory", headers=h).status_code == 200
-    assert client.post("/v1/kb/daily-summary", headers=h).json()["page"].startswith("jarvis/daily/")
     assert journal_title(date(2026, 11, 22)) == "Nov 22nd, 2026"
