@@ -26,6 +26,7 @@ import httpx
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event
+from jarvis_hub.guard.validate import best_name, resolver
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.kb.tools import missing_page
@@ -402,6 +403,11 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
                  Risk.READ, list_timers))
     reg.add(Tool("cancel_timer", "builtin", "Stop a running timer. Use for: 'cancel the pasta timer', 'stop the timer'.",
                  _obj({"label": {"type": "string"}}, ["label"]), Risk.WRITE, cancel_timer))
+
+    def running_label(args: dict) -> dict | None:  # "the pasta timer" -> the timer labelled "pasta"
+        hit = best_name(str(args.get("label", "")), [t["label"] for t in timers.active.values()])
+        return {**args, "label": hit} if hit else None
+    resolver("cancel_timer", running_label)
     reg.add(Tool("kb_forget", "builtin",
                  "Forget a whole page of your memories. Use for: 'forget your preferences page'. Needs approval.",
                  _obj({"page": {"type": "string", "description": "e.g. jarvis/preferences"}}, ["page"]),

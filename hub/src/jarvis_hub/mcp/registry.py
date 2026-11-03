@@ -16,6 +16,7 @@ from mcp import Client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 
 from jarvis_hub.approval.gate import Risk
+from jarvis_hub.tools.cards import card
 from jarvis_hub.tools.names import internal_name, model_name
 
 log = logging.getLogger(__name__)
@@ -51,8 +52,10 @@ class Tool:
         return model_name(self.name)
 
     def openai_schema(self) -> dict:
+        c = card(self.name)  # a tool's card may say what it is NOT for
+        desc = self.description + (f" Not for: {c.not_for}." if c and c.not_for else "")
         return {"type": "function", "function": {
-            "name": self.model_name, "description": self.description[:1024],
+            "name": self.model_name, "description": desc[:1024],
             "parameters": self.parameters or {"type": "object", "properties": {}}}}
 
 

@@ -76,7 +76,8 @@ def register_notify_tool(reg: ToolRegistry, notifier: Notifier) -> None:
 
     reg.add(Tool("notify", "builtin",
                  "Show the user a notification: a pop-up on this laptop, on their phone, in the HUD, or spoken. "
-                 "Use for: 'notify me on my phone when…', and in skills to alert the user. Only to the user.",
+                 "Use for: 'notify me on my phone when…', 'ping my laptop saying stand up', 'pop up a reminder', and in "
+                 "skills to alert the user. Only to the user.",
                  {"type": "object", "properties": {
                      "title": {"type": "string"},
                      "text": {"type": "string"},

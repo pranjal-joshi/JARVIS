@@ -84,7 +84,8 @@ def test_small_models_get_core_plus_matching_tools_by_spoken_name():
     ran = []
     a = agent([{"role": "assistant", "content": "Fine, sir."}], ran)
     ask(a, "send a text to mum, and what's the weather")
-    assert a.llm.offered[0] == ["calculate", "get_time", "search_notes", "send_text", "weather"]
+    # make_call comes with send_text: the same family (tools/cards.py), so the model picks between them
+    assert a.llm.offered[0] == ["calculate", "get_time", "make_call", "search_notes", "send_text", "weather"]
 
 
 def test_selection_falls_back_to_every_visible_tool_and_claude_sees_all():

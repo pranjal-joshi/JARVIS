@@ -20,8 +20,10 @@ ADB_KEYS = WIN_KEYS[:3] + ["volume_up", "volume_down", "mute", "home", "back", "
 # Ready-made look-only PowerShell for common questions: a 2B model writes PowerShell poorly (made-up
 # parameters and cmdlets), but picks a name from a list well. `command` stays for anything else.
 PS_CHECKS = {
-    "disk_space": "Get-PSDrive -PSProvider FileSystem | Where-Object Used | Select-Object Name, "
-                  "@{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}, @{n='UsedGB';e={[math]::Round($_.Used/1GB,1)}}",
+    # one plain sentence per drive: a 2B model misreads a table of free and used columns
+    "disk_space": "Get-PSDrive -PSProvider FileSystem | Where-Object Used | ForEach-Object { "
+                  "'Drive {0}: {1} GB free of {2} GB ({3}% used)' -f $_.Name, [math]::Round($_.Free/1GB,1), "
+                  "[math]::Round(($_.Used+$_.Free)/1GB,1), [math]::Round(100*$_.Used/($_.Used+$_.Free)) }",
     "top_cpu": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 8 Name, Id, "
                "@{n='CPUSeconds';e={[math]::Round($_.CPU)}}, @{n='MemoryMB';e={[math]::Round($_.WorkingSet64/1MB)}}",
     "top_memory": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 Name, Id, "

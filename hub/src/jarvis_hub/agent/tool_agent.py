@@ -14,7 +14,7 @@ from datetime import datetime
 from jarvis_hub.agent.fastpath import FastPaths
 from jarvis_hub.agent.fastpath import Plan as FastPlan
 from jarvis_hub.agent.style import SentenceGate, tidy
-from jarvis_hub.agent.tool_select import ToolSelector
+from jarvis_hub.agent.tool_select import Ranking, ToolSelector
 from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
@@ -42,7 +42,11 @@ CLAIMS_ACTION = re.compile(
     r"^\W*(noted|saved|stored|added|sent|done|remembered|logged|recorded|deleted|removed)\b"
     r"|\bI(?:'ve| have|'ll| will)?\s+(?:just\s+|now\s+|also\s+)?(?:saved|noted|stored|remembered|added|logged|"
     r"recorded|written|jotted|made a note|sent|deleted|removed|updated|turned|switched|scheduled)\b"
-    r"|\b(?:I'll|I will) (?:remember|keep (?:that|this|it) in mind)", re.I)
+    r"|\b(?:I'll|I will) (?:remember|keep (?:that|this|it) in mind)"
+    # "I'll set a notification...", "I'm proceeding to skip...": a promise that a 2B model then doesn't keep
+    r"|\b(?:I'll|I will|I'm going to|I am going to|I'm now|I am now)\s+(?:now\s+|just\s+)?(?:set|send|ping|notify|"
+    r"remind|open|play|pause|skip|text|message|call|turn|add|schedule|lock|save|note|start|cancel|stop|mute)\b"
+    r"|\bproceeding to\b", re.I)
 CLAIM_NUDGE = ("(system) Your reply says you did something, but no tool that changes anything ran this turn. "
                "If the user wanted it saved or done, call the tool now (remember, for a fact about the user). "
                "Otherwise answer without claiming you did it.")
@@ -63,6 +67,22 @@ CAPTURE_SCHEMA = {"type": "object", "required": ["facts"], "properties": {"facts
                             "properties": {"fact": {"type": "string"}, "topic": {"type": "string"}}}}}}
 FACT_HINT = ("\nThe user's last message tells you something about them. If it is worth keeping, call remember "
              "with it (exact names, dates and numbers) before you answer.")
+# A question about the user's own life ("what's my name", "what do you know about me"): their notes are
+# searched before the model answers, because a 2B model answers these from nothing ("You are JARVIS").
+ABOUT_ME = re.compile(r"\b(?:my|me|mine|I|I'm|am I)\b", re.I)
+QUESTION = re.compile(r"\?\s*$|^\s*(?:what|when|where|who|whose|which|how|do|does|did|is|are|was|were|have|has|"
+                      r"remind me|tell me)\b", re.I)
+# below this, the best-matching tool is only a loose match ("remind me what I'm called" ~ set_timer 0.50),
+# so a question about the user still goes to their notes first
+WEAK_MATCH = 0.6
+ABOUT_PAGE = "jarvis/people"  # what JARVIS has learned about the user and their people
+# Constrained tool pick: when the model claims an action no tool did, Ollama's grammar makes it name one
+# of the offered tools (or none), then fill its arguments as valid JSON.
+PICK_PROMPT = ("(system) Which tool does what the user just asked? Answer with one tool name, or none if the "
+               "request needs no tool.")
+ARGS_PROMPT = "(system) Fill in the arguments for {name} ({desc}). Use the user's own words, names, dates and numbers."
+REPEAT = ("ERROR: you already called {name} with these arguments this turn; its result is above. Answer from it "
+          "now, or call a different tool.")
 
 
 class ToolAgent:
@@ -96,12 +116,17 @@ class ToolAgent:
         return [t for t in self.tools.all() if t.name not in self.hidden]
 
     async def offered(self, messages: list[dict]) -> list[Tool]:
+        return (await self.ranked(messages)).tools
+
+    async def ranked(self, messages: list[dict]) -> Ranking:
         tools = self.visible()
         if self.selector is None or str(getattr(self.llm, "model", "")).startswith("claude-"):
-            return tools
-        picked = await self.selector.select(tools, messages)
-        log.info("offering %d/%d tools: %s", len(picked), len(tools), ", ".join(t.model_name for t in picked))
-        return picked
+            return Ranking(tools)
+        r = await self.selector.rank(tools, messages)
+        best, score = r.best
+        log.info("offering %d/%d tools (best %s %.2f): %s", len(r.tools), len(tools), best, score,
+                 ", ".join(t.model_name for t in r.tools))
+        return r
 
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus, on_text: Callable[[str], None] | None = None,
@@ -124,6 +149,7 @@ class ToolAgent:
         # is the same on every turn so Ollama can reuse its cached prefix; what changes (the time, hints)
         # rides on the latest user message instead.
         said = _last_user(messages)
+        turn.said = said
         turn.heard = " ".join(m["content"] for m in messages if m.get("role") == "user")[-1500:]
         if self.fast and (plan := self.fast.match(said)):
             if (reply := await self._fast(plan, turn)) is not None:
@@ -143,9 +169,13 @@ class ToolAgent:
     async def _loop(self, convo: list[dict], t: "_Turn") -> str:
         if t.route != "confirm":
             t.route = "model"
-        schemas = [tool.openai_schema() for tool in await self.offered(convo)]
+        t.ranking = await self.ranked(convo)
+        offered = t.ranking.tools
+        schemas = [tool.openai_schema() for tool in offered]
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0}))
-        faked = claimed = False
+        if t.route == "model" and (looked := await self._look_first(t)):
+            convo += looked
+        faked = claimed = forced = False
         for step in range(MAX_STEPS):
             streamed = []
             gate = SentenceGate(lambda x: (streamed.append(x), t.on_text(x)), t.source) if t.on_text else None
@@ -158,8 +188,17 @@ class ToolAgent:
                 return self._reply(t, "My apologies, sir, the language model is not answering.")
             calls = msg.get("tool_calls") or []
             raw = _strip_think(msg.get("content") or "").strip()
-            if gate and not calls and not _fakes_tool_use(raw) and not (CLAIMS_ACTION.search(raw) and not t.changed):
+            claims = bool(CLAIMS_ACTION.search(raw)) and not t.changed
+            skipped = not calls and not forced and not _fakes_tool_use(raw) and self._skipped_tool(raw, claims, t)
+            if gate and not calls and not _fakes_tool_use(raw) and not claims and not skipped:
                 gate.flush()
+            if skipped:
+                forced = True
+                calls = await self._pick_tool(convo, offered, t)
+                if not calls and claims:  # it claimed an action and no tool fits: don't pass the claim on
+                    if streamed:
+                        t.on_text(None)
+                    return self._reply(t, NOT_DONE)
             if calls and streamed or (not calls and _fakes_tool_use(raw) and streamed):
                 t.on_text(None)  # what streamed was not the answer after all: tell the client to drop it
             if not calls:
@@ -190,16 +229,29 @@ class ToolAgent:
                 return self._reply(t, tidy(text, t.source))
             asked = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": [],
                      **({"_claude": msg["_claude"]} if msg.get("_claude") else {})}
-            answers, final = [], None
+            answers, final, done = [], None, []
             for call in calls:
-                prep, hold = self._prepare(call), ""
+                sig = _signature(call)
+                if sig in t.calls_made:  # the same call again: it has its answer already
+                    t.repeats += 1
+                    if t.repeats > 1:
+                        break
+                    prep, hold = REPEAT.format(name=call.get("function", {}).get("name", "")), ""
+                else:
+                    t.calls_made.add(sig)
+                    prep, hold = self._prepare(call), ""
                 if not isinstance(prep, str):
-                    for hook in PRE_TOOL:  # guard/hooks.py: needless search, unsaid names/dates, taint
+                    for hook in PRE_TOOL:  # guard/hooks.py: arguments, needless search, unsaid names/dates, taint
                         if v := hook(prep[0], prep[1], t):
                             if v.kind == "error":
                                 prep = v.message
                                 break
+                            if v.kind == "fix":  # arguments corrected (a timer label, a page name)
+                                prep = (prep[0], v.args)
+                                continue
                             hold = v.message  # "ask": a human decides, whatever the policy says
+                if isinstance(prep, str):
+                    self._rejected(call, prep, t)
                 if not isinstance(prep, str) and not hold and self._needs_voice_yes(prep[0], prep[1], t):
                     # Ask aloud and end the turn; the user's next words answer it (see run/_resume).
                     tool, args = prep
@@ -226,7 +278,13 @@ class ToolAgent:
                 body = _unfence(result)
                 if tool and tool.final_answer and body is not None and not body.startswith("ERROR"):
                     final = body
+                ok = tool and body is not None and not body.startswith("ERROR") and not isinstance(prep, str)
+                done.append(_done(tool.name, prep[1], body.startswith("(dry run")) if ok and tool.name in _DONE else None)
+            if t.repeats > 1:
+                break
             convo += [asked, *answers]
+            if final is None and done and all(done):  # simple actions: a fixed reply, not the model's rewording
+                final = " ".join(done)
             if final is not None:
                 return self._reply(t, final)
             t.bus.publish(Event("thinking", t.source, t.request_id, {"step": step + 1}))
@@ -269,6 +327,73 @@ class ToolAgent:
 
     def _is_claude(self) -> bool:
         return str(getattr(self.llm, "model", "")).startswith("claude-")
+
+    async def _look_first(self, t: "_Turn") -> list[dict]:
+        """A question about the user's own life: search their notes before the model answers, and hand it
+        the call and its result as if it had made it. [] when the request isn't one."""
+        tool = self.tools.get("kb_search")
+        said = t.said.strip()
+        if (tool is None or tool.name in self.hidden or self._is_claude() or not said
+                or t.ranking is None or not (t.ranking.best[0] == "kb_search" or t.ranking.best[1] < WEAK_MATCH)
+                or not (ABOUT_ME.search(said) and QUESTION.search(said))):
+            return []
+        args = {"query": _keywords(said)[:200]}
+        if not args["query"] and (page := self.tools.get("kb_read_page")) and page.name not in self.hidden:
+            # "what do you know about me": no keywords to search on, so read what JARVIS keeps about them
+            tool, args = page, {"page": ABOUT_PAGE}
+        elif not args["query"]:
+            args["query"] = said[:200]
+        result = await self._approve_and_run(tool, args, t)
+        call = {"id": "look-1", "type": "function", "function": {"name": tool.model_name, "arguments": json.dumps(args)}}
+        t.calls_made.add(_signature(call))
+        log.info("looked in the notes first: %.80s", said)
+        return [{"role": "assistant", "content": "", "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": "look-1", "content": result}]
+
+    def _skipped_tool(self, reply: str, claims: bool, t: "_Turn") -> bool:
+        """The model answered without a tool where one was needed: its reply claims an action no tool did.
+        (Retrieval similarity alone is not a signal: with per-example matching nearly every request,
+        "tell me a joke" included, scores high against something.) Local models only."""
+        return claims and not self._is_claude() and hasattr(self.llm, "json")
+
+    async def _pick_tool(self, convo: list[dict], offered: list[Tool], t: "_Turn") -> list[dict]:
+        """Make the model name one offered tool (or none) and fill its arguments, both under a JSON schema
+        Ollama enforces while decoding: a valid call, or [] when it picks none or can't."""
+        names = [x.model_name for x in offered if x.name not in self.hidden]
+        try:
+            out = await self.llm.json([*convo, {"role": "user", "content": PICK_PROMPT}], {
+                "type": "object", "required": ["tool"],
+                "properties": {"tool": {"type": "string", "enum": [*names, "none"]}}})
+            name = str((out or {}).get("tool", "none"))
+            tool = self.tools.get(name)
+            if name not in names or tool is None:
+                log.info("constrained pick: none")
+                return []
+            params = tool.parameters or {}
+            args = {}
+            if params.get("properties"):
+                args = await self.llm.json(
+                    [*convo, {"role": "user", "content": ARGS_PROMPT.format(name=name, desc=tool.description[:300])}],
+                    {"type": "object", "properties": params["properties"], "required": params.get("required", [])})
+        except LLMError as e:
+            log.info("constrained pick unavailable: %s", e)
+            return []
+        log.info("constrained pick: %s %s", name, json.dumps(args)[:200])
+        t.trace.append({"tool": tool.name, "decision": "picked", "rule": "harness", "why": "the model skipped the tool"})
+        return [{"id": "pick-1", "type": "function", "function": {"name": name, "arguments": json.dumps(args or {})}}]
+
+    def _rejected(self, call: dict, why: str, t: "_Turn") -> None:
+        """A call refused before it ran (unknown tool, bad arguments, a hook): kept in the audit, so the
+        HUD and the evals see how often the model gets a call wrong, not only the ones that ran."""
+        fn = call.get("function", {})
+        tool = self.tools.get(fn.get("name", ""))
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {"raw": str(fn.get("arguments"))[:300]}
+        self.audit.record(request_id=t.request_id, source=t.source, tool=tool.name if tool else fn.get("name", "?"),
+                          risk=tool.risk if tool else Risk.READ, arguments=args if isinstance(args, dict) else {},
+                          status="rejected", approved_by=None, result=why[:500])
 
     async def _capture(self, said: str, t: "_Turn") -> str | None:
         """Memory as its own step: when the user states something about themselves, a schema-constrained
@@ -429,6 +554,7 @@ class ToolAgent:
                 log.exception("tool %s failed", name)
                 output, status = f"ERROR: {e}", "error"
         output = output[:MAX_TOOL_RESULT_CHARS]
+        t.called = True
         for hook in POST_TOOL:  # guard/hooks.py: records outside text (taint)
             output = hook(tool, args, output, t)
         t.seen.append(output)
@@ -477,6 +603,33 @@ class _Turn:
     intent: str = ""
     model: str = ""
     started: float = field(default_factory=time.time)
+    said: str = ""  # the user's latest words
+    ranking: Ranking | None = None  # which tools the request matched, and how closely
+    called: bool = False  # some tool ran this turn
+    calls_made: set = field(default_factory=set)  # (name, arguments) already called: no repeats
+    repeats: int = 0
+
+
+_FILLER = set("""a an the and or of to in on at for about is are was were be been am do does did have has had i i'm
+me my mine you your what what's whats when where who whose which how tell remind again please jarvis sir can could
+would will know any anything that this it there here""".split())
+_SAME = {"called": "name", "named": "name", "live": "live address area", "born": "birthday"}
+
+
+def _keywords(said: str) -> str:
+    """A question as search keywords: notes search scores "name" far closer to "My name is Pranjal" than
+    the whole of "remind me what I'm called again"."""
+    words = [_SAME.get(w, w) for w in re.findall(r"[a-z0-9']+", said.lower()) if w not in _FILLER]
+    return " ".join(words)
+
+
+def _signature(call: dict) -> tuple[str, str]:
+    fn = call.get("function", {})
+    try:
+        args = json.dumps(json.loads(fn.get("arguments") or "{}"), sort_keys=True)
+    except json.JSONDecodeError:
+        args = str(fn.get("arguments"))
+    return fn.get("name", ""), args
 
 
 def _tokens(m: dict) -> int:
@@ -516,6 +669,26 @@ _SAYS = {
     "adb_whatsapp_send": lambda a: f"send a WhatsApp to {a.get('to')} saying {a.get('text')}",
     "adb_call": lambda a: f"call {a.get('to')}",
 }
+
+
+# Simple actions answered with a fixed sentence once they succeed, in the past tense. A 2B model's own
+# wording of these went wrong ("I'm proceeding to skip...", "Notification sent to Sanika" after a text).
+_MEDIA = {"play_pause": "paused or resumed the music", "next": "skipped to the next track",
+          "previous": "gone back a track", "stop": "stopped the music", "mute": "muted the laptop",
+          "volume_down": "turned the laptop volume down", "volume_up": "turned the laptop volume up"}
+_DONE = {
+    "win_media": lambda a: _MEDIA.get(str(a.get("key")), f"pressed {a.get('key')} on the laptop"),
+    "win_open": lambda a: f"opened {a.get('target')} on the laptop",
+    "win_lock": lambda a: "locked the laptop",
+    "adb_open_app": lambda a: f"opened {a.get('package')} on your phone",
+    "adb_key": lambda a: f"pressed {str(a.get('key', '')).replace('_', ' ')} on your phone",
+    "notify": lambda a: f"sent the notification \"{a.get('text')}\"",
+}
+
+
+def _done(name: str, args: dict, dry_run: bool) -> str:
+    said = _DONE[name](args)
+    return f"I would have {said}, sir (dry run)." if dry_run else f"I've {said}, sir."
 
 
 def _describe(tool: Tool, args: dict) -> str:

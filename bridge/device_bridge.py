@@ -524,6 +524,9 @@ SECRET = re.compile(r"(^\.env|\.pem$|\.key$|\.pfx$|\.p12$|id_rsa|id_ed25519|id_e
                     r"^\.ssh$|^\.gnupg$|^\.aws$|^\.azure$|^\.kube$|^\.docker$|cookies|login data|"
                     r"^local state$|\.rdp$)", re.I)
 MAX_FILE_BYTES = 200_000
+# folder names people (and small models) say, under this user's profile; still only readable if a shared
+# folder (or a shared drive) holds them
+KNOWN_FOLDERS = {n.lower(): n for n in ("Downloads", "Documents", "Desktop", "Pictures", "Music", "Videos")}
 
 
 def _in_roots(rel: str) -> tuple[str, Path]:
@@ -532,6 +535,9 @@ def _in_roots(rel: str) -> tuple[str, Path]:
     if not FILE_ROOTS:
         raise ActionError("no folders are shared with JARVIS (DEVICE_FILES_ALLOW is empty)")
     rel = rel.strip().strip('"')
+    head, _, tail = rel.replace("\\", "/").strip("/ ").partition("/")
+    if head.lower() in KNOWN_FOLDERS and head.lower() not in FILE_ROOTS:  # "Downloads" -> this user's Downloads
+        rel = str(Path.home() / KNOWN_FOLDERS[head.lower()] / tail)
     if re.match(r"^[A-Za-z]:([\\/]|$)", rel):  # an absolute path: find the shared folder holding it
         path = Path(rel if len(rel) > 2 else rel + "\\").resolve()
         name, root = next(((n, r) for n, r in sorted(FILE_ROOTS.items(), key=lambda kv: -len(str(kv[1])))

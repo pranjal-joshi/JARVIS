@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from jarvis_hub.approval.gate import Risk
+from jarvis_hub.guard.validate import check
 
 # tools whose output is someone else's words
 TAINT_SOURCES = {"web_search", "fetch_page", "adb_notifications", "adb_sms_read", "adb_call_log", "fs_read",
@@ -42,8 +43,9 @@ SPAN = 5  # this many words in a row from outside text = carried over
 
 @dataclass
 class Verdict:
-    kind: str  # "error" | "ask"
+    kind: str  # "error" | "ask" | "fix" (args holds the corrected arguments; later hooks see those)
     message: str
+    args: dict | None = None
 
 
 def unsaid(tool, args: dict, heard: str, seen: list[str]) -> list[str]:
@@ -90,6 +92,18 @@ def carried(args: dict, tainted: list[str], heard: str) -> str:
 
 
 # ---------- the hooks ----------
+def arguments(tool, args, t) -> Verdict | None:
+    """Types, enum spelling and live names (guard/validate.py), fixed where that needs no guessing."""
+    fixed, error = check(tool, args)
+    if error:
+        return Verdict("error", error)
+    if fixed is not None:
+        t.trace.append({"tool": tool.name, "decision": "fixed", "rule": "arguments",
+                        "why": ", ".join(f"{k}={fixed[k]!r}" for k in fixed if fixed.get(k) != args.get(k))})
+        return Verdict("fix", "", fixed)
+    return None
+
+
 def needless_search(tool, args, t) -> Verdict | None:
     if tool.name == "web_search" and not CURRENT.search(t.heard):
         # a 2B model searches for "the capital of Australia": a credit, an approval and 20 s, for nothing
@@ -118,7 +132,7 @@ def record_taint(tool, args, output: str, t) -> str:
     return output
 
 
-PRE_TOOL: list[Callable] = [needless_search, slots, taint]
+PRE_TOOL: list[Callable] = [arguments, needless_search, slots, taint]
 POST_TOOL: list[Callable] = [record_taint]
 
 

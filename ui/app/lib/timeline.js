@@ -72,6 +72,7 @@ export function insight(tool, status, preview = "") {
   if (status === "dry-run") return "DRY RUN"; // recorded, not done (evals, new skills)
   if (status === "timeout") return "EXPIRED";
   if (status === "error") return "FAULT";
+  if (status === "rejected") return "RETRY"; // refused before running (bad arguments); the model was told why
   if (status === "pending") return "AWAITING CLEARANCE";
   if (status === "running") return "…";
   const lines = String(preview).split("\n").filter((l) => l.trim());

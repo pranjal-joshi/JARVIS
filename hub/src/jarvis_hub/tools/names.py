@@ -15,7 +15,7 @@ MODEL_NAMES = {
     "kb_delete_item": "delete_item",
     "fetch_page": "read_web_page",
     "win_info": "laptop_status",
-    "win_media": "laptop_media_key",
+    "win_media": "media_control",
     "win_open": "open_on_laptop",
     "win_lock": "lock_laptop",
     "win_screenshot": "laptop_screenshot",

@@ -9,6 +9,7 @@ from datetime import date
 
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.events.bus import Event
+from jarvis_hub.guard.validate import best_name, resolver
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
@@ -87,6 +88,14 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
                  "Read one notes page in full by name. Use for: 'read my Groceries page', 'what's on today's journal'.",
                  _obj({"page": {"type": "string", "description": "page name, e.g. Groceries"}}, ["page"]),
                  Risk.READ, kb_read_page))
+
+    def page_name(args: dict) -> dict | None:  # "groceries list" -> the one page it clearly means
+        wanted = str(args.get("page", ""))
+        if not wanted or graph.page(wanted) is not None:
+            return None
+        hit = best_name(wanted, [p.name for p in graph.pages()])
+        return {**args, "page": hit} if hit else None
+    resolver("kb_read_page", page_name)
     reg.add(Tool("kb_tasks", "builtin",
                  "The user's to-do list with due dates. Use for: 'what are my tasks', 'anything due this week'.",
                  _obj({"include_done": {"type": "boolean"}}, []), Risk.READ, kb_tasks))
