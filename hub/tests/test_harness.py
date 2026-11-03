@@ -183,3 +183,21 @@ def test_a_correction_is_not_captured_as_a_new_fact():
     a, _ = setup(llm)
     ask(a, "no, my wife's name is Sanika, not Tanika")
     assert "correct_memory" in llm.seen[0][-1]["content"]  # the hint rides on the user turn
+
+
+def test_search_returns_the_memory_page_a_question_names(tmp_path):
+    from jarvis_hub.kb.graph import LogseqGraph
+    from jarvis_hub.kb.index import KBIndex
+    g = LogseqGraph(str(tmp_path))
+    g.write_jarvis_page("jarvis/family", "Today is Pranav's birthday - he's my nephew")
+    g.write_jarvis_page("jarvis/dates", "The user's son Chiku's birthday is 13 May.")
+    g.write_jarvis_page("jarvis/events", "Diwali is on 8th Nov.")
+    idx = KBIndex(g, None, "m", "http://127.0.0.1:9")  # no vector index: topic pages and keywords only
+
+    def pages(q):
+        return {h["page"] for h in asyncio.run(idx.search(q))}
+    assert pages("who else is there in family") == {"jarvis/family"}
+    assert pages("what are important dates") == {"jarvis/dates"}
+    assert "jarvis/events" in pages("what are upcoming events")
+    assert pages("any relatives I should call") == {"jarvis/family"}
+    assert pages("Diwali") == {"jarvis/events"}  # nothing named: plain word match

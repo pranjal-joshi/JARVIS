@@ -831,7 +831,7 @@ export default function Hud() {
                 <div className="tools-list" role="dialog" aria-label="Available tools">
                   <p className="tools-note">auto = runs straight away (audited) · ask = waits for your approval</p>
                   <ul>
-                    {[...(status.tools || [])].sort((a, b) => a.origin.localeCompare(b.origin) || a.name.localeCompare(b.name)).map((t) => (
+                    {[...(status.tools || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((t) => (
                       <li key={t.name} title={t.description || ""}>
                         <span className={`gate ${t.asks ? "ask" : "auto"}`}>{t.asks ? "ask" : "auto"}</span>
                         <b>{t.name}</b>

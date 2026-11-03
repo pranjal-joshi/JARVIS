@@ -18,6 +18,25 @@ NS = uuid.UUID("8f5b0c2e-6a0b-4d55-9b5f-6a7c1e2d3f40")
 WORD = re.compile(r"[a-z0-9]+")
 
 
+# words that name a memory page without saying its name ("relatives" -> jarvis/family)
+TOPIC_WORDS = {
+    "relatives": ("family",), "relative": ("family",), "nephew": ("family",), "niece": ("family",),
+    "cousin": ("family",), "son": ("family", "people"), "daughter": ("family", "people"),
+    "wife": ("people", "family"), "husband": ("people", "family"), "kids": ("family",), "children": ("family",),
+    "birthday": ("dates",), "birthdays": ("dates",), "anniversary": ("dates",), "anniversaries": ("dates",),
+    "upcoming": ("events", "dates"), "festival": ("events",), "festivals": ("events",), "plans": ("events",),
+    "address": ("location",), "live": ("location",), "home": ("location",), "phone": ("phone",),
+    "likes": ("preferences",), "prefer": ("preferences",), "preference": ("preferences",),
+}
+_FILLER = set("""a an the and or of to in on at for about is are was were be been am do does did have has had i i'm
+me my mine you your what what's whats when where who whose which how tell remind again please jarvis sir can could
+would will know any anything that this it there here else important all some list show""".split())
+
+
+def _content_words(query: str) -> list[str]:
+    return [w for w in WORD.findall(query.lower()) if w not in _FILLER]
+
+
 class KBIndex:
     def __init__(self, graph: LogseqGraph, embedder: LLMClient | None, embed_model: str,
                  qdrant_url: str, min_score: float = 0.6) -> None:
@@ -119,6 +138,28 @@ class KBIndex:
 
     # ---------- query ----------
     async def search(self, query: str, limit: int = 6) -> list[dict]:
+        """Memory pages the query names first ("family" -> jarvis/family), then the closest notes by
+        meaning, then (if those found nothing) a plain word match. A short note scores low against a
+        one-word query by meaning alone, so "who is in my family" found nothing on a page called family."""
+        topical = self._topic_hits(query, limit)
+        seen = {(h["page"], h["text"]) for h in topical}
+        found = [h for h in await self._search(query, limit) if (h["page"], h["text"]) not in seen]
+        if not found and not topical:
+            found = self._keyword_search(" ".join(_content_words(query)), limit)
+        return (topical + found)[:max(limit, len(topical))]
+
+    def _topic_hits(self, query: str, limit: int) -> list[dict]:
+        pages = {p.name.lower(): p for p in self.graph.pages()
+                 if not p.is_journal and p.name.lower().startswith("jarvis/")}
+        out = []
+        for word in _content_words(query):
+            for topic in {word, word.rstrip("s"), *TOPIC_WORDS.get(word, ())}:
+                page = pages.pop(f"jarvis/{topic}", None)
+                if page:
+                    out += [{"page": page.name, "text": b.text, "score": 1.0} for b in page.blocks[:limit]]
+        return out
+
+    async def _search(self, query: str, limit: int) -> list[dict]:
         if self.vector_ready:
             try:
                 vec = (await self._embed([query], "query"))[0]
@@ -132,10 +173,12 @@ class KBIndex:
                 return [h for h in hits if h["score"] >= self.min_score and h["score"] >= top - 0.08][:limit]
             except (httpx.HTTPError, LLMError, KeyError) as e:
                 log.warning("vector search failed, using keywords: %s", e)
-        return self._keyword_search(query, limit)
+        return self._keyword_search(" ".join(_content_words(query)), limit)
 
     def _keyword_search(self, query: str, limit: int) -> list[dict]:
         terms = set(WORD.findall(query.lower()))
+        if not terms:
+            return []
         scored: list[tuple[float, Block]] = []
         for page in self.graph.pages():
             for b in page.blocks:

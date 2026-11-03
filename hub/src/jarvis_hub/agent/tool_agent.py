@@ -76,6 +76,9 @@ FACT_HINT = ("\nThe user's last message tells you something about them. If it is
 # A question about the user's own life ("what's my name", "what do you know about me"): their notes are
 # searched before the model answers, because a 2B model answers these from nothing ("You are JARVIS").
 ABOUT_ME = re.compile(r"\b(?:my|me|mine|I|I'm|am I)\b", re.I)
+# names a memory topic: the notes are searched first whatever other tool also matches ("dates" ~ get_time)
+TOPIC = re.compile(r"\b(?:family|relatives?|birthdays?|anniversar(?:y|ies)|(?:important|key) dates|"
+                   r"(?:upcoming|coming) (?:events|plans)|festivals?)\b", re.I)
 QUESTION = re.compile(r"\?\s*$|^\s*(?:what|when|where|who|whose|which|how|do|does|did|is|are|was|were|have|has|"
                       r"remind me|tell me)\b", re.I)
 # below this, the best-matching tool is only a loose match ("remind me what I'm called" ~ set_timer 0.50),
@@ -340,9 +343,12 @@ class ToolAgent:
         the call and its result as if it had made it. [] when the request isn't one."""
         tool = self.tools.get("kb_search")
         said = t.said.strip()
-        if (tool is None or tool.name in self.hidden or self._is_claude() or not said
-                or t.ranking is None or not (t.ranking.best[0] == "kb_search" or t.ranking.best[1] < WEAK_MATCH)
-                or not (ABOUT_ME.search(said) and QUESTION.search(said))):
+        if tool is None or tool.name in self.hidden or self._is_claude() or not said or not QUESTION.search(said):
+            return []
+        # a memory topic ("important dates", "family") always; "my ..." only if no other tool fits clearly
+        # ("what's my phone battery" is for phone_status)
+        loose = t.ranking is not None and (t.ranking.best[0] == "kb_search" or t.ranking.best[1] < WEAK_MATCH)
+        if not (TOPIC.search(said) or (ABOUT_ME.search(said) and loose)):
             return []
         args = {"query": _keywords(said)[:200]}
         if not args["query"] and (page := self.tools.get("kb_read_page")) and page.name not in self.hidden:
