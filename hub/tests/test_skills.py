@@ -241,3 +241,40 @@ def test_a_short_request_naming_a_skill_runs_it(graph_dir):
     assert plan and plan.steps == [("run_skill", {"name": "Fun fact"})]
     assert FastPaths(LogseqGraph(str(graph_dir))).match("what time is it").intent == "time"  # others unchanged
 
+
+def test_a_webhook_named_in_the_steps_becomes_the_trigger(tmp_path):
+    """The 2B model wrote "Run on webhook doorbell." as a step and left the trigger out: a manual skill."""
+    from jarvis_hub.automation.skill_tools import WEBHOOK_STEP, register_skill_tools
+    from jarvis_hub.mcp.registry import ToolCtx, ToolRegistry
+
+    g = LogseqGraph(str(tmp_path / "kb"))
+    bus = EventBus()
+    eng = SkillEngine(g, bus, FakeAgent(), Settings(_env_file=None), tmp_path / "skills.json")
+    reg = ToolRegistry()
+    register_skill_tools(reg, eng, g)
+    ctx = ToolCtx(bus, "web", "r1")
+
+    async def call(tool, **a):
+        return await reg.get(tool).call(a, ctx)
+
+    async def scenario():
+        out = await call("create_skill", name="doorbell alert", instructions=(
+            "Run on webhook doorbell.\nSteps: tell me in one short sentence what the webhook says.\n"
+            "Then send me a notification with that sentence."))
+        assert "runs on webhook matching doorbell" in out
+        page = (tmp_path / "kb" / "pages" / "skills___Doorbell alert.md").read_text(encoding="utf-8")
+        assert page == ("trigger:: webhook\nmatch:: doorbell\n\n- tell me in one short sentence what the webhook says.\n"
+                        "- Then send me a notification with that sentence.\n")
+        # an existing manual skill fixed the same way by update_skill
+        await call("create_skill", name="washer", instructions="Runs when the webhook washer fires.\nSay the laundry is done.")
+        assert eng.skills()[-1]["trigger"] == "webhook" and eng.skills()[-1]["match"] == "washer"
+        # a step that merely mentions a webhook stays a step
+        out = await call("create_skill", name="explain", instructions="Tell me what a webhook is.")
+        assert "runs when asked" in out
+
+    asyncio.run(scenario())
+    for ok in ("Run on webhook doorbell.", "runs when the webhook doorbell fires", "Trigger on webhook ado-build",
+               "on the webhook called 'github'"):
+        assert WEBHOOK_STEP.match(ok), ok
+    for no in ("Tell me what the webhook says.", "Say the webhook doorbell rang", "run the doorbell skill"):
+        assert not WEBHOOK_STEP.match(no), no

@@ -12,7 +12,8 @@ from jarvis_hub.agent.base import EchoAgent
 from jarvis_hub.agent.fastpath import FastPaths
 from jarvis_hub.agent.tool_select import ToolSelector
 from jarvis_hub.agent.tool_agent import ToolAgent
-from jarvis_hub.api import control, events_ws, openai_compat
+from jarvis_hub.api import control, events_ws, hooks, openai_compat
+from jarvis_hub.api.hooks import Webhooks
 from jarvis_hub.approval.gate import ApprovalGate
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.audit.traces import TraceStore
@@ -132,6 +133,7 @@ async def lifespan(app: FastAPI):
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     register_skill_tools(st.tools, st.skills, st.kb_graph)
+    st.hooks = Webhooks(s, Path(s.hub_db_path).with_name("webhooks.json"))
     st.watch = WatchEngine(st.bus, s, st.notifier, st.skills, Path(s.hub_db_path).with_name("watchers_state.json"))
     if s.agent != "echo":
         st.skills.start()
@@ -187,6 +189,7 @@ if origins := [o.strip() for o in get_settings().hub_cors_origins.split(",") if 
                        allow_headers=["*"])
 app.include_router(openai_compat.router)
 app.include_router(control.router)
+app.include_router(hooks.router)
 app.include_router(events_ws.router)
 
 

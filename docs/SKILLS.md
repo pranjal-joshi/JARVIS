@@ -17,10 +17,35 @@ match:: Pixel
 | `notification` | a new notification on an allowed phone (WhatsApp, SMS, mail, any app; polled every 10 s) | "App: title — text" |
 | `call_incoming` | an allowed phone starts ringing | caller number and phone model |
 | `schedule` | `schedule:: 07:30` (daily) or `schedule:: every 30m` / `every 2h` | – |
+| `watch` | a watcher (HUD → **watch**) finds a new item | "watcher name: item text" |
+| `webhook` | something POSTs to `/v1/hooks/<name>` (see below) | the hook name only, exactly (not the body) |
 
 HUD header → **skills**: every skill page with its trigger, **enable** / **on**, and **run** (test it now).
 Events (hooks) show in the system console (⚡) and in the panel's recent-events list; a skill's answer
 appears in the chat marked ⚙ and is spoken when voice is on.
+
+## Webhooks
+
+Any service that can send an HTTP request can start a skill: a Home Assistant automation, GitHub or Azure
+DevOps service hooks, IFTTT/Zapier, a cron job.
+
+```
+trigger:: webhook
+match:: github
+
+- Tell me in one sentence what happened on GitHub.
+```
+
+- **Turn it on:** HUD → ⚙ → **webhooks** → *turn on* makes a secret (or set `HUB_WEBHOOK_SECRET`; then the
+  HUD shows it but can't rotate it). No secret = `/v1/hooks/*` answers 404.
+- **Call it:** `POST https://<hud>/api/hub/hooks/<name>` (through the HUD's proxy) or
+  `http://hub:8700/v1/hooks/<name>` from another container, with `X-Jarvis-Token: <secret>` (or
+  `Authorization: Bearer <secret>`). GitHub can instead sign the body with the secret (`X-Hub-Signature-256`).
+- The body (JSON or text, ≤ 64 KB) becomes one line ("github (pull_request): action=closed;
+  pull_request.title=…") that the skill sees **as data**. `X-GitHub-Event` / `X-Jarvis-Event` adds the event name.
+- 20 calls a minute per hook, 60 in all. The panel shows the last deliveries (refused ones too, never the
+  body), the skills listening, a ready-made curl, and **fire test** (runs the skills without the secret).
+- The secret is not a hub client token: it can't chat, approve or read anything.
 
 ## Safety
 

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     hub_token_satellite: SecretStr | None = None
     hub_token_web: SecretStr | None = None
     hub_token_phone: SecretStr | None = None
+    # inbound webhooks (POST /v1/hooks/<name>): set here, or make one in the HUD's webhooks panel; empty = off
+    hub_webhook_secret: SecretStr = SecretStr("")
     hub_db_path: str = "jarvis.db"
     # every conversation turn as the model saw it, in traces.db next to the hub's database (0 = not kept)
     trace_days: float = 30

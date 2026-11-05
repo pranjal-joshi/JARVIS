@@ -17,7 +17,8 @@ from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
 RUN_WAIT_S = 90  # run_skill waits this long for the answer; a longer run's answer shows on the HUD
 TRIGGER_HELP = ("manual (only when asked: 'run the X skill'), schedule (with schedule like 07:30 or every 2h), "
-                "device_joined, device_left, timer_done, notification, call_incoming")
+                "device_joined, device_left, timer_done, notification, call_incoming, watch, "
+                "webhook (with match = the hook name)")
 
 
 def _page(name: str) -> str:
@@ -33,6 +34,7 @@ def _steps(instructions: str) -> list[str]:
     out = []
     for line in instructions.splitlines():
         step = re.sub(r"^(?:[-*•]\s*|\d{1,2}[.)]\s+)+", "", line.strip()).strip()
+        step = re.sub(r"^steps?\s*:\s*", "", step, flags=re.I).strip()  # "Steps: tell me..." -> "tell me..."
         if step:
             out.append(step)
     return out
@@ -47,6 +49,22 @@ def _text(trigger: str, match: str, schedule: str, steps: list[str]) -> str:
 
 def _listed(steps: list[str]) -> str:
     return " ".join(f"({i}) {s.rstrip('.')}." for i, s in enumerate(steps, 1))
+
+
+# "Run on webhook doorbell." / "Runs when the webhook doorbell fires": a small model puts the trigger in the
+# steps instead of trigger/match, which leaves a manual skill no webhook can start
+WEBHOOK_STEP = re.compile(
+    r"^(?:it\s+|this\s+(?:skill\s+)?)?(?:runs?|triggers?|fires?|starts?|trigger(?:ed)?)?\s*(?:on|when|from|via|by|for)\s+"
+    r"(?:a\s+|the\s+)?webhook\s+(?:hook\s+)?(?:called\s+|named\s+)?[\"'“]?([a-z0-9_-]{1,40})[\"'”]?"
+    r"(?:\s+(?:fires|is\s+called|arrives|comes\s+in))?\s*[.!]?$", re.I)
+
+
+def _webhook_from_steps(steps: list[str]) -> tuple[str, list[str]]:
+    """The hook name a step names as the trigger (and the steps without it), or "" when none does."""
+    for i, step in enumerate(steps):
+        if m := WEBHOOK_STEP.match(step.strip()):
+            return m[1].lower(), steps[:i] + steps[i + 1:]
+    return "", steps
 
 
 def _check(trigger: str, schedule: str, steps: list[str]) -> str | None:
@@ -101,6 +119,10 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         trigger = str(args.get("trigger") or "manual").strip().lower()
         schedule, match = str(args.get("schedule") or "").strip(), str(args.get("match") or "").strip()
         steps = _steps(str(args.get("instructions") or ""))
+        if trigger in ("manual", "webhook"):
+            hook, rest = _webhook_from_steps(steps)
+            if hook and (trigger == "manual" or not match or match.lower() == hook):
+                trigger, match, steps = "webhook", hook, rest
         if err := _check(trigger, schedule, steps):
             return err
         page = _page(name)
@@ -126,6 +148,10 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         trigger = str(args.get("trigger") or s["trigger"] or "manual").strip().lower()
         schedule = str(args.get("schedule") or (s["schedule"] if trigger == "schedule" else "")).strip()
         match = str(args["match"] if args.get("match") is not None else s["match"]).strip()
+        if not args.get("trigger") or trigger == "webhook":
+            hook, rest = _webhook_from_steps(steps)
+            if hook and (trigger in ("manual", "webhook")):
+                trigger, match, steps = "webhook", hook, rest
         if err := _check(trigger, schedule, steps):
             return err
         graph.replace_page(s["name"], _text(trigger, match, schedule, steps))
@@ -182,7 +208,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
     shape = {"trigger": {"type": "string", "enum": sorted(TRIGGERS),
                          "description": f"when it runs: {TRIGGER_HELP}"},
              "schedule": {"type": "string", "description": "for trigger schedule: 07:30 or every 30m"},
-             "match": {"type": "string", "description": "optional: words the event must contain (a phone model, timer label)"},
+             "match": {"type": "string", "description": "optional: words the event must contain (a phone model, timer label); for trigger webhook: the hook name, e.g. doorbell"},
              "instructions": {"type": "string", "description": "the steps, one per line, each a request to JARVIS in "
                                                                "the user's words, e.g. 'Say good morning.\\nTell me the "
                                                                "time.' For update_skill: all the new steps (they replace "

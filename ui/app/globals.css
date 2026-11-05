@@ -1416,3 +1416,29 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .win-btns button.mon-clear { width: auto; padding: 0 7px; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; }
 @media (max-width: 720px) { .mnav button { letter-spacing: 0.1em; min-width: 0; } } /* four sections fit a phone */
 
+/* ---------- settings menu (⚙): tabs for the less-used panels ---------- */
+.set-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--cyan-faint); }
+.set-tabs button { cursor: pointer; background: transparent; padding: 3px 10px; font: 10px var(--mono); letter-spacing: 0.08em;
+  border: 1px solid var(--cyan-faint); border-radius: 4px; color: var(--cyan-dim); }
+.set-tabs button:hover { color: var(--text); border-color: var(--cyan-dim); }
+.set-tabs button.on { color: var(--cyan); border-color: var(--cyan); background: rgba(127, 231, 255, 0.08); }
+
+/* ---------- webhooks tab ---------- */
+.hooks-panel code { font: 10px var(--mono); color: var(--text); overflow-wrap: anywhere; }
+.hooks-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; }
+.hooks-row .hooks-secret { flex: 1; min-width: 140px; opacity: 0.85; }
+.hooks-panel .gate { cursor: pointer; background: transparent; padding: 2px 8px; font: 10px var(--mono); border: 1px solid var(--cyan-dim);
+  border-radius: 4px; color: var(--cyan); }
+.hooks-panel .gate.auto { color: var(--green, #6dffa8); border-color: rgba(109, 255, 168, 0.4); cursor: default; }
+.hooks-panel .gate.ask { color: var(--amber); border-color: rgba(255, 179, 71, 0.5); cursor: default; }
+.hooks-panel .gate:disabled { opacity: 0.35; cursor: default; }
+.hooks-try { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--cyan-faint); border-bottom: 1px solid var(--cyan-faint); }
+.hooks-try label { display: grid; grid-template-columns: 38px 1fr; align-items: start; gap: 6px; font-size: 10px; opacity: 0.85; }
+.hooks-try input, .hooks-try textarea { background: rgba(127, 231, 255, 0.04); border: 1px solid var(--cyan-faint); border-radius: 4px;
+  color: var(--text); font: 11px var(--mono); padding: 4px 6px; resize: vertical; min-width: 0; }
+.hooks-try input:focus, .hooks-try textarea:focus { outline: none; border-color: var(--cyan-dim); }
+.hooks-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.hooks-note { margin: 0; opacity: 0.85; color: var(--cyan); }
+.hook-log .bad { color: var(--amber); }
+.hook-log span.off { opacity: 0.4; }
+.hooks-example { display: block; padding: 6px 8px; margin: 2px 0; border: 1px solid var(--cyan-faint); border-radius: 4px; white-space: pre-wrap; opacity: 1; }

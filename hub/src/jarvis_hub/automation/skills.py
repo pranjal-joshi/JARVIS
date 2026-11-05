@@ -8,8 +8,9 @@ are the instructions JARVIS follows, e.g. page `skills/Phone joined`:
     - Tell me the phone's battery level and open Spotify on it.
 
 Triggers: manual (runs only when asked: the HUD's run button, or "run the X skill"), device_joined, device_left (Android over ADB), timer_done, schedule, notification (any new phone
-notification: WhatsApp, SMS, mail...), call_incoming.
-`match::` (optional) must appear in the event text (device model/serial, timer label).
+notification: WhatsApp, SMS, mail...), call_incoming, watch (a watcher found something new), webhook (a POST to
+/v1/hooks/<name>, see api/hooks.py; `match::` the hook name).
+`match::` (optional) must appear in the event text (device model/serial, timer label, hook name).
 `schedule::` for trigger schedule: a daily time like `07:30`, or an interval like `every 30m` / `every 2h`.
 
 Every skill page is on and live as soon as it exists; one can be switched off (and back on) by hand or with
@@ -35,7 +36,7 @@ from jarvis_hub.kb.graph import LogseqGraph
 
 log = logging.getLogger(__name__)
 NS = "skills/"
-TRIGGERS = {"manual", "device_joined", "device_left", "timer_done", "schedule", "notification", "call_incoming", "watch"}
+TRIGGERS = {"manual", "device_joined", "device_left", "timer_done", "schedule", "notification", "call_incoming", "watch", "webhook"}
 EVERY = re.compile(r"^every\s+(\d+)\s*([mh])$", re.I)
 DAILY = re.compile(r"^(\d{1,2}):(\d{2})$")
 CATCH_UP = 6 * 3600  # a daily run missed by more than this (JARVIS was off overnight) is skipped
@@ -108,26 +109,37 @@ class SkillEngine:
         return next(s for s in self.skills() if s["name"].lower() == page.name.lower())
 
     # ---------- events ----------
-    def emit(self, kind: str, text: str, data: dict | None = None) -> None:
+    def emit(self, kind: str, text: str, data: dict | None = None) -> list[str]:
+        """Runs the enabled skills this event matches; returns the names of those started."""
         ev = {"kind": kind, "text": text, "data": data or {}, "ts": time.time()}
         self.recent = [ev, *self.recent][:30]
         self.bus.publish(Event("hook_event", RUN_SOURCE, "", ev))
+        started = []
         for s in self.skills():
-            if s["enabled"] and s["trigger"] == kind and (not s["match"] or s["match"].lower() in text.lower()):
-                self._spawn(s, f"{kind}: {text}")
+            if s["enabled"] and s["trigger"] == kind and (not s["match"] or self._matches(kind, s["match"], text)):
+                if self._spawn(s, f"{kind}: {text}"):
+                    started.append(s["name"])
+        return started
+
+    @staticmethod
+    def _matches(kind: str, match: str, text: str) -> bool:
+        if kind == "webhook":  # the hook's name, not anything in the (outside) body
+            return text.lower().split(":", 1)[0].split(" (", 1)[0].strip() == match.strip().lower()
+        return match.lower() in text.lower()
 
     def on_bus(self, event: Event) -> None:
         if event.type == "timer":
             self.emit("timer_done", event.data.get("label", "timer"), event.data)
 
-    def _spawn(self, skill: dict, why: str) -> None:
+    def _spawn(self, skill: dict, why: str) -> bool:
         key = skill["name"].lower()
         if key in self._running:
-            return  # one run of a skill at a time
+            return False  # one run of a skill at a time
         self.last_run[key] = time.time()
         task = asyncio.get_running_loop().create_task(self.run(skill, why))
         self._tasks.append(task)
         task.add_done_callback(self._tasks.remove)
+        return True
 
     async def run(self, skill: dict, why: str, announce: bool = True) -> str:
         """announce: show the run and its answer on the HUD (off when run_skill gives the answer as its reply)."""

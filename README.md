@@ -94,6 +94,8 @@ approval in the HUD and the expert runs answer-only, with no tools. See [bridge/
   without asking; `powershell_run` asks every time. [bridge/ps_classify.ps1](bridge/ps_classify.ps1) checks each
   command with PowerShell's parser and refuses file writes, moves and deletes, nested shells and `iex`. The output
   of both counts as outside text (taint).
+- **Webhooks.** `POST /v1/hooks/<name>` with the webhook secret starts `trigger:: webhook` skills (Home Assistant,
+  GitHub, Azure DevOps, IFTTT, scripts). Managed in the HUD under ⚙ → webhooks; see [docs/SKILLS.md](docs/SKILLS.md).
 - **Watchers and notifications.** A watcher is a look-only command (gh, az, Outlook COM, any PowerShell) the bridge
   runs on a schedule; new items notify you (Windows toast, phone, HUD, voice) and fire `trigger:: watch` skills.
   They live in `config/watchers.json` (not in git), changed only from the HUD's **watch** panel: the model has no

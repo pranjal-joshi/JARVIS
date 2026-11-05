@@ -25,6 +25,7 @@ const DevicesPanel = dynamic(() => import("./DevicesPanel"), { ssr: false });
 const SkillsPanel = dynamic(() => import("./SkillsPanel"), { ssr: false });
 const GuardPanel = dynamic(() => import("./GuardPanel"), { ssr: false });
 const WatchPanel = dynamic(() => import("./WatchPanel"), { ssr: false });
+const WebhooksPanel = dynamic(() => import("./WebhooksPanel"), { ssr: false });
 const PAGE_MIME = "application/x-jarvis-page"; // a page dragged from the explorer
 
 const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...init });
@@ -296,25 +297,24 @@ export default function Hud() {
   // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
   // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
   // playback ends; listening always brings the orb back to centre.
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [devOpen, setDevOpen] = useState(false);
   const [devCount, setDevCount] = useState(null);
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillCount, setSkillCount] = useState(null);
-  const [guardOpen, setGuardOpen] = useState(false);
   const [watchOpen, setWatchOpen] = useState(false);
+  // the less-used panels (webhooks, guard, devices, tools) share one ⚙ menu with tabs
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState("webhooks");
   const [llmInfo, setLlmInfo] = useState(null); // { loaded, median_s }: the model badge
   const [hookSeq, setHookSeq] = useState(0); // bumps on hook events so open panels refresh
   const openOnly = (which) => { // one header dropdown at a time
-    setToolsOpen(which === "tools"); setDevOpen(which === "dev"); setSkillOpen(which === "skill"); setGuardOpen(which === "guard");
-    setWatchOpen(which === "watch");
+    setSkillOpen(which === "skill"); setWatchOpen(which === "watch"); setSettingsOpen(which === "settings");
   };
   useEffect(() => { // close the tools list on any click outside it
-    if (!toolsOpen && !devOpen && !skillOpen && !guardOpen && !watchOpen) return;
+    if (!skillOpen && !watchOpen && !settingsOpen) return;
     const off = (e) => { if (!e.target.closest?.(".tools-pick")) openOnly(null); };
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
-  }, [toolsOpen, devOpen, skillOpen, guardOpen, watchOpen]);
+  }, [skillOpen, watchOpen, settingsOpen]);
   const [pinned, setPinned] = useState(null); // timeline | console | kb | watch
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
@@ -843,50 +843,38 @@ export default function Hud() {
           )}
           {status && (
             <div className="tools-pick">
-              <button type="button" className="chip" aria-expanded={guardOpen}
-                onClick={() => openOnly(guardOpen ? null : "guard")}
-                title="What JARVIS may do without asking, grants you gave, and eval scores">
-                guard {guardOpen ? "▴" : "▾"}
+              <button type="button" className="chip" aria-expanded={settingsOpen}
+                onClick={() => openOnly(settingsOpen ? null : "settings")}
+                title="Settings: webhooks, guard (what JARVIS may do unasked), devices, tools">
+                ⚙ {settingsOpen ? "▴" : "▾"}
               </button>
-              {guardOpen && (
-                <div className="tools-list" role="dialog" aria-label="Guard">
-                  <GuardPanel version={hookSeq} />
-                </div>
-              )}
-            </div>
-          )}
-          {status && (
-            <div className="tools-pick">
-              <button type="button" className="chip" aria-expanded={devOpen}
-                onClick={() => openOnly(devOpen ? null : "dev")} title="Android devices and QR pairing">
-                devices{devCount != null ? ` ${devCount}` : ""} {devOpen ? "▴" : "▾"}
-              </button>
-              {devOpen && (
-                <div className="tools-list" role="dialog" aria-label="Devices">
-                  <DevicesPanel onCount={setDevCount} version={hookSeq} />
-                </div>
-              )}
-            </div>
-          )}
-          {status && (
-            <div className="tools-pick">
-              <button type="button" className="chip" aria-expanded={toolsOpen}
-                onClick={() => openOnly(toolsOpen ? null : "tools")} title="Show the tools JARVIS can use">
-                tools {status.tools?.length} {toolsOpen ? "▴" : "▾"}
-              </button>
-              {toolsOpen && (
-                <div className="tools-list" role="dialog" aria-label="Available tools">
-                  <p className="tools-note">auto = runs straight away (audited) · ask = waits for your approval</p>
-                  <ul>
-                    {[...(status.tools || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((t) => (
-                      <li key={t.name} title={t.description || ""}>
-                        <span className={`gate ${t.asks ? "ask" : "auto"}`}>{t.asks ? "ask" : "auto"}</span>
-                        <b>{t.name}</b>
-                        <i>{t.origin} · {t.risk}</i>
-                        {t.description && <small>{t.description}</small>}
-                      </li>
+              {settingsOpen && (
+                <div className="tools-list wide" role="dialog" aria-label="Settings">
+                  <div className="set-tabs" role="tablist">
+                    {[["webhooks", "webhooks"], ["guard", "guard"], ["dev", `devices${devCount != null ? ` ${devCount}` : ""}`],
+                      ["tools", `tools ${status.tools?.length ?? ""}`]].map(([id, label]) => (
+                      <button key={id} type="button" role="tab" aria-selected={settingsTab === id}
+                        className={settingsTab === id ? "on" : ""} onClick={() => setSettingsTab(id)}>{label}</button>
                     ))}
-                  </ul>
+                  </div>
+                  {settingsTab === "webhooks" && <WebhooksPanel version={hookSeq} />}
+                  {settingsTab === "guard" && <GuardPanel version={hookSeq} />}
+                  {settingsTab === "dev" && <DevicesPanel onCount={setDevCount} version={hookSeq} />}
+                  {settingsTab === "tools" && (
+                    <>
+                      <p className="tools-note">auto = runs straight away (audited) · ask = waits for your approval</p>
+                      <ul>
+                        {[...(status.tools || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((t) => (
+                          <li key={t.name} title={t.description || ""}>
+                            <span className={`gate ${t.asks ? "ask" : "auto"}`}>{t.asks ? "ask" : "auto"}</span>
+                            <b>{t.name}</b>
+                            <i>{t.origin} · {t.risk}</i>
+                            {t.description && <small>{t.description}</small>}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                 </div>
               )}
             </div>
