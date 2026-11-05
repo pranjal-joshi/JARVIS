@@ -1,0 +1,190 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-04T13:43",
+ "cases": 12,
+ "passed": 10,
+ "passed_ignoring_style": 10,
+ "failure_kinds": {
+  "skipped": 2,
+  "reply": 1
+ },
+ "first_words_median_s": 4.3,
+ "by_category": {
+  "composite": "1/1",
+  "notes": "1/1",
+  "memory": "4/5",
+  "hard": "2/3",
+  "reminders": "2/2"
+ },
+ "rows": [
+  {
+   "id": "timer-remind",
+   "cat": "composite",
+   "say": "remind me in 20 minutes to call mum",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer"
+   ],
+   "reply": "I'll remind you to call mum in 20 minutes, sir.",
+   "first_s": 0.3,
+   "total_s": 0.3
+  },
+  {
+   "id": "notes-name",
+   "cat": "notes",
+   "say": "what's my name",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your name is Pranjal.",
+   "first_s": 18.8,
+   "total_s": 18.8
+  },
+  {
+   "id": "mem-remember",
+   "cat": "memory",
+   "say": "remember that I take my tea without sugar",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user takes their tea without sugar.",
+   "first_s": 1.6,
+   "total_s": 1.6
+  },
+  {
+   "id": "mem-note",
+   "cat": "memory",
+   "say": "note that my passport expires on 12 August 2031",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir. I have recorded that your passport expires on 12 August 2031.",
+   "first_s": 4.3,
+   "total_s": 4.6
+  },
+  {
+   "id": "mem-prefer",
+   "cat": "memory",
+   "say": "I prefer aisle seats on trains, keep that in mind",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user prefers aisle seats on trains.",
+   "first_s": 1.2,
+   "total_s": 1.2
+  },
+  {
+   "id": "h-name",
+   "cat": "hard",
+   "say": "remind me what I'm called again",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "skipped: called nothing, expected one of ['kb_search', 'kb_read_page']",
+    "reply: lacks /(?i)pranjal/"
+   ],
+   "tools": [],
+   "reply": "You are called JARVIS. Sir, how may I assist you today?",
+   "first_s": 3.3,
+   "total_s": 3.5
+  },
+  {
+   "id": "h-about-me",
+   "cat": "hard",
+   "say": "what do you know about me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_read_page"
+   ],
+   "reply": "I haven't actually saved or changed anything, sir. Say \"remember ...\" and I will.",
+   "first_s": 3.9,
+   "total_s": 8.5
+  },
+  {
+   "id": "h-jot",
+   "cat": "hard",
+   "say": "jot down that the plumber comes Friday at 10",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Noted in your journal: the plumber comes Friday at 10.",
+   "first_s": 6.5,
+   "total_s": 6.5
+  },
+  {
+   "id": "trace-reminder-daily",
+   "cat": "reminders",
+   "say": "Remind me on phone and in HUD to \"Follow up for Acrylic and Electrician\" every morning at 10 AM",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_reminder"
+   ],
+   "reply": "Reminder set: \"Follow up for Acrylic and Electrician\" will alert you on your phone and in the HUD every morning at 10:00 AM, starting tomorrow.",
+   "first_s": 4.2,
+   "total_s": 4.2
+  },
+  {
+   "id": "trace-reminder-check",
+   "cat": "reminders",
+   "say": "is my acrylic reminder really set?",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "list_reminders"
+   ],
+   "reply": "Yes, you have an acrylic reminder set: \"Follow up for Acrylic: every day at 10:00\". It is scheduled to repeat daily at 10:00.",
+   "first_s": 5.3,
+   "total_s": 5.6
+  },
+  {
+   "id": "trace-promise-save",
+   "cat": "memory",
+   "say": "Remember that we need to configure ESP Home modules in our new home so Jarvis can use them as voice satellites",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "skipped: called nothing, expected one of ['kb_remember', 'kb_journal']"
+   ],
+   "tools": [],
+   "reply": "I haven't actually saved or changed anything, sir. Say \"remember ...\" and I will.",
+   "first_s": 4.4,
+   "total_s": 6.3
+  },
+  {
+   "id": "trace-no-split",
+   "cat": "memory",
+   "say": "Also remember that we need a nightly job which looks at the daily conversations with Jarvis and then we can run it by the cloud session to improve the harness",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir. I've recorded that you require a nightly job review of daily conversations with Jarvis to improve the harness, and that it should be run via the cloud session. I'll have it ready for setup whenever you are.",
+   "first_s": 6.9,
+   "total_s": 7.7
+  }
+ ]
+}

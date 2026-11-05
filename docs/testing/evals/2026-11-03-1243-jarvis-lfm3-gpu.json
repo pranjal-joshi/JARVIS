@@ -1,0 +1,531 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-03T12:43",
+ "cases": 36,
+ "passed": 33,
+ "passed_ignoring_style": 34,
+ "failure_kinds": {
+  "reply": 2,
+  "style": 2
+ },
+ "first_words_median_s": 4.9,
+ "by_category": {
+  "notes": "4/6",
+  "hard": "29/30"
+ },
+ "rows": [
+  {
+   "id": "tasks",
+   "cat": "notes",
+   "say": "what are my open tasks",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "No open tasks, sir.",
+   "first_s": 0.4,
+   "total_s": 0.4
+  },
+  {
+   "id": "notes-where",
+   "cat": "notes",
+   "say": "where do I live",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "reply: lacks /(?i)pune/",
+    "style: offer"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "I couldn't find any notes about your address. Could you tell me where you live, or let me know if there's another detail I should search for?",
+   "first_s": 20.0,
+   "total_s": 20.4
+  },
+  {
+   "id": "notes-name",
+   "cat": "notes",
+   "say": "what's my name",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your name is Pranjal.",
+   "first_s": 3.8,
+   "total_s": 3.8
+  },
+  {
+   "id": "notes-society",
+   "cat": "notes",
+   "say": "what is the name of my society",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your society is called Unique Legacy Imperia, according to your notes.",
+   "first_s": 3.1,
+   "total_s": 3.1
+  },
+  {
+   "id": "notes-page",
+   "cat": "notes",
+   "say": "read your people page",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_read_page"
+   ],
+   "reply": "On the \"people\" page I have found the following. Name: Pranjal (learned on Nov 2nd, 2026) Lives in the Keshavnagar area of Pune, under the society Unique Legacy Imperia. Wife's name: recorded as Tanika on Nov 2nd, 2026, but later Zanika on Nov 3rd, 2026 — noted by you and JARVIS.",
+   "first_s": 4.0,
+   "total_s": 5.8
+  },
+  {
+   "id": "notes-missing",
+   "cat": "notes",
+   "say": "how do I take my coffee",
+   "pass": false,
+   "tool_pass": true,
+   "fails": [
+    "style: offer"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "No matching notes found. I’m afraid I don’t have a recorded preference for how you take your coffee. Could you tell me, or would you like me to save a note for it?",
+   "first_s": 4.9,
+   "total_s": 5.5
+  },
+  {
+   "id": "h-name",
+   "cat": "hard",
+   "say": "remind me what I'm called again",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "reply: lacks /(?i)pranjal/"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "You're called JARVIS.",
+   "first_s": 3.8,
+   "total_s": 3.8
+  },
+  {
+   "id": "h-about-me",
+   "cat": "hard",
+   "say": "what do you know about me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_read_page"
+   ],
+   "reply": "Sir, you live in the Pune–Keshavnagar area under Unique Legacy Imperia. My own name is Pranjal; your wife is Tanika (also recorded as Zanika on 3rd Nov). Could you tell me more about your role or recent activities?",
+   "first_s": 3.9,
+   "total_s": 4.5
+  },
+  {
+   "id": "h-son",
+   "cat": "hard",
+   "say": "when is my son's birthday",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your son Chiku's birthday is 13 May.",
+   "first_s": 3.5,
+   "total_s": 3.5
+  },
+  {
+   "id": "h-where",
+   "cat": "hard",
+   "say": "which area of Pune do I live in",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "You live in the Keshavnagar area of Pune, within the Unique Legacy Imperia society.",
+   "first_s": 6.7,
+   "total_s": 6.7
+  },
+  {
+   "id": "h-week",
+   "cat": "hard",
+   "say": "anything coming up this week I should know about",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "No open tasks are currently scheduled for this week. You may wish to check your alerts or inbox for any external communications.",
+   "first_s": 5.1,
+   "total_s": 5.4
+  },
+  {
+   "id": "h-todo",
+   "cat": "hard",
+   "say": "what's left on my plate",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "Your plate is empty — no open tasks at the moment. Sir, perhaps you might want to note something for later?",
+   "first_s": 3.2,
+   "total_s": 3.4
+  },
+  {
+   "id": "h-msgs",
+   "cat": "hard",
+   "say": "did anyone message me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_notifications"
+   ],
+   "reply": "Yes, you have several recent notifications. WhatsApp – SEBI Awareness – 1 new message (12:39) WhatsApp – Rajiv dixit – dhinchak again – 1 new message (12:21) WhatsApp – smallcase – 1 new message (09:38)",
+   "first_s": 6.7,
+   "total_s": 8.7
+  },
+  {
+   "id": "h-texts",
+   "cat": "hard",
+   "say": "read me my latest texts",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_sms_read"
+   ],
+   "reply": "Here are your latest incoming and outgoing texts. 03 Nov 10:04 (AX-ICICIT-S): ICICI Bank Acct XX539 debited for Rs 906.00 on 03-Nov-26; Zepto credited. UPI:805609563310. Call 18002662 for dispute.",
+   "first_s": 8.9,
+   "total_s": 17.7
+  },
+  {
+   "id": "h-calls",
+   "cat": "hard",
+   "say": "who called me today",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_call_log"
+   ],
+   "reply": "On Tuesday, 3 November 2026, the incoming call you received at 10:30 was from Vikas Kumar (duration 37 seconds). Earlier that day, at 09:47, there was also an incoming call from Milind Shende (Spacewell) (84 seconds).",
+   "first_s": 8.1,
+   "total_s": 8.8
+  },
+  {
+   "id": "h-phone-batt",
+   "cat": "hard",
+   "say": "is my phone about to die",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_info"
+   ],
+   "reply": "Your Pixel 9a currently shows a battery level of 68% and is running WhatsApp in the foreground, so it is not about to die. If you’d like, I can check whether it’s fully charged or monitor alerts.",
+   "first_s": 4.4,
+   "total_s": 4.7
+  },
+  {
+   "id": "h-laptop",
+   "cat": "hard",
+   "say": "how's the laptop holding up",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_info"
+   ],
+   "reply": "The laptop is in good order: battery at 87% and charging, memory at 57% used of 31.7 GB, and it has been up for 41 minutes. The currently active window is YouTube (Google Chrome).",
+   "first_s": 5.5,
+   "total_s": 5.9
+  },
+  {
+   "id": "h-disk",
+   "cat": "hard",
+   "say": "am I running out of space on C",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_ps_read"
+   ],
+   "reply": "On drive C: you have about 351.7 GB free out of 952.7 GB (roughly 63% used). You are nowhere near running out of space.",
+   "first_s": 9.7,
+   "total_s": 9.8
+  },
+  {
+   "id": "h-files",
+   "cat": "hard",
+   "say": "what's in my downloads folder",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "fs_list"
+   ],
+   "reply": "Your Downloads folder contains a large number of items — notes, PDFs, logs, executables, binaries, and ZIP archives. Some highlights include. Papers & receipts (e.g., `Challan280`, `DemandLetter.pdf`, `Aadhar-Pranjal-Imperia.pdf`) Download batches such as `drive-download-20260925T080950Z-1-001.zip`,",
+   "first_s": 7.3,
+   "total_s": 10.9
+  },
+  {
+   "id": "h-skip",
+   "cat": "hard",
+   "say": "skip this song",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_media"
+   ],
+   "reply": "I would have paused or resumed the music, sir (dry run).",
+   "first_s": 1.8,
+   "total_s": 1.8
+  },
+  {
+   "id": "h-vol",
+   "cat": "hard",
+   "say": "turn the volume down a bit on the laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_media"
+   ],
+   "reply": "I would have turned the laptop volume down, sir (dry run).",
+   "first_s": 2.3,
+   "total_s": 2.3
+  },
+  {
+   "id": "h-open",
+   "cat": "hard",
+   "say": "open notepad for me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_open"
+   ],
+   "reply": "I would have opened Notepad on the laptop, sir (dry run).",
+   "first_s": 4.2,
+   "total_s": 4.2
+  },
+  {
+   "id": "h-jot",
+   "cat": "hard",
+   "say": "jot down that the plumber comes Friday at 10",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Note added to your journal: \"The plumber is coming on Friday at 10.\"",
+   "first_s": 5.8,
+   "total_s": 5.8
+  },
+  {
+   "id": "h-wake",
+   "cat": "hard",
+   "say": "wake me in 25 minutes",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer"
+   ],
+   "reply": "A timer has been set for 25 minutes. I will wake you then.",
+   "first_s": 5.3,
+   "total_s": 5.4
+  },
+  {
+   "id": "h-left",
+   "cat": "hard",
+   "say": "how long left on the pasta",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "list_timers"
+   ],
+   "reply": "There is no pasta timer running at the moment.",
+   "first_s": 4.2,
+   "total_s": 4.4
+  },
+  {
+   "id": "h-cancel",
+   "cat": "hard",
+   "say": "never mind the pasta timer",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "cancel_timer"
+   ],
+   "reply": "Pasta timer has been cancelled.",
+   "first_s": 4.7,
+   "total_s": 5.0
+  },
+  {
+   "id": "h-ping",
+   "cat": "hard",
+   "say": "ping my laptop saying stand up",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "notify"
+   ],
+   "reply": "I would have sent the notification \"Stand up\", sir (dry run).",
+   "first_s": 3.9,
+   "total_s": 3.9
+  },
+  {
+   "id": "h-phone-ping",
+   "cat": "hard",
+   "say": "send a notification to my phone saying water the plants",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "notify"
+   ],
+   "reply": "I would have sent the notification \"Water the plants\", sir (dry run).",
+   "first_s": 2.3,
+   "total_s": 2.3
+  },
+  {
+   "id": "h-umbrella",
+   "cat": "hard",
+   "say": "should I carry an umbrella today",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "weather"
+   ],
+   "reply": "Rain is unlikely today, sir: light drizzle, 21 to 30 degrees, 22% chance of rain.",
+   "first_s": 2.1,
+   "total_s": 2.1
+  },
+  {
+   "id": "h-f1",
+   "cat": "hard",
+   "say": "look up who won the F1 race last weekend",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "web_search"
+   ],
+   "reply": "I'm unable to retrieve live sports results, so I can't confirm the winner of last Friday's F1 race. You may want to check a sports website or the F1 results page for the most accurate report.",
+   "first_s": 6.0,
+   "total_s": 6.3
+  },
+  {
+   "id": "h-tell",
+   "cat": "hard",
+   "say": "let Sanika know I'll be home by 8",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_contacts",
+    "adb_sms_send"
+   ],
+   "reply": "Notified Sanika: \"I'll be home by 8.\"",
+   "first_s": 9.4,
+   "total_s": 9.4
+  },
+  {
+   "id": "h-shot",
+   "cat": "hard",
+   "say": "grab a screenshot of my laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_screenshot"
+   ],
+   "reply": "The screenshot has been saved to `data/screenshots/win-20261103-124313.png`.",
+   "first_s": 6.3,
+   "total_s": 6.3
+  },
+  {
+   "id": "h-lock",
+   "cat": "hard",
+   "say": "lock my laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_lock"
+   ],
+   "reply": "I would have locked the laptop, sir (dry run).",
+   "first_s": 3.6,
+   "total_s": 3.6
+  },
+  {
+   "id": "h-both-batt",
+   "cat": "hard",
+   "say": "what's my battery on the laptop and the phone",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_info",
+    "adb_info"
+   ],
+   "reply": "Your laptop's battery is at 85% and charging; the phone (Pixel 9a) stands at 68%.",
+   "first_s": 8.8,
+   "total_s": 9.0
+  },
+  {
+   "id": "h-follow-add",
+   "cat": "hard",
+   "say": "I need to buy milk / add it to my groceries page",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_append_to_page"
+   ],
+   "reply": "Milk has been added to your Groceries page.",
+   "first_s": 5.6,
+   "total_s": 5.6
+  },
+  {
+   "id": "h-follow-timer",
+   "cat": "hard",
+   "say": "can you set a timer? / 10 minutes for tea",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer"
+   ],
+   "reply": "J.A.R.VIS's timer is set: 10 minutes for tea.",
+   "first_s": 5.4,
+   "total_s": 5.4
+  }
+ ]
+}

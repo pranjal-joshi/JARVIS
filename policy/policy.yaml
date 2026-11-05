@@ -16,7 +16,7 @@ defaults:          # by risk level
   destructive: ask # texts, calls, deletes, opening apps
 
 budgets:           # 0 = no limit
-  external_per_day: 40   # Firecrawl's free plan is ~1,000 credits a month, about 2 per search
+  external_per_day: 40   # each Exa search is paid for: keeps a looping model's bill small
   writes_per_hour: 60
 
 rules:

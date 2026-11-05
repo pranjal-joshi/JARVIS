@@ -31,6 +31,7 @@ from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.kb.tools import missing_page
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
+from jarvis_hub.tools.when import spoken, when
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +107,16 @@ def zone_for(place: str) -> str:
     from zoneinfo import available_timezones
     city = key.replace(" ", "_")
     return next((z for z in sorted(available_timezones()) if z.lower().rsplit("/", 1)[-1] == city), place)
+
+
+def _span(seconds: float) -> str:
+    """"8 minutes", "1 hour 30 minutes", "45 seconds"."""
+    s = round(seconds)
+    if s < 60:
+        return f"{s} second{'s' * (s != 1)}"
+    h, m = divmod(round(s / 60), 60)
+    parts = [f"{h} hour{'s' * (h != 1)}"] * bool(h) + [f"{m} minute{'s' * (m != 1)}"] * bool(m)
+    return " ".join(parts)
 
 
 WEATHER_TTL_S = 600  # a repeated "what's the weather" answers from here for 10 minutes
@@ -265,8 +276,8 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         lines = [f"In {h['name']} it's {WMO.get(cur.get('weather_code'), 'unknown')} and {r(cur.get('temperature_2m'))} "
                  f"degrees, feeling like {r(cur.get('apparent_temperature'))}, sir."]
         today = datetime.fromisoformat(d["current"]["time"]).date() if cur.get("time") else datetime.now().date()
-        for i, when in enumerate(day.get("time") or []):
-            dt = datetime.fromisoformat(when).date()
+        for i, iso in enumerate(day.get("time") or []):
+            dt = datetime.fromisoformat(iso).date()
             label = {0: "Today", 1: "Tomorrow"}.get((dt - today).days, f"{dt:%A}")
             lines.append(f"{label}: {WMO.get(day['weather_code'][i], '?')}, {r(day['temperature_2m_min'][i])} to "
                          f"{r(day['temperature_2m_max'][i])} degrees, {day['precipitation_probability_max'][i]}% "
@@ -310,15 +321,29 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         return UNTRUSTED + f"URL: {url}\n" + text[:5000]
 
     async def set_timer(args: dict, ctx: ToolCtx) -> str:
-        try:
-            seconds = float(args.get("minutes", 0)) * 60 + float(args.get("seconds", 0))
-        except (TypeError, ValueError):
-            return "ERROR: give minutes and/or seconds as numbers"
+        label = str(args.get("label") or "timer").strip()[:60]
+        now = datetime.now()
+        if at := str(args.get("at") or "").strip():  # a clock time: the seconds are worked out here
+            due = when(at, now=now)
+            if due is None:
+                return "ERROR: 'at' must be a clock time like 10:00, 10 am or 6:30 pm (with today or tomorrow)"
+            seconds = (due - now).total_seconds()
+            if seconds > 24 * 3600:
+                return ("ERROR: that is more than 24 hours away. Call set_reminder with the time and day instead; "
+                        "it also alerts the phone and the HUD.")
+        else:
+            try:
+                seconds = float(args.get("minutes", 0)) * 60 + float(args.get("seconds", 0))
+            except (TypeError, ValueError):
+                return "ERROR: give minutes and/or seconds as numbers, or 'at' a clock time"
         if not 1 <= seconds <= 24 * 3600:
             return "ERROR: timers run from 1 second to 24 hours"
-        label = str(args.get("label") or "timer").strip()[:60]
         t = timers.start(seconds, label, ctx)
-        return f"Timer '{label}' set for {round(seconds)} s, due {datetime.fromtimestamp(t['due']):%H:%M:%S}."
+        due = datetime.fromtimestamp(t["due"])
+        name = "Timer" if label == "timer" else f"Timer '{label}'"
+        span = f" for {_span(seconds)}" if not at else ""
+        # the reply as it stands (final_answer): the model never rewords when it goes off
+        return f"{name} set{span}; it goes off {spoken(due, now)}, sir."
 
     async def list_timers(args: dict, ctx: ToolCtx) -> str:
         if not timers.active:
@@ -396,9 +421,13 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
     reg.add(Tool("fetch_page", "builtin",
                  "Read a web page by its URL. Use for: a link the user gives, or a web_search result to read in full.",
                  _obj({"url": {"type": "string"}}, ["url"]), Risk.READ, fetch_page))
-    reg.add(Tool("set_timer", "builtin", "Start a countdown timer. Use for: 'set a timer for 10 minutes', 'pasta timer for 8 minutes'.",
+    reg.add(Tool("set_timer", "builtin",
+                 "Start a countdown timer, up to 24 hours. Use for: 'set a timer for 10 minutes', 'pasta timer for 8 "
+                 "minutes', 'wake me at 6:30'. For a clock time give 'at' (e.g. '10 am tomorrow'), not minutes. "
+                 "Not for repeating or phone reminders (use set_reminder).",
                  _obj({"minutes": {"type": "number"}, "seconds": {"type": "number"},
-                       "label": {"type": "string"}}, []), Risk.WRITE, set_timer))
+                       "at": {"type": "string", "description": "a clock time instead of minutes, e.g. 10 am tomorrow"},
+                       "label": {"type": "string"}}, []), Risk.WRITE, set_timer, final_answer=True))
     reg.add(Tool("list_timers", "builtin", "Running timers and the time left. Use for: 'how long is left on my timer'.", _obj({}, []),
                  Risk.READ, list_timers))
     reg.add(Tool("cancel_timer", "builtin", "Stop a running timer. Use for: 'cancel the pasta timer', 'stop the timer'.",

@@ -10,6 +10,7 @@ import RichText from "./RichText";
 import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import MonitorsPanel from "./MonitorsPanel";
+import JobBox from "./JobBox";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
 import { askToNotify, chime, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
 
@@ -178,8 +179,8 @@ function Message({ m, latest }) {
   const typed = useTypewriter(latest && m.role === "assistant" ? m.text : "");
   const text = latest && m.role === "assistant" ? typed : m.text;
   return (
-    <div className={`msg ${m.role}`}>
-      <span className="who">{m.role === "user" ? "YOU" : "JARVIS"}</span>
+    <div className={`msg ${m.role}`} role={m.role === "alert" ? "alert" : undefined}>
+      <span className="who">{m.role === "user" ? "YOU" : m.role === "alert" ? "ALERT" : "JARVIS"}</span>
       <div className="text">
         {m.skill && <div className="msg-ctx"><span>⚙ skill · {m.skill.replace(/^skills\//i, "")}</span></div>}
         {m.pages?.length > 0 && <div className="msg-ctx">{m.pages.map((n) => <span key={n}>◈ {n}</span>)}</div>}
@@ -231,6 +232,31 @@ export default function Hud() {
     const r = await api("monitors").catch(() => null);
     if (r?.ok) setMonitors(await r.json());
   }, []);
+  // background jobs: while any card is up the orb moves aside and the cards stack beside it. A card stays
+  // until it is dismissed (a running one can be stopped); chat, new questions and panel focus leave them be.
+  const [closingJobs, setClosingJobs] = useState(() => new Set()); // dismissed here, playing their exit
+  const jobCards = (monitors?.jobs || []).filter((j) => j.state === "running" || j.state === "queued" || !j.dismissed);
+  const dismissJob = useCallback((id) => {
+    setClosingJobs((s) => new Set(s).add(id));
+    setTimeout(async () => { // after the card's exit animation
+      await api(`jobs/${id}/dismiss`, { method: "POST" }).catch(() => null);
+      await loadMonitors();
+      setClosingJobs((s) => { const n = new Set(s); n.delete(id); return n; });
+    }, 420);
+  }, [loadMonitors]);
+  const cancelJob = useCallback(async (id) => {
+    await api(`jobs/${id}/cancel`, { method: "POST" }).catch(() => null);
+    loadMonitors();
+  }, [loadMonitors]);
+  const jobOn = jobCards.some((j) => !closingJobs.has(j.id));
+  const [orbAside, setOrbAside] = useState(false); // follows jobOn, as a view transition like the other layout moves
+  useEffect(() => {
+    if (!document.startViewTransition || reducedMotion() || document.querySelector(".boot")) return setOrbAside(jobOn);
+    const vt = document.startViewTransition(() => flushSync(() => setOrbAside(jobOn)));
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+    return undefined;
+  }, [jobOn]);
   const [kbVersion, setKbVersion] = useState(0);
   const [kbView, setKbView] = useState("normal"); // normal | min | max
   const [context, setContext] = useState([]); // [{ name, text }] attached to the next question
@@ -262,8 +288,10 @@ export default function Hud() {
   const consoleTimer = useRef(null);
   const recording = useRef(null);
   const turn = useRef(0); // newest question; older replies show but never speak over it
+  const sessionId = useRef(null); // this conversation's id: the hub keeps its turns under it (traces)
+  if (sessionId.current === null) sessionId.current = newSessionId();
   const chatRef = useRef(null);
-  const [tab, setTab] = useState("talk"); // phone layout: talk | activity | map
+  const [tab, setTab] = useState("talk"); // phone layout: talk | activity | watch | map
   const stateLabel = useDecode(state.toUpperCase());
   // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
   // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
@@ -315,6 +343,7 @@ export default function Hud() {
   }, [layoutKey]);
   const newSession = () => {
     turn.current++;
+    sessionId.current = newSessionId();
     stopAudio();
     recording.current?.stop().catch(() => {});
     recording.current = null;
@@ -439,6 +468,19 @@ export default function Hud() {
           const ev = JSON.parse(e.data);
           if (ev.type === "subscribed") return setLink("online");
           if (ev.type === "thinking") setState("thinking");
+          if (ev.type === "llm_fallback") { // the model was rate limited: the hub moved to the fallback
+            const d = ev.data || {};
+            setStatus((s) => ({ ...s, llm: { ...s?.llm, model: d.to } }));
+            setMessages((m) => [...m, { role: "alert", text: `Rate limited on ${d.from}: switched to ${d.to}. `
+              + `${d.from} takes requests again in about ${Math.max(1, Math.round(d.retry_s || 60))} s; `
+              + "JARVIS switches back after that." }]);
+            flash("red");
+          }
+          if (ev.type === "llm_restored") { // the rate limit passed: back on the model picked before
+            const d = ev.data || {};
+            setStatus((s) => ({ ...s, llm: { ...s?.llm, model: d.to } }));
+            note({ kind: "info", text: `Back on ${d.to}: its rate limit has passed.` });
+          }
           if (ev.type === "tool_call" && ev.data.risk && ev.data.risk !== "read") flash("orange");
           if (ev.type === "approval_request") { flash("orange"); chime(); notifyApproval(ev.data); }
           if (ev.type === "hook_event") {
@@ -458,11 +500,12 @@ export default function Hud() {
             }
           }
           if (ev.type === "trace") note({ kind: "info", text: why(ev.data) }); // how the reply came about
-          if (ev.type === "watch" || ev.type === "timer_state") {
+          if (ev.type === "watch" || ev.type === "timer_state" || ev.type === "job_state") {
             const d = ev.data;
-            const name = ev.type === "timer_state" ? d.label : d.name;
+            const name = ev.type === "timer_state" ? d.label : ev.type === "job_state" ? d.id : d.name;
             loadMonitors();
-            if (!(ev.type === "watch" && (d.kind === "running" || (d.kind === "ran" && !d.new)))) {
+            // a job has its own box beside the orb: its events only refresh the list, they don't dock the orb
+            if (ev.type !== "job_state" && !(ev.type === "watch" && (d.kind === "running" || (d.kind === "ran" && !d.new)))) {
               const seq = Date.now() + Math.random();
               setMonPulse({ name, kind: d.kind, seq });
               if (["cancelled", "deleted", "done"].includes(d.kind))
@@ -564,17 +607,21 @@ export default function Hud() {
     // straight away, so JARVIS starts talking while the rest is still being written.
     const voice = speak ? speaker(mine) : null;
     let shown = "", pending = "", final = null, added = false;
-    const show = (text) => setMessages((m) => (added
-      ? [...m.slice(0, -1), { role: "assistant", text }]
-      : (added = true, [...m, { role: "assistant", text }])));
+    // the reply's own entry, not just the last one: an alert (a model switch) can land while it streams
+    const show = (text) => setMessages((m) => {
+      if (!added) { added = true; return [...m, { role: "assistant", text }]; }
+      const i = m.findLastIndex((x) => x.role === "assistant");
+      return i < 0 ? [...m, { role: "assistant", text }] : [...m.slice(0, i), { role: "assistant", text }, ...m.slice(i + 1)];
+    });
     try {
       const r = await api("chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Jarvis-Session": sessionId.current },
         body: JSON.stringify({
           model: "jarvis",
           stream: true,
-          messages: history.slice(-12).map((m) => ({ role: m.role, content: m.sent || m.text })),
+          messages: history.filter((m) => m.role !== "alert").slice(-12)
+            .map((m) => ({ role: m.role, content: m.sent || m.text })),
         }),
       });
       if (!r.ok || !r.body) {
@@ -883,7 +930,7 @@ export default function Hud() {
       </div>
 
       <section className="core reveal" style={{ "--i": 1 }}>
-        <div className="hero">
+        <div className={`hero${orbAside ? " has-job" : ""}`}>
           <div className="orb-wrap" {...(pinned ? { role: "button", tabIndex: 0, title: "Back to JARVIS (Esc)",
             onClick: () => setPinned(null), onKeyDown: (e) => e.key === "Enter" && setPinned(null) } : {})}>
             <Orb state={state} analyser={analyser} accent={accent} alert={approvals.length > 0} />
@@ -895,6 +942,13 @@ export default function Hud() {
               ? <span className="state-sub alert">awaiting your approval</span>
               : shown.focus && <span className="state-sub">{pinned ? "pinned · esc to return" : `in ${{ kb: "knowledge map", timeline: "timeline", watch: "monitors" }[shown.focus] || "console"}`}</span>}
           </div>
+          {jobCards.length > 0 && (
+            <div className={`job-stack${jobCards.length > 1 ? " many" : ""}`} aria-label="Background jobs">
+              {jobCards.map((j) => (
+                <JobBox key={j.id} job={j} closing={closingJobs.has(j.id)} onDismiss={dismissJob} onCancel={cancelJob} />
+              ))}
+            </div>
+          )}
         </div>
         <div className="approvals">
           {approvals.map((a) => {
@@ -975,7 +1029,8 @@ export default function Hud() {
       <div className="side map-dock reveal" style={{ "--i": 3 }}>
       <MonitorsPanel data={monitors} pulse={monPulse} ghosts={ghosts} active={shown.mon} focused={shown.focus === "watch"}
         headProps={headProps(pinned === "watch", () => togglePin("watch"), "monitors")}
-        onManage={(e) => { e?.stopPropagation?.(); openOnly("watch"); }} />
+        onManage={(e) => { e?.stopPropagation?.(); openOnly("watch"); }}
+        onClearJobs={async () => { await api("jobs/clear", { method: "POST" }).catch(() => null); loadMonitors(); }} />
       <section className={`panel kb minimap${shown.kb ? ` active k-${kbPulse?.kind || "read"}` : ""}${shown.focus === "kb" ? " focused" : ""}${kbView === "min" ? " minimized" : ""}`}
         aria-label="Knowledge map">
         <i className="mm-corner tl" aria-hidden="true" /><i className="mm-corner tr" aria-hidden="true" />
@@ -1018,7 +1073,8 @@ export default function Hud() {
         {[
           ["talk", "◉", "Talk", approvals.length > 0],
           ["activity", "⟐", "Activity", consoleActive],
-          ["map", "◈", "Map", kbActive],
+          ["watch", "◴", "Monitors", monActive || jobCards.some((j) => j.state === "running" || j.state === "queued")],
+          ["map", "◈", "Knowledge", kbActive],
         ].map(([id, glyph, label, live]) => (
           <button key={id} type="button" className={`${tab === id ? "on" : ""} ${live && tab !== id ? "live" : ""}`}
             aria-current={tab === id ? "page" : undefined} onClick={() => setTab(id)}>
@@ -1029,4 +1085,11 @@ export default function Hud() {
     </div>
     </>
   );
+}
+
+// "20261103-151204-k3f9": when the session started, readable in the hub's traces, plus a few random letters
+function newSessionId() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  const when = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `${when}-${Math.random().toString(36).slice(2, 6)}`;
 }

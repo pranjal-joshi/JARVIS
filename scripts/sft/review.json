@@ -1,0 +1,466 @@
+{
+ "583f5287a8e84d20a4ff398671a6154d": {
+  "keep": false,
+  "why": "odd reply"
+ },
+ "f03284cc37c84b79971c903420de9aea": {
+  "keep": false,
+  "why": "reply repeats itself"
+ },
+ "b7c6d237ab4e4943b4bb8f5473dcddf1": {
+  "keep": true,
+  "why": "notes, then a one-line answer"
+ },
+ "0f2d8fcd9e584e639637c2b33efe3bb1": {
+  "keep": false,
+  "why": "wrong fact in reply (Ghidra is Java)"
+ },
+ "dc84169f2f1442e6a4c0fe41f7aead93": {
+  "keep": true,
+  "why": "notes, then a one-line answer"
+ },
+ "ddc97072cecc4be8a5609b67107de9c9": {
+  "keep": true,
+  "why": "reads memory and summarises"
+ },
+ "392d2d92e99046db9cd0299abe617ffd": {
+  "keep": false,
+  "why": "didn't play anything"
+ },
+ "07037c977d7643958c19f671152500ea": {
+  "keep": false,
+  "why": "no tool: phone news needs phone_notifications"
+ },
+ "73aee853cdab48ffb6085d89c4c7c704": {
+  "keep": true,
+  "why": "no tool needed"
+ },
+ "fed56faf9e7e44c38c8ce8a8d0edeffa": {
+  "keep": false,
+  "why": "model didn't answer"
+ },
+ "cb09a411e9f1489ea80506c74aef7bf6": {
+  "keep": false,
+  "why": "notification instead of a daily reminder"
+ },
+ "91f9a0fc10f04ec2951887f809e69877": {
+  "keep": false,
+  "why": "says recurring reminders are impossible"
+ },
+ "9da17e97e0194b45b82ff039743ae573": {
+  "keep": false,
+  "why": "claims a timer it never set"
+ },
+ "bc944c60e1e14dd6b95e74d7cb6ff222": {
+  "keep": false,
+  "why": "12-hour timer instead of a reminder"
+ },
+ "083e8322977946a3afbe2564bf4cb81e": {
+  "keep": false,
+  "why": "garbled page text"
+ },
+ "3af27fbefac342f0b6ed02902277fd44": {
+  "keep": false,
+  "why": "never searched the web"
+ },
+ "3b80f8f5cd944ae79199b42a570d6743": {
+  "keep": false,
+  "why": "never searched the web"
+ },
+ "85cfc8c2356b4532a24a319f4f2b4b15": {
+  "keep": false,
+  "why": "needless get_time, nothing saved"
+ },
+ "28b8600d49514f3ba1c84e1b5a4f289e": {
+  "keep": false,
+  "why": "asks for a URL instead of searching"
+ },
+ "72cd5d4f4534434e8b95b2137cbb7f39": {
+  "keep": false,
+  "why": "claims a save it didn't make"
+ },
+ "50d86c8076bc4202885d6f35727923d9": {
+  "keep": false,
+  "why": "duplicate page writes"
+ },
+ "d7cbdb42cc1a47f4aec1fdccb089fc31": {
+  "keep": true,
+  "why": "remember with the user's words"
+ },
+ "86eefc598b014e089898565ca0b43924": {
+  "keep": true,
+  "why": "remember with the URL"
+ },
+ "71202604759b4c50b0020f4375ec53dd": {
+  "keep": false,
+  "why": "promised to save, didn't"
+ },
+ "380cfa1796ad41ada7c7ac493e98c403": {
+  "keep": true,
+  "why": "journal write for 'save it'"
+ },
+ "8fa58cda931a45bfbf01653fe4c09793": {
+  "keep": true,
+  "why": "remember the plan"
+ },
+ "993016283af843cca4079337ba96e4cf": {
+  "keep": false,
+  "why": "needless get_time, nothing done"
+ },
+ "4f5242d9cb22474ea083fc8ddaa5303d": {
+  "keep": false,
+  "why": "write refused, rambling reply"
+ },
+ "02664d6c73a041099a940036fe035510": {
+  "keep": true,
+  "why": "daily set_reminder"
+ },
+ "e4c4d0889520418681a0fcecd4ae3da7": {
+  "keep": false,
+  "why": "reminder for a link to remember"
+ },
+ "06a164e50a8e43ec9e0a40caf6e54eb5": {
+  "keep": true,
+  "why": "read the page, remember the gist"
+ },
+ "db9f484af6e1445aa39452e9f0fe5a24": {
+  "keep": false,
+  "why": "contradicting reply"
+ },
+ "73e4c0581eac4a3884c05c8e45384772": {
+  "keep": false,
+  "why": "searched, never saved"
+ },
+ "3213fdbca1f24833b106ef69392396cc": {
+  "keep": true,
+  "why": "remember for 'save it'"
+ },
+ "0c58b6d04d7941bf939c1ac69cdfe538": {
+  "keep": true,
+  "why": "remember the user's words"
+ },
+ "e7900cbaff5342cd88ea6e7ed2b491ec": {
+  "keep": false,
+  "why": "statement not saved"
+ },
+ "39bf285b8bf64c40890810ede0e16c10": {
+  "keep": true,
+  "why": "no tool needed"
+ },
+ "cac396d3d3e3458faca344c968431699": {
+  "keep": true,
+  "why": "no tool needed"
+ },
+ "b4cf068ed03b4a52bd909011fd9d74b1": {
+  "keep": true,
+  "why": "no tool needed"
+ },
+ "1f55ec51849f481c83e76e563a96e3eb": {
+  "keep": true,
+  "why": "no tool needed"
+ },
+ "867cd94c5d4d498e9a583579479a54a2": {
+  "keep": true,
+  "why": "no tool needed"
+ },
+ "14663cb042d74a0dab9c19696b2a1551": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "1c99bc2c2038405184c9bea871cebf84": {
+  "keep": true,
+  "why": "answers from context"
+ },
+ "4ae8edfd06d94b08a4515273a4da052d": {
+  "keep": false,
+  "why": "unsaid-claim line, no answer"
+ },
+ "8628ee16dc904f4882b1ee32316f4475": {
+  "keep": true,
+  "why": "web search on request"
+ },
+ "5380d5501d324a789a523220c414ec50": {
+  "keep": false,
+  "why": "asked instead of searching"
+ },
+ "049f83a034834d4389985afab3fa0ae6": {
+  "keep": true,
+  "why": "specific web search"
+ },
+ "3743c020820b48e780355bcf692f8777": {
+  "keep": false,
+  "why": "answers 'thanks' with a reminder offer"
+ },
+ "832c184046514095bafaabbdc92bcfa6": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "76cbad76977b478a9d8f37f0de88b4e9": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "e8a311d9fa8a4b3c9465f9e9166e9fb2": {
+  "keep": true,
+  "why": "notes lookup, honest miss"
+ },
+ "c87fea0431824c9abef4b68535dc91e0": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "855e859422ce4e2a8e3d6667ada96f7a": {
+  "keep": true,
+  "why": "remember from context"
+ },
+ "b107aaea24d5496094c3c98831ec75ec": {
+  "keep": true,
+  "why": "remember"
+ },
+ "9cbeb66103f24c609f3a2aac6fb2b66a": {
+  "keep": true,
+  "why": "create_skill"
+ },
+ "5e1bc1167a1a4790bae25739c9f62308": {
+  "keep": true,
+  "why": "enable_skill"
+ },
+ "90b52e6e98ec470bb41db89c1a4146d8": {
+  "keep": true,
+  "why": "skill run with get_time"
+ },
+ "981ba9ddb08b442eaf91f7991942eabb": {
+  "keep": false,
+  "why": "claims an update it never made"
+ },
+ "22b2f2f8e5a54f169b4ff1ce9c993413": {
+  "keep": true,
+  "why": "skill run with get_time"
+ },
+ "b8f682d8918646e5b819d3d3a40a3870": {
+  "keep": false,
+  "why": "skill run switched itself live"
+ },
+ "72d9eabfbbd34356a0bc8cafab646fa2": {
+  "keep": false,
+  "why": "skill run switched itself live"
+ },
+ "cc3b6c64d11b4f5e8c441a3509048d6a": {
+  "keep": true,
+  "why": "skill run with get_time"
+ },
+ "cb2a57dfcaa543a3a932cb9c778457bd": {
+  "keep": false,
+  "why": "skill run calls run_skill"
+ },
+ "37f921cdce014b699dd902702ec3ef20": {
+  "keep": true,
+  "why": "skill run with get_time"
+ },
+ "59ec22575da24089b1125390ac6764d4": {
+  "keep": false,
+  "why": "old enable_skill arguments"
+ },
+ "aff3d7d941a648fbb77f0976aa6d13ac": {
+  "keep": true,
+  "why": "run_skill"
+ },
+ "9999b618cb0a4a68b58374f3c7cd75e4": {
+  "keep": false,
+  "why": "skill run switched itself on"
+ },
+ "5e1bfd7c74ca48a79203a04cc11e6a94": {
+  "keep": false,
+  "why": "skill run not done"
+ },
+ "52276caf9bc941e79ea0a3f25e095106": {
+  "keep": true,
+  "why": "date from the time line"
+ },
+ "5d62c2645bea4d6a8e1adc5993349655": {
+  "keep": false,
+  "why": "made-up weekday"
+ },
+ "5fe9f399e65e43ed885f94125e25e035": {
+  "keep": true,
+  "why": "refused get_time dropped, answers"
+ },
+ "f1f27963a78f47a291bdd975672f1358": {
+  "keep": false,
+  "why": "wrong age"
+ },
+ "783b574b36aa4e97919fe60ff1f7f012": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "d4571bd7cddd4063811ae27d21984da0": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "c43a8a15f5ca46479b99616203f5bce0": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "8b8f0eff77a1408cbc8f577143cd6e6e": {
+  "keep": false,
+  "why": "ran a dream for a question"
+ },
+ "5cde19d5633b4d1c886fc1045e9a6bb7": {
+  "keep": false,
+  "why": "rambling age reply"
+ },
+ "61c049a68f804006afc80cadd4eaa30d": {
+  "keep": false,
+  "why": "correction never saved"
+ },
+ "7c97cd926c444e66bb07472076e6fad3": {
+  "keep": true,
+  "why": "correct_memory then the age"
+ },
+ "65220c81e1d1499c993d927401d0f0bc": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "a39166667e3142a78ca34296cb73fd74": {
+  "keep": false,
+  "why": "no answer"
+ },
+ "55249e80948645e79fa2b0d37f3669ab": {
+  "keep": false,
+  "why": "fact not saved"
+ },
+ "422ed23e7e554810b38246502a0a0ab7": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "3acb42ce59a443bbbc9683340dc71796": {
+  "keep": false,
+  "why": "leaks the system prompt"
+ },
+ "d1dad32dc7824c73ad90aae0d72ce1c3": {
+  "keep": false,
+  "why": "unsaid-claim line, no answer"
+ },
+ "4224c64d8b4c4c088a02c1c5978b3f7d": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "82d980cee7d4410caaae16c8d39a1d26": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "68a58b3afd0648e0855fe2747137c7cc": {
+  "keep": false,
+  "why": "skips 'hello world', wrong greeting"
+ },
+ "b2a12bea8ba34a1da159e53aa7204aab": {
+  "keep": false,
+  "why": "skips 'hello world'"
+ },
+ "6debcdb6363640859c483d84aa733950": {
+  "keep": false,
+  "why": "skips 'hello world', wrong greeting"
+ },
+ "f80ec9f3ed454b1b929cc8422e1c65a5": {
+  "keep": true,
+  "why": "hello world with date and time"
+ },
+ "ddd3b3cd745a4a1e919bbf01b3f6b549": {
+  "keep": true,
+  "why": "start_job"
+ },
+ "048f88ce0bdd48db96325a71a3a2cf58": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "e8da107d485c43d9bab1bea297b958c2": {
+  "keep": true,
+  "why": "start_job"
+ },
+ "89bda16a45444a58a22ca5b24d00bd81": {
+  "keep": true,
+  "why": "start_job"
+ },
+ "db26a9a9506944258f1ab6a7d6bf5f53": {
+  "keep": false,
+  "why": "skips 'hello world'"
+ },
+ "e547fd228dac41a8b64f6e97e44fa213": {
+  "keep": false,
+  "why": "no answer"
+ },
+ "3edfdee8d6ca46fa8c4b4c16c1b58328": {
+  "keep": false,
+  "why": "list_skills for a question about jobs"
+ },
+ "9063a845ac0c451dba3cce78b7c93f1f": {
+  "keep": true,
+  "why": "start_job"
+ },
+ "c72473b782184442b7ae120d3e659c21": {
+  "keep": false,
+  "why": "fake tool text in reply"
+ },
+ "d06fe3242fa7448b8f39e41e8de317df": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "77c6e8d988724f41b1bd8c9b99a7a08d": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "a8d63bfda2ae42cb866a74711d83de5a": {
+  "keep": false,
+  "why": "contradicts what the user said"
+ },
+ "cd6f8d37feb04186a4424ef341d6c048": {
+  "keep": true,
+  "why": "notes lookup"
+ },
+ "4a0c1103795c488584b7d03099fe1a0b": {
+  "keep": true,
+  "why": "notes lookup lists the job pages"
+ },
+ "a27f7bdeb0c949d7bbd31bc80439b1a4": {
+  "keep": true,
+  "why": "web search on request"
+ },
+ "a2cd23ac133d4ce09bedf28fb282961e": {
+  "keep": true,
+  "why": "journal write for 'save them'"
+ },
+ "b61823026a484da28b773168357f8a64": {
+  "keep": false,
+  "why": "no answer"
+ },
+ "6ee7233f71f749bf9f37e52d964be631": {
+  "keep": false,
+  "why": "deleted pages, then a wrong reply"
+ },
+ "fe10f90063c34cedaeb658c12c44fd2a": {
+  "keep": false,
+  "why": "asks to delete the wrong page"
+ },
+ "aca4f0e5f72d485dbf95c963cf878fc4": {
+  "keep": false,
+  "why": "no answer"
+ },
+ "de523acea9834a7ca7a49e97a655672c": {
+  "keep": false,
+  "why": "no undo, wrong reply"
+ },
+ "f0c9241779e5472bb919d1e21b1971a7": {
+  "keep": false,
+  "why": "correct_memory for a delete request"
+ },
+ "5943bb49cce740279860f19532c743af": {
+  "keep": false,
+  "why": "asks Claude to delete files"
+ },
+ "3db62b423f934faab366087ed5f447eb": {
+  "keep": true,
+  "why": "dream on request"
+ },
+ "0ab347f08f6d4d608b7342bc41148af8": {
+  "keep": false,
+  "why": "five duplicate remembers"
+ }
+}

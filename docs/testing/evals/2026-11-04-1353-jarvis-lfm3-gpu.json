@@ -1,0 +1,167 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-04T13:53",
+ "cases": 10,
+ "passed": 7,
+ "passed_ignoring_style": 7,
+ "failure_kinds": {
+  "rejected": 1,
+  "reply": 1,
+  "wrong tool": 1
+ },
+ "first_words_median_s": 2.2,
+ "by_category": {
+  "general": "0/1",
+  "memory": "6/6",
+  "hard": "1/2",
+  "reminders": "0/1"
+ },
+ "rows": [
+  {
+   "id": "gk-capital",
+   "cat": "general",
+   "say": "what's the capital of Australia",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "rejected: web_search: ERROR: that is general knowledge, not current news. Answer it yourself without searching; "
+   ],
+   "tools": [],
+   "reply": "The capital of Australia is Canberra.",
+   "first_s": 17.0,
+   "total_s": 17.0
+  },
+  {
+   "id": "mem-remember",
+   "cat": "memory",
+   "say": "remember that I take my tea without sugar",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user takes their tea without sugar.",
+   "first_s": 1.3,
+   "total_s": 1.3
+  },
+  {
+   "id": "mem-note",
+   "cat": "memory",
+   "say": "note that my passport expires on 12 August 2031",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user's passport expires on 12 August 2031.",
+   "first_s": 1.3,
+   "total_s": 1.3
+  },
+  {
+   "id": "mem-stated",
+   "cat": "memory",
+   "say": "my sister Chiku's birthday is 9 June",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user's sister Chiku's birthday is 9 June.",
+   "first_s": 1.1,
+   "total_s": 1.1
+  },
+  {
+   "id": "mem-prefer",
+   "cat": "memory",
+   "say": "I prefer aisle seats on trains, keep that in mind",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user prefers aisle seats on trains.",
+   "first_s": 1.2,
+   "total_s": 1.2
+  },
+  {
+   "id": "h-name",
+   "cat": "hard",
+   "say": "remind me what I'm called again",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "reply: lacks /(?i)pranjal/"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "You are JARVIS.",
+   "first_s": 2.0,
+   "total_s": 2.0
+  },
+  {
+   "id": "h-jot",
+   "cat": "hard",
+   "say": "jot down that the plumber comes Friday at 10",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Noted in your journal: the plumber comes Friday at 10.",
+   "first_s": 6.3,
+   "total_s": 6.3
+  },
+  {
+   "id": "trace-reminder-check",
+   "cat": "reminders",
+   "say": "is my acrylic reminder really set?",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "wrong tool: called forbidden ['set_reminder']"
+   ],
+   "tools": [
+    "list_reminders",
+    "set_reminder"
+   ],
+   "reply": "Understood. I have not written anything to your journal/notes this turn, and no \"add to journal\" function was requested. Your Acrylic reminder remains as previously listed — a daily \"Follow up for Acrylic\" at 10:00. *(To be precise: I only executed `list_reminders` and the earlier `set_reminder` cal",
+   "first_s": 2.8,
+   "total_s": 16.2
+  },
+  {
+   "id": "trace-promise-save",
+   "cat": "memory",
+   "say": "Remember that we need to configure ESP Home modules in our new home so Jarvis can use them as voice satellites",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user wants to configure ESP Home modules in their new home so Jarvis can use them as voice satellites.",
+   "first_s": 2.2,
+   "total_s": 2.2
+  },
+  {
+   "id": "trace-no-split",
+   "cat": "memory",
+   "say": "Also remember that we need a nightly job which looks at the daily conversations with Jarvis and then we can run it by the cloud session to improve the harness",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember",
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user wants a nightly job which looks at the daily conversations with Jarvis; The user wants to run it by the cloud session to improve the harness.",
+   "first_s": 2.4,
+   "total_s": 2.4
+  }
+ ]
+}

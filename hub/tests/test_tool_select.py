@@ -84,19 +84,23 @@ def test_small_models_get_core_plus_matching_tools_by_spoken_name():
     ran = []
     a = agent([{"role": "assistant", "content": "Fine, sir."}], ran)
     ask(a, "send a text to mum, and what's the weather")
-    # make_call comes with send_text: the same family (tools/cards.py), so the model picks between them
-    assert a.llm.offered[0] == ["calculate", "get_time", "make_call", "search_notes", "send_text", "weather"]
+    # make_call comes with send_text: the same family (tools/cards.py), so the model picks between them;
+    # get_time only when the request is about time (the time rides on every message anyway)
+    assert a.llm.offered[0] == ["calculate", "make_call", "search_notes", "send_text", "weather"]
+    a = agent([{"role": "assistant", "content": "Fine, sir."}], ran)
+    ask(a, "what's the weather this evening")
+    assert "get_time" in a.llm.offered[0]
 
 
 def test_selection_falls_back_to_every_visible_tool_and_claude_sees_all():
     ran = []
     a = agent([{"role": "assistant", "content": "ok"}], ran, fail=True)
     ask(a, "send a text")
-    assert len(a.llm.offered[0]) == 9 and "phone_tap" not in a.llm.offered[0]
+    assert len(a.llm.offered[0]) == 8 and "phone_tap" not in a.llm.offered[0]  # all visible but get_time
     a = agent([{"role": "assistant", "content": "ok"}], ran)
     a.llm.model = "claude-haiku-5-5"
     ask(a, "send a text")
-    assert len(a.llm.offered[0]) == 9
+    assert len(a.llm.offered[0]) == 8
 
 
 def test_spoken_name_runs_the_tool_and_audit_keeps_the_internal_name():
@@ -128,3 +132,17 @@ def test_missing_page_names_the_closest_pages(tmp_path):
     assert "Closest: Groceries" in missing_page(g, "Grocery", "read_page")
     assert "jarvis/preferences" in missing_page(g, "preferences", "forget_memory_page")
     assert "search_notes" in missing_page(g, "Holiday plans", "read_page")
+
+
+def test_remember_is_offered_and_remind_me_what_is_a_question():
+    reg = registry([])
+    reg.add(Tool("kb_remember", "builtin", "save a fact", {"type": "object", "properties": {}}, Risk.WRITE, None))
+    sel = ToolSelector(FakeEmbedder(False), "m", 1)
+
+    def offered(say):
+        return {t.name for t in asyncio.run(sel.rank(reg.all(), [{"role": "user", "content": say}])).tools}
+    # asked to keep something: the memory tool, whatever the embeddings matched
+    assert "kb_remember" in offered("also remember that we need a nightly job which looks at the conversations")
+    # "remind me what I'm called" asks the notes, so the timer and reminder tools stay out
+    got = offered("remind me what I'm called again")
+    assert "kb_search" in got and not got & {"set_timer", "list_timers"}

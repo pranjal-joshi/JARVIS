@@ -7,13 +7,16 @@ const ALLOWED = [
   /^audit$/,
   /^status$/,
   /^llm$/,
-  /^kb\/(search|graph|memory|memory\/edit|tasks|sync|page)$/,
+  /^kb\/(search|graph|memory|memory\/edit|tasks|sync|page|page\/(delete|rename)|block\/(delete|edit|add|move)|trash(\/restore)?)$/,
+  /^traces(\/[\w.:-]+)?$/,
   /^audio\/(transcriptions|speech)$/,
   /^skills(\/.+\/(enable|run|promote))?$/,
   /^policy(\/grants\/[\w.*-]+)?$/,
   /^evals$/,
+  /^dream(\/run)?$/,
   /^devices(\/pair(\/[a-f0-9]+)?|\/allow|\/disconnect)?$/,
   /^monitors$/,
+  /^jobs\/([0-9a-f]{8}\/(dismiss|cancel)|clear)$/,
   /^watchers(\/test|\/draft|\/[a-z0-9-]+(\/(run|enable))?)?$/,
   /^notify\/test$/,
 ];
@@ -30,6 +33,8 @@ async function forward(req, { params }) {
   const headers = { Authorization: `Bearer ${process.env.HUB_TOKEN_WEB || ""}` };
   const ct = req.headers.get("content-type");
   if (ct) headers["Content-Type"] = ct;
+  const session = req.headers.get("x-jarvis-session"); // the HUD's conversation id, for the hub's traces
+  if (session) headers["X-Jarvis-Session"] = session;
 
   const init = { method: req.method, headers, cache: "no-store" };
   if (!["GET", "HEAD"].includes(req.method)) init.body = await req.arrayBuffer();

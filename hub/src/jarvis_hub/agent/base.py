@@ -10,7 +10,7 @@ from jarvis_hub.events.bus import Event, EventBus
 class Agent(Protocol):
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus, on_text=None, on_event=None, session: str | None = None,
-                  dry_run: bool = False) -> str: ...
+                  dry_run: bool = False, trace_session: str | None = None, exclude: frozenset = frozenset()) -> str: ...
 
 
 class EchoAgent:
@@ -18,7 +18,7 @@ class EchoAgent:
 
     async def run(self, *, messages: list[dict], source: Source, request_id: str,
                   bus: EventBus, on_text=None, on_event=None, session: str | None = None,
-                  dry_run: bool = False) -> str:
+                  dry_run: bool = False, trace_session: str | None = None, exclude: frozenset = frozenset()) -> str:
         bus.publish(Event("thinking", source, request_id))
         last = next((m.get("content") or "" for m in reversed(messages)
                      if m.get("role") == "user"), "")

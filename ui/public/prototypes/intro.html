@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS Intro Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #04070a;
+    --cyan: #7fe7ff;
+    --cyan-dim: rgba(127, 231, 255, 0.35);
+    --cyan-faint: rgba(127, 231, 255, 0.12);
+    --text: #cdeff7;
+    --amber: #ffb347;
+    --red: #ff5c5c;
+    --violet: #b48bff;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+    --display: "Chakra Petch", "JetBrains Mono", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
+  body { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; cursor: crosshair; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+  canvas#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+  .corner { position: absolute; padding: 12px 14px; min-width: 190px; opacity: 0; transition: opacity 0.2s steps(3); }
+  .corner.on { opacity: 1; }
+  .corner::before, .corner::after { content: ""; position: absolute; width: 18px; height: 18px; border-color: var(--cyan); border-style: solid; opacity: 0.8; }
+  .tl { top: 14px; left: 14px; } .tl::before { top: 0; left: 0; border-width: 1px 0 0 1px; } .tl::after { display: none; }
+  .tr { top: 14px; right: 14px; text-align: right; } .tr::before { top: 0; right: 0; border-width: 1px 1px 0 0; } .tr::after { display: none; }
+  .bl { bottom: 14px; left: 14px; } .bl::before { bottom: 0; left: 0; border-width: 0 0 1px 1px; } .bl::after { display: none; }
+  .br { bottom: 14px; right: 14px; text-align: right; } .br::before { bottom: 0; right: 0; border-width: 0 1px 1px 0; } .br::after { display: none; }
+  .lbl { color: var(--cyan-dim); font-size: 9px; letter-spacing: 0.22em; }
+  .val { color: var(--text); }
+  .hi { color: var(--cyan); }
+  .amb { color: var(--amber); }
+  .red { color: var(--red); }
+  .vio { color: var(--violet); }
+  .row { line-height: 1.6; white-space: nowrap; }
+  .brand { font-family: var(--display); font-weight: 600; color: var(--cyan); letter-spacing: 0.3em; font-size: 12px; }
+  .flick { animation: flick 3.7s steps(1) infinite; }
+  .flick.d2 { animation-duration: 5.3s; animation-delay: -1.2s; }
+  .flick.d3 { animation-duration: 2.9s; animation-delay: -2.1s; }
+  @keyframes flick { 0%, 100% { opacity: 1; } 41% { opacity: 0.25; } 42% { opacity: 1; } 77% { opacity: 0.5; } 78% { opacity: 1; } 79% { opacity: 0.2; } 80% { opacity: 1; } }
+  .blink { animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #hex { margin-top: 6px; color: var(--cyan-dim); font-size: 10px; line-height: 1.45; height: 7.25em; overflow: hidden; white-space: pre; }
+  #hex b { color: var(--cyan); font-weight: 400; }
+  #hex i { color: var(--amber); font-style: normal; }
+  .bar { width: 160px; height: 3px; background: var(--cyan-faint); margin: 6px 0 4px auto; position: relative; overflow: hidden; }
+  .bar > span { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+  .phases { font-size: 9px; letter-spacing: 0.16em; color: var(--cyan-dim); }
+  .phases span.act { color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
+  .phases span.past { color: rgba(205, 239, 247, 0.55); }
+
+  .btn { pointer-events: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0.25em; color: var(--cyan); background: rgba(4, 7, 10, 0.6); border: 1px solid var(--cyan-dim); padding: 7px 12px 7px 14px; cursor: pointer; margin-top: 8px; }
+  .btn:hover, .btn:focus-visible { border-color: var(--cyan); box-shadow: 0 0 10px rgba(127, 231, 255, 0.35); outline: none; }
+
+  /* reticle */
+  #reticle { position: absolute; left: 50%; top: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; opacity: 0; transition: opacity 0.4s; }
+  #reticle.on { opacity: 0.55; }
+  #reticle::before { content: ""; position: absolute; inset: 0; border: 1px dashed var(--cyan-dim); border-radius: 50%; animation: spin 14s linear infinite; }
+  #reticle::after { content: ""; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border: 1px solid var(--cyan); }
+  .tick { position: absolute; background: var(--cyan); opacity: 0.7; }
+  .tick.h { width: 14px; height: 1px; top: 50%; } .tick.v { width: 1px; height: 14px; left: 50%; }
+  .tick.l { left: -20px; } .tick.r { right: -20px; } .tick.t { top: -20px; } .tick.b { bottom: -20px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* boot log */
+  #boot { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, 86vw); font-size: 11px; line-height: 1.7; color: var(--cyan); transition: opacity 0.4s; }
+  #boot .ln { opacity: 0; white-space: nowrap; overflow: hidden; }
+  #boot .ln.on { opacity: 1; animation: flickIn 0.25s steps(4); }
+  #boot .ok { color: var(--text); } #boot .wr { color: var(--amber); }
+  #boot.gone { opacity: 0; }
+  @keyframes flickIn { 0% { opacity: 0; } 25% { opacity: 1; } 50% { opacity: 0.2; } 100% { opacity: 1; } }
+
+  /* title */
+  #title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; opacity: 0; pointer-events: none; width: 100%; }
+  #title::before { content: ""; position: absolute; left: 50%; top: 50%; width: min(900px, 120vw); height: 320px; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(4, 7, 10, 0.82), rgba(4, 7, 10, 0.0)); z-index: -1; }
+  #title.show { opacity: 1; }
+  .ttl { position: relative; display: inline-block; font-family: var(--display); font-weight: 700; font-size: clamp(30px, 8.2vw, 92px); letter-spacing: 0.42em; padding-left: 0.42em; color: #e6fbff; text-shadow: 0 0 10px rgba(127, 231, 255, 0.85), 0 0 34px rgba(127, 231, 255, 0.45); }
+  .ttl span { display: inline-block; opacity: 0; }
+  #title.show .ttl span { animation: letterIn 0.6s steps(6) forwards; }
+  @keyframes letterIn { 0% { opacity: 0; } 20% { opacity: 1; } 35% { opacity: 0.1; } 55% { opacity: 1; } 70% { opacity: 0.4; } 100% { opacity: 1; } }
+  .ttl::before, .ttl::after { content: attr(data-t); position: absolute; left: 0; top: 0; padding-left: 0.42em; width: 100%; opacity: 0; pointer-events: none; }
+  body.glitching #title.show .ttl::before { opacity: 0.8; color: var(--red); transform: translate(-4px, 1px); clip-path: inset(10% 0 55% 0); text-shadow: none; }
+  body.glitching #title.show .ttl::after { opacity: 0.8; color: var(--cyan); transform: translate(5px, -1px); clip-path: inset(60% 0 8% 0); text-shadow: none; }
+  .rule { width: min(460px, 70vw); height: 1px; margin: 10px auto 12px; background: linear-gradient(90deg, transparent, var(--cyan), transparent); transform: scaleX(0); transition: transform 0.7s cubic-bezier(.2,.8,.2,1) 0.5s; }
+  #title.show .rule { transform: scaleX(1); }
+  .sub { font-size: clamp(10px, 2.6vw, 13px); letter-spacing: 0.5em; padding-left: 0.5em; color: var(--text); opacity: 0; transition: opacity 0.3s steps(3) 0.9s; }
+  .sub .dot { display: inline-block; width: 7px; height: 7px; background: var(--amber); box-shadow: 0 0 8px var(--amber); margin-right: 12px; vertical-align: 1px; }
+  #title.show .sub { opacity: 1; }
+  .hint { margin-top: 18px; font-size: 9px; letter-spacing: 0.3em; color: var(--cyan-dim); opacity: 0; transition: opacity 0.6s 1.6s; }
+  #title.show .hint { opacity: 1; }
+
+  #replay { display: none; }
+  body.done #replay { display: inline-block; }
+  body.done #skip { display: none; }
+
+  /* glitch jitter for HTML layer */
+  body.glitching #hud { transform: translate(2px, 0); filter: drop-shadow(-2px 0 0 rgba(255, 92, 92, 0.6)) drop-shadow(2px 0 0 rgba(127, 231, 255, 0.6)); }
+  body.glitching .corner.tl { transform: translateX(-6px); }
+  body.glitching .corner.br { transform: translateX(5px); }
+
+  @media (max-width: 640px) {
+    body { font-size: 9.5px; }
+    .corner { min-width: 0; padding: 9px 10px; }
+    .tl { top: 8px; left: 8px; } .tr { top: 8px; right: 8px; } .bl { bottom: 8px; left: 8px; } .br { bottom: 8px; right: 8px; }
+    .hide-sm { display: none; }
+    #hex { height: 4.4em; font-size: 9px; }
+    .bar { width: 110px; }
+    .phases { display: none; }
+    .ttl { letter-spacing: 0.24em; padding-left: 0.24em; }
+    .ttl::before, .ttl::after { padding-left: 0.24em; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .flick, .blink, #reticle::before { animation: none !important; }
+    body.glitching #hud, body.glitching .corner { transform: none !important; filter: none !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+
+<div id="hud">
+  <div class="corner tl" id="c-tl">
+    <div class="row brand">J.A.R.V.I.S <span class="lbl">// NEURAMESH</span></div>
+    <div class="row"><span class="lbl">NODE </span><span class="val flick">0x3F.A2.7C</span> <span class="lbl hide-sm">LINK </span><span class="hi hide-sm" id="link">SECURE</span></div>
+    <div class="row"><span class="lbl">LAT </span><span class="val" id="lat">51.50740</span> <span class="lbl">LON </span><span class="val" id="lon">-0.12780</span></div>
+    <div class="row hide-sm"><span class="lbl">CAM.Z </span><span class="val" id="camz">0.00</span> <span class="lbl">VEL </span><span class="val" id="vel">0.0</span></div>
+  </div>
+  <div class="corner tr" id="c-tr">
+    <div class="row"><span class="lbl">FPS </span><span class="hi" id="fps">--</span> <span class="lbl hide-sm">DPR </span><span class="val hide-sm" id="dpr">1.0</span></div>
+    <div class="row"><span class="lbl">T+ </span><span class="val" id="clock">00:00:00.000</span></div>
+    <div class="row hide-sm"><span class="lbl">PKTS </span><span class="val flick d2" id="pkts">0</span> <span class="lbl">PTCL </span><span class="val" id="ptcl">0</span></div>
+    <div class="row"><span class="lbl">SIG </span><span class="amb flick d3" id="sig">-71dB</span> <span class="red blink">&#9679;</span> <span class="lbl">REC</span></div>
+  </div>
+  <div class="corner bl" id="c-bl">
+    <div class="row lbl">STREAM // MESH.TRAFFIC</div>
+    <div id="hex"></div>
+  </div>
+  <div class="corner br" id="c-br">
+    <div class="row"><span class="lbl">SEQ </span><span class="hi" id="phase">STANDBY</span></div>
+    <div class="bar"><span id="prog"></span></div>
+    <div class="row phases" id="phases"><span>BOOT</span> &middot; <span>ASSEMBLE</span> &middot; <span>TRAVERSE</span> &middot; <span>BREACH</span> &middot; <span>ONLINE</span></div>
+    <button class="btn" id="skip" type="button">SKIP &#9656;</button>
+    <button class="btn" id="replay" type="button">REPLAY &#8635;</button>
+  </div>
+
+  <div id="reticle"><div class="tick h l"></div><div class="tick h r"></div><div class="tick v t"></div><div class="tick v b"></div></div>
+
+  <div id="boot">
+    <div class="ln">&gt; BIOS HANDSHAKE ............ <span class="ok">OK</span></div>
+    <div class="ln">&gt; MOUNT /neuramesh/core ...... <span class="ok">OK</span></div>
+    <div class="ln">&gt; KEY EXCHANGE x25519 ........ <span class="ok">OK</span></div>
+    <div class="ln">&gt; ROUTE OBFUSCATION .......... <span class="wr">PARTIAL</span></div>
+    <div class="ln">&gt; INITIALISING MESH LATTICE<span class="blink">_</span></div>
+  </div>
+
+  <div id="title">
+    <div class="ttl" data-t="J.A.R.V.I.S." id="ttl"></div>
+    <div class="rule"></div>
+    <div class="sub"><span class="dot"></span>SYSTEMS ONLINE</div>
+    <div class="hint">PRESS R OR TAP REPLAY</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ---------------------------------------------------------------- setup
+const reducedMQ = matchMedia('(prefers-reduced-motion: reduce)');
+let reduced = reducedMQ.matches;
+reducedMQ.addEventListener('change', (e) => { reduced = e.matches; });
+
+const small = Math.min(innerWidth, innerHeight) < 600;
+const DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
+renderer.setPixelRatio(DPR);
+renderer.setSize(innerWidth, innerHeight, false);
+renderer.setClearColor(0x04070a, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 400);
+
+// deterministic RNG
+let seed = 1337;
+const rand = () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+const rr = (a, b) => a + (b - a) * rand();
+const TAU = Math.PI * 2;
+
+// ---------------------------------------------------------------- world constants
+const Z_TOP = 20, LEN = 600;
+const R1 = 5.2, SEG1 = 28, DZ1 = 2, RINGS1 = LEN / DZ1;
+const R2 = 10.5, SEG2 = 12, DZ2 = 6, RINGS2 = LEN / DZ2;
+
+const C_CYAN = new THREE.Color(0x7fe7ff);
+const C_AMBER = new THREE.Color(0xffb347);
+const C_VIOLET = new THREE.Color(0xb48bff);
+const C_WHITE = new THREE.Color(0xe8fbff);
+
+const shared = {
+  uTime: { value: 0 },     // particle flow time
+  uClock: { value: 0 },    // wall clock
+  uAssemble: { value: 0 },
+  uFar: { value: 170 },
+  uPx: { value: DPR },
+  uScale: { value: 500 },
+  uCyan: { value: C_CYAN }, uAmber: { value: C_AMBER }, uViolet: { value: C_VIOLET }, uWhite: { value: C_WHITE },
+};
+
+const GLSL_COMMON = /* glsl */`
+  uniform float uTime, uClock, uAssemble, uFar, uPx, uScale;
+  #define Z_TOP ${Z_TOP.toFixed(1)}
+  #define LEN ${LEN.toFixed(1)}
+  vec2 pathOff(float z){ return vec2(sin(z*0.012)*7.0 + sin(z*0.031)*2.0, cos(z*0.009)*5.0 - 5.0); }
+`;
+const pathX = (z) => Math.sin(z * 0.012) * 7 + Math.sin(z * 0.031) * 2;
+const pathY = (z) => Math.cos(z * 0.009) * 5 - 5;
+
+// ---------------------------------------------------------------- mesh lattice (one merged LineSegments)
+const linePos = [], lineRnd = [], lineBri = [];
+const netSegs = []; // for particles travelling network edges
+function seg(ax, ay, az, bx, by, bz, b) {
+  const r = rand();
+  linePos.push(ax, ay, az, bx, by, bz); lineRnd.push(r, r); lineBri.push(b, b);
+}
+// inner tunnel
+for (let i = 0; i <= RINGS1; i++) {
+  const z = Z_TOP - i * DZ1;
+  const ringB = i % 8 === 0 ? 1.0 : 0.42;
+  for (let k = 0; k < SEG1; k++) {
+    const a0 = (k / SEG1) * TAU, a1 = ((k + 1) / SEG1) * TAU;
+    const x0 = Math.cos(a0) * R1, y0 = Math.sin(a0) * R1, x1 = Math.cos(a1) * R1, y1 = Math.sin(a1) * R1;
+    seg(x0, y0, z, x1, y1, z, ringB);
+    if (i < RINGS1) {
+      seg(x0, y0, z, x0, y0, z - DZ1, 0.7);
+      if (i % 2 === 0) seg(x0, y0, z, x1, y1, z - DZ1, 0.22);
+    }
+  }
+}
+// outer sparse tunnel
+for (let i = 0; i <= RINGS2; i++) {
+  const z = Z_TOP - i * DZ2;
+  for (let k = 0; k < SEG2; k++) {
+    const a0 = ((k + 0.5) / SEG2) * TAU, a1 = ((k + 1.5) / SEG2) * TAU;
+    const x0 = Math.cos(a0) * R2, y0 = Math.sin(a0) * R2;
+    seg(x0, y0, z, Math.cos(a1) * R2, Math.sin(a1) * R2, z, 0.2);
+    if (i < RINGS2) seg(x0, y0, z, x0, y0, z - DZ2, 0.3);
+  }
+}
+// outer network of nodes
+const NODES = small ? 900 : 1500;
+const nodes = [];
+for (let i = 0; i < NODES; i++) {
+  const a = rand() * TAU, r = rr(14, 36), z = Z_TOP - rand() * LEN;
+  nodes.push([Math.cos(a) * r, Math.sin(a) * r, z, a]);
+}
+nodes.sort((p, q) => q[2] - p[2]);
+for (let i = 0; i < NODES; i++) {
+  const p = nodes[i];
+  for (let c = 0; c < 2; c++) {
+    const j = Math.min(NODES - 1, i + 1 + Math.floor(rand() * 7));
+    if (j === i) continue;
+    const q = nodes[j];
+    seg(p[0], p[1], p[2], q[0], q[1], q[2], 0.22);
+    netSegs.push(p[0], p[1], p[2], q[0], q[1], q[2]);
+  }
+  if (rand() < 0.2) { // spoke to outer tunnel
+    const x = Math.cos(p[3]) * R2, y = Math.sin(p[3]) * R2;
+    seg(p[0], p[1], p[2], x, y, p[2], 0.18);
+    netSegs.push(p[0], p[1], p[2], x, y, p[2]);
+  }
+}
+const lineGeo = new THREE.BufferGeometry();
+lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+lineGeo.setAttribute('aRand', new THREE.Float32BufferAttribute(lineRnd, 1));
+lineGeo.setAttribute('aBright', new THREE.Float32BufferAttribute(lineBri, 1));
+const lineMat = new THREE.ShaderMaterial({
+  uniforms: shared,
+  transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+  vertexShader: GLSL_COMMON + /* glsl */`
+    attribute float aRand; attribute float aBright;
+    varying float vA; varying float vPulse;
+    void main(){
+      vec3 p = position; p.xy += pathOff(p.z);
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      float d = -mv.z;
+      float fog = exp(-d*0.032) * smoothstep(0.15, 3.0, d);
+      float zN = clamp((Z_TOP - position.z) / LEN, 0.0, 1.0);
+      float thr = aRand*0.5 + zN*0.5;
+      float a = uAssemble*1.06;
+      float rev = smoothstep(thr, thr + 0.03, a);
+      float front = 1.0 - smoothstep(0.0, 0.06, abs(a - thr));
+      float fl = step(0.45, fract(sin(aRand*913.17 + floor(uClock*24.0))*43758.5453));
+      rev = max(rev*(1.0 - front*0.6), front*fl*1.6);
+      float pz = fract((position.z + uClock*60.0) / 54.0);
+      vPulse = smoothstep(0.9, 1.0, pz) * step(pz, 0.995);
+      vA = aBright * fog * rev;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: /* glsl */`
+    uniform vec3 uCyan, uWhite;
+    varying float vA; varying float vPulse;
+    void main(){
+      vec3 c = mix(uCyan, uWhite, vPulse*0.7) * vA * (0.3 + vPulse*0.9);
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+const lines = new THREE.LineSegments(lineGeo, lineMat);
+lines.frustumCulled = false;
+scene.add(lines);
+
+// ---------------------------------------------------------------- particles (shader-driven, one Points draw)
+const PCOUNT = small ? 26000 : 52000;
+const nNet = netSegs.length / 6;
+function buildParticles(count, glyph) {
+  const A = new Float32Array(count * 3), B = new Float32Array(count * 3), P = new Float32Array(count * 4);
+  const G = glyph ? new Float32Array(count * 2) : null;
+  for (let i = 0; i < count; i++) {
+    const r = rand();
+    let type, speed, size;
+    if (glyph || r < 0.6) { // along longitudinal lines
+      type = 0;
+      const outer = !glyph && rand() < 0.15;
+      const k = Math.floor(rand() * (outer ? SEG2 : SEG1));
+      A[i*3] = outer ? ((k + 0.5) / SEG2) * TAU : (k / SEG1) * TAU;
+      A[i*3+1] = outer ? R2 : (glyph ? R1 * 0.9 : R1);
+      A[i*3+2] = rand() * LEN;
+      speed = glyph ? rr(6, 26) : rr(18, 110) * (rand() < 0.72 ? -1 : 1);
+      size = glyph ? rr(0.22, 0.42) : rr(0.035, 0.11);
+    } else if (r < 0.8) { // around rings
+      type = 1;
+      A[i*3] = rand() * TAU; A[i*3+1] = R1; A[i*3+2] = Z_TOP - Math.floor(rand() * RINGS1) * DZ1;
+      speed = rr(0.6, 3.2) * (rand() < 0.5 ? -1 : 1);
+      size = rr(0.03, 0.08);
+    } else { // along network edges, some static node flares
+      type = 2;
+      const s = Math.floor(rand() * nNet) * 6;
+      A[i*3] = netSegs[s]; A[i*3+1] = netSegs[s+1]; A[i*3+2] = netSegs[s+2];
+      const still = rand() < 0.08;
+      B[i*3] = still ? netSegs[s] : netSegs[s+3]; B[i*3+1] = still ? netSegs[s+1] : netSegs[s+4]; B[i*3+2] = still ? netSegs[s+2] : netSegs[s+5];
+      speed = still ? 0 : rr(0.15, 1.1);
+      size = still ? rr(0.18, 0.35) : rr(0.06, 0.16);
+    }
+    P[i*4] = type; P[i*4+1] = speed; P[i*4+2] = rand(); P[i*4+3] = size;
+    if (G) { G[i*2] = Math.floor(rand() * 16); G[i*2+1] = rr(2, 14); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(A, 3));
+  g.setAttribute('aB', new THREE.BufferAttribute(B, 3));
+  g.setAttribute('aP', new THREE.BufferAttribute(P, 4));
+  if (G) g.setAttribute('aG', new THREE.BufferAttribute(G, 2));
+  return g;
+}
+const PARTICLE_VS = (glyph) => GLSL_COMMON + /* glsl */`
+  attribute vec3 aB; attribute vec4 aP;
+  ${glyph ? 'attribute vec2 aG; varying float vGlyph;' : ''}
+  uniform vec3 uCyan, uAmber, uViolet, uWhite;
+  varying vec3 vCol; varying float vA;
+  void main(){
+    vec3 p;
+    if (aP.x < 0.5) {
+      float z = Z_TOP - mod(position.z + uTime*aP.y, LEN);
+      p = vec3(cos(position.x)*position.y, sin(position.x)*position.y, z);
+    } else if (aP.x < 1.5) {
+      float a = position.x + uTime*aP.y;
+      p = vec3(cos(a)*position.y, sin(a)*position.y, position.z);
+    } else {
+      p = mix(position, aB, fract(aP.z + uTime*aP.y));
+    }
+    float zN = clamp((Z_TOP - p.z) / LEN, 0.0, 1.0);
+    float th = zN*0.5 + 0.25;
+    float rev = smoothstep(th, th + 0.12, uAssemble*1.06);
+    p.xy += pathOff(p.z);
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    float d = max(-mv.z, 0.001);
+    float fog = exp(-d*0.028) * smoothstep(0.25, 2.0, d) * step(0.0, -mv.z);
+    gl_PointSize = clamp(aP.w * uScale / d, 1.0, ${glyph ? '34.0' : '18.0'} * uPx);
+    float h = fract(aP.z * 17.31);
+    vCol = h > 0.975 ? uAmber : (h > 0.95 ? uViolet : mix(uCyan, uWhite, 0.25 + 0.5*h));
+    vA = fog * rev;
+    ${glyph ? 'vGlyph = floor(mod(aG.x + uClock*aG.y, 16.0));' : ''}
+    gl_Position = projectionMatrix * mv;
+  }`;
+const pointsMat = new THREE.ShaderMaterial({
+  uniforms: shared, transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+  vertexShader: PARTICLE_VS(false),
+  fragmentShader: /* glsl */`
+    varying vec3 vCol; varying float vA;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      float a = smoothstep(0.5, 0.0, d); a *= a;
+      gl_FragColor = vec4(vCol * a * vA * 0.85, 1.0);
+    }`,
+});
+const points = new THREE.Points(buildParticles(PCOUNT, false), pointsMat);
+points.frustumCulled = false;
+scene.add(points);
+
+// glyph atlas for code fragments
+const atlasCanvas = document.createElement('canvas');
+atlasCanvas.width = atlasCanvas.height = 256;
+const atlasTex = new THREE.CanvasTexture(atlasCanvas);
+function drawAtlas() {
+  const x = atlasCanvas.getContext('2d');
+  x.clearRect(0, 0, 256, 256);
+  x.fillStyle = '#fff'; x.font = '700 46px "JetBrains Mono", monospace'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  const s = '0123456789ABCDEF';
+  for (let i = 0; i < 16; i++) x.fillText(s[i], (i % 4) * 64 + 32, Math.floor(i / 4) * 64 + 34);
+  atlasTex.needsUpdate = true;
+}
+drawAtlas();
+if (document.fonts) document.fonts.load('700 46px "JetBrains Mono"').then(drawAtlas).catch(() => {});
+
+const GCOUNT = small ? 1400 : 2800;
+const glyphMat = new THREE.ShaderMaterial({
+  uniforms: { ...shared, uAtlas: { value: atlasTex } },
+  transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+  vertexShader: PARTICLE_VS(true),
+  fragmentShader: /* glsl */`
+    uniform sampler2D uAtlas;
+    varying vec3 vCol; varying float vA; varying float vGlyph;
+    void main(){
+      vec2 cell = vec2(mod(vGlyph, 4.0), floor(vGlyph / 4.0));
+      vec2 uv = vec2((cell.x + gl_PointCoord.x) / 4.0, 1.0 - (cell.y + gl_PointCoord.y) / 4.0);
+      float a = texture2D(uAtlas, uv).a;
+      gl_FragColor = vec4(vCol * a * vA * 0.9, 1.0);
+    }`,
+});
+const glyphs = new THREE.Points(buildParticles(GCOUNT, true), glyphMat);
+glyphs.frustumCulled = false;
+scene.add(glyphs);
+
+document.getElementById('ptcl').textContent = (PCOUNT + GCOUNT).toLocaleString('en-US');
+document.getElementById('dpr').textContent = DPR.toFixed(2);
+
+// ---------------------------------------------------------------- post
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(DPR);
+composer.setSize(innerWidth, innerHeight);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.45, 0.06);
+composer.addPass(bloom);
+const glitchPass = new ShaderPass({
+  uniforms: {
+    tDiffuse: { value: null }, uTime: { value: 0 }, uGlitch: { value: 0 }, uAberr: { value: 0.003 },
+    uSeed: { value: 0 }, uFlash: { value: 0 }, uScan: { value: 0.12 }, uRes: { value: new THREE.Vector2(1, 1) },
+  },
+  vertexShader: /* glsl */`varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse; uniform float uTime, uGlitch, uAberr, uSeed, uFlash, uScan; uniform vec2 uRes;
+    varying vec2 vUv;
+    float h11(float x){ return fract(sin(x*127.1)*43758.5453); }
+    float h21(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233)))*43758.5453); }
+    void main(){
+      vec2 uv = vUv; float g = uGlitch;
+      // horizontal slice displacement
+      float bands = mix(6.0, 46.0, h11(uSeed));
+      float b = floor(uv.y * bands);
+      float rb = h21(vec2(b, uSeed));
+      float on = step(1.0 - g*0.45, rb);
+      uv.x += on * (h21(vec2(b, uSeed + 3.1)) - 0.5) * 0.16 * g;
+      // thin screen tear
+      float ty = h11(uSeed + 7.0);
+      uv.x += step(abs(uv.y - ty), 0.003 + 0.018*g) * 0.035 * g;
+      // block jitter
+      vec2 blk = floor(uv * vec2(16.0, 9.0));
+      float rk = h21(blk + uSeed);
+      uv += step(1.0 - g*0.1, rk) * (vec2(h21(blk + 1.7), h21(blk + 2.9)) - 0.5) * 0.05;
+      // chromatic aberration
+      vec2 dir = uv - 0.5;
+      float ca = uAberr + g*0.016 + on*g*0.018;
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv + dir*ca + vec2(ca*0.4, 0.0)).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv - dir*ca - vec2(ca*0.4, 0.0)).b;
+      col = mix(col, col.gbr * vec3(1.0, 1.15, 1.35), on * g * 0.35);
+      // scanlines + rolling bar
+      float sl = 0.5 + 0.5*sin(vUv.y * uRes.y * 1.5708);
+      col *= 1.0 - uScan * sl;
+      col *= 0.95 + 0.05*smoothstep(0.0, 0.03, abs(fract(vUv.y*0.6 - uTime*0.11) - 0.5));
+      // grain
+      float n = h21(vUv * uRes + fract(uTime) * 91.7);
+      col *= 1.0 + (n - 0.5) * (0.35 + g*0.6);
+      col += max(n - 0.92, 0.0) * (0.02 + g*0.25);
+      col += uFlash * vec3(0.45, 0.85, 1.0);
+      // vignette
+      float v = smoothstep(1.25, 0.3, length(dir * vec2(uRes.x / uRes.y, 1.0)) * 0.95);
+      col *= mix(0.5, 1.0, v);
+      gl_FragColor = vec4(max(col, 0.0), 1.0);
+    }`,
+});
+composer.addPass(glitchPass);
+composer.addPass(new OutputPass());
+const GU = glitchPass.uniforms;
+window.__intro = { bloom, glitchPass, renderer, composer };
+
+// ---------------------------------------------------------------- resize
+let baseFov = 62;
+function resize() {
+  const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  baseFov = camera.aspect < 0.8 ? 84 : 62;
+  camera.updateProjectionMatrix();
+  GU.uRes.value.set(w * DPR, h * DPR);
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------------------------------------------------------------- sequence
+const T = { boot: 1.1, asm: 2.9, breachA: 6.6, breachB: 7.4, end: 9.4 };
+const PHASES = ['BOOT', 'ASSEMBLE', 'TRAVERSE', 'BREACH', 'ONLINE'];
+const $ = (id) => document.getElementById(id);
+const el = { phase: $('phase'), prog: $('prog'), fps: $('fps'), clock: $('clock'), pkts: $('pkts'), lat: $('lat'), lon: $('lon'), camz: $('camz'), vel: $('vel'), sig: $('sig'), hex: $('hex'), boot: $('boot'), title: $('title'), ttl: $('ttl'), reticle: $('reticle'), link: $('link') };
+const phaseSpans = $('phases').querySelectorAll('span');
+const corners = ['c-tl', 'c-tr', 'c-bl', 'c-br'].map($);
+const bootLines = el.boot.querySelectorAll('.ln');
+'J.A.R.V.I.S.'.split('').forEach((ch, i) => { const s = document.createElement('span'); s.textContent = ch; s.style.animationDelay = (i * 0.055 + Math.random() * 0.12).toFixed(3) + 's'; el.ttl.appendChild(s); });
+
+let seqT = 0, wall = 0, curPhase = -1, done = false;
+const easeOutCubic = (u) => 1 - Math.pow(1 - u, 3);
+const clamp01 = (x) => x < 0 ? 0 : x > 1 ? 1 : x;
+
+function camZAt(t) {
+  if (t < T.boot) return 75;
+  if (t < T.asm) return 75 - 45 * easeOutCubic((t - T.boot) / (T.asm - T.boot));
+  const u = clamp01((t - T.asm) / (T.end - T.asm));
+  const g = Math.pow(u, 1.4);
+  return 30 - (reduced ? 230 : 470) * (1 - Math.pow(1 - g, 3));
+}
+
+const tgt = new THREE.Vector3();
+let lastFov = 0, lastZ = 75;
+function placeCamera(t, dt) {
+  let z = camZAt(t), roll = 0, fov = baseFov;
+  if (t >= T.asm && t < T.end) {
+    const u = (t - T.asm) / (T.end - T.asm);
+    if (!reduced) {
+      fov += 30 * Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.25)), 3);
+      roll = 0.4 * Math.sin(u * Math.PI * 2.2) * (1 - u);
+    }
+  }
+  if (done) { // idle sway
+    z += Math.sin(wall * 0.17) * 1.5;
+    roll = reduced ? 0 : Math.sin(wall * 0.11) * 0.05;
+  }
+  const look = 18;
+  camera.position.set(pathX(z), pathY(z), z);
+  tgt.set(pathX(z - look), pathY(z - look), z - look);
+  camera.up.set(Math.sin(roll), Math.cos(roll), 0);
+  camera.lookAt(tgt);
+  if (Math.abs(fov - lastFov) > 0.01) {
+    camera.fov = fov; camera.updateProjectionMatrix(); lastFov = fov;
+    shared.uScale.value = (innerHeight * DPR) / (2 * Math.tan(THREE.MathUtils.degToRad(fov) * 0.5));
+  }
+  const vel = dt > 0 ? Math.abs(z - lastZ) / dt : 0;
+  lastZ = z;
+  return vel;
+}
+
+function setPhase(i) {
+  if (i === curPhase) return;
+  curPhase = i;
+  el.phase.textContent = PHASES[i];
+  phaseSpans.forEach((s, k) => { s.className = k === i ? 'act' : (k < i ? 'past' : ''); });
+}
+
+// glitch scheduler
+const gl = { until: 0, amp: 0, next: 1.4, seedAt: 0 };
+let glitchClass = false;
+function burst(amp, dur) { gl.amp = amp; gl.until = wall + dur; }
+
+function skip() {
+  if (done) return;
+  seqT = T.end + 0.001;
+  if (!reduced) burst(0.8, 0.22);
+}
+function replay() {
+  seqT = 0; done = false; curPhase = -1;
+  document.body.classList.remove('done');
+  el.title.classList.remove('show');
+  el.boot.classList.remove('gone');
+  bootLines.forEach((l) => l.classList.remove('on'));
+  corners.forEach((c) => c.classList.remove('on'));
+  el.reticle.classList.remove('on');
+  el.ttl.querySelectorAll('span').forEach((s) => { s.style.animation = 'none'; void s.offsetWidth; s.style.animation = ''; });
+}
+$('skip').addEventListener('click', (e) => { e.stopPropagation(); skip(); });
+$('replay').addEventListener('click', (e) => { e.stopPropagation(); replay(); });
+addEventListener('pointerdown', (e) => { if (e.target.closest('button')) return; skip(); });
+addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') { if (done) { replay(); return; } }
+  if (e.key === 'Tab') return;
+  if (e.target.closest && e.target.closest('button') && (e.key === 'Enter' || e.key === ' ')) return;
+  skip();
+});
+
+// HUD readouts
+const HEXC = '0123456789ABCDEF';
+const hexLines = [];
+const TAGS = ['SYN', 'ACK', 'ROUTE', 'HASH', 'KEY', 'PING', 'XOR', 'AUTH'];
+function hx(n) { let s = ''; for (let i = 0; i < n; i++) s += HEXC[(Math.random() * 16) | 0]; return s; }
+function pushHex() {
+  const tag = TAGS[(Math.random() * TAGS.length) | 0];
+  const warn = Math.random() < 0.08;
+  hexLines.push(`<b>0x${hx(4)}</b>  ${hx(2)} ${hx(2)} ${hx(2)} ${hx(2)} ${hx(2)}  ${warn ? '<i>!' + tag + '</i>' : '// ' + tag}`);
+  if (hexLines.length > 7) hexLines.shift();
+  el.hex.innerHTML = hexLines.join('\n');
+}
+let pkts = 0, hudAcc = 0, hexAcc = 0;
+function fmtClock(t) {
+  const ms = Math.floor((t % 1) * 1000), s = Math.floor(t) % 60, m = Math.floor(t / 60) % 60, h = Math.floor(t / 3600);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+}
+
+// ---------------------------------------------------------------- loop
+let lastNow = performance.now();
+let fpsFrames = 0, fpsAcc = 0, flowT = 0;
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now(); const dt = Math.min((now - lastNow) / 1000, 0.1); lastNow = now;
+  wall += dt;
+  seqT += dt;
+  const t = seqT;
+
+  // phase + overlays
+  const pi = t < T.boot ? 0 : t < T.asm ? 1 : t < T.breachA ? 2 : t < T.breachB ? 3 : 4;
+  setPhase(pi);
+  el.prog.style.width = (clamp01(t / T.end) * 100).toFixed(1) + '%';
+  if (t < T.boot + 0.6) {
+    bootLines.forEach((l, i) => { if (t > 0.12 + i * 0.17) l.classList.add('on'); });
+  } else el.boot.classList.add('gone');
+  corners.forEach((c, i) => { if (t > 0.25 + i * 0.13 + (i % 2) * 0.08) c.classList.add('on'); });
+  if (t > T.asm) el.reticle.classList.add('on');
+  if (t > T.breachB && !el.title.classList.contains('show')) el.title.classList.add('show');
+  if (t >= T.end && !done) { done = true; document.body.classList.add('done'); }
+
+  // assemble amount (boot flicker before)
+  let asm;
+  if (t < T.boot) asm = (Math.random() < 0.18 ? 0.06 * Math.random() : 0) * (t / T.boot);
+  else asm = clamp01((t - T.boot) / (T.asm - T.boot + 0.6));
+  shared.uAssemble.value = asm;
+
+  // flow time
+  flowT += dt * (reduced ? 0.4 : 1.0);
+  shared.uTime.value = flowT;
+  shared.uClock.value = wall;
+
+  const vel = placeCamera(t, dt);
+  const speedN = Math.min(1, vel / 160);
+
+  // glitch
+  if (!reduced && wall > gl.next && t > T.boot * 0.5) {
+    burst(rr(0.25, 1.0), rr(0.05, 0.2));
+    gl.next = wall + (done ? rr(2.5, 6.0) : rr(0.5, 1.5));
+  }
+  let g = wall < gl.until ? gl.amp : 0;
+  let flash = 0;
+  if (t >= T.breachA && t < T.breachB) {
+    const u = (t - T.breachA) / (T.breachB - T.breachA);
+    if (!reduced) g = Math.max(g, 0.5 + 0.5 * Math.random());
+    flash = Math.pow(Math.max(0, 1 - Math.abs(u - 0.88) / 0.12), 2) * (reduced ? 0.25 : 0.9);
+  } else if (t >= T.breachB && t < T.breachB + 0.4) {
+    flash = (1 - (t - T.breachB) / 0.4) * 0.25 * (reduced ? 0.3 : 1);
+  }
+  if (t < T.boot && Math.random() < 0.08 && !reduced) flash = 0.12;
+  if (g > 0 && wall > gl.seedAt) { GU.uSeed.value = Math.random() * 100; gl.seedAt = wall + 0.045; }
+  GU.uGlitch.value = g;
+  GU.uFlash.value = flash;
+  GU.uTime.value = wall;
+  GU.uAberr.value = reduced ? 0.0015 : 0.0025 + speedN * 0.006;
+  const gc = g > 0.3;
+  if (gc !== glitchClass) { glitchClass = gc; document.body.classList.toggle('glitching', gc); }
+  bloom.strength = (done ? 0.75 : 0.85 + speedN * 0.45) + flash * 1.2;
+
+  // HUD readouts (~10 Hz)
+  hudAcc += dt; hexAcc += dt;
+  pkts += Math.floor(dt * (800 + vel * 40));
+  if (hudAcc > 0.1) {
+    hudAcc = 0;
+    el.clock.textContent = fmtClock(wall);
+    el.pkts.textContent = pkts.toLocaleString('en-US');
+    el.lat.textContent = (51.5074 + Math.sin(wall * 0.3) * 0.002 + Math.random() * 0.0001).toFixed(5);
+    el.lon.textContent = (-0.1278 + Math.cos(wall * 0.27) * 0.002 + Math.random() * 0.0001).toFixed(5);
+    el.camz.textContent = camera.position.z.toFixed(2);
+    el.vel.textContent = vel.toFixed(1);
+    el.sig.textContent = '-' + (68 + ((Math.random() * 7) | 0)) + 'dB';
+    el.link.textContent = g > 0.3 ? 'INTRUSION' : 'SECURE';
+    el.link.className = g > 0.3 ? 'red hide-sm' : 'hi hide-sm';
+  }
+  if (hexAcc > (reduced ? 0.4 : 0.09)) { hexAcc = 0; pushHex(); }
+
+  // fps
+  fpsFrames++; fpsAcc += dt;
+  if (fpsAcc >= 0.5) { el.fps.textContent = Math.round(fpsFrames / fpsAcc); fpsFrames = 0; fpsAcc = 0; }
+
+  if (innerWidth > 0 && innerHeight > 0) composer.render(dt);
+}
+frame();
+</script>
+</body>
+</html>

@@ -14,6 +14,7 @@ from jarvis_hub.llm.client import LLMClient, LLMError
 
 log = logging.getLogger(__name__)
 COLLECTION = "logseq_blocks"
+UNSEARCHED = {"jarvis/dreams/diary"}  # indexed for the map, but never a search answer
 NS = uuid.UUID("8f5b0c2e-6a0b-4d55-9b5f-6a7c1e2d3f40")
 WORD = re.compile(r"[a-z0-9]+")
 
@@ -168,7 +169,10 @@ class KBIndex:
                 r.raise_for_status()
                 hits = [{"page": p["payload"]["page"], "text": p["payload"]["text"],
                          "score": round(p["score"], 3)} for p in r.json()["result"]["points"]
-                        if not p["payload"]["text"].startswith("Learned: ")]  # journal copy of a memory
+                        # the journal's copy of a memory or correction, and the dream diary (a log of what
+                        # jarvis/dreams keeps): repeats that pushed "My name is Pranjal" out of the top 6
+                        if not p["payload"]["text"].startswith(("Learned: ", "Corrected: "))
+                        and p["payload"]["page"] not in UNSEARCHED]
                 top = hits[0]["score"] if hits else 0
                 return [h for h in hits if h["score"] >= self.min_score and h["score"] >= top - 0.08][:limit]
             except (httpx.HTTPError, LLMError, KeyError) as e:
@@ -197,7 +201,8 @@ class KBIndex:
         for p in pages:
             key = p.name.lower()
             nodes[key] = {"id": key, "label": p.name, "journal": p.is_journal,
-                          "jarvis": key.startswith("jarvis/"), "blocks": len(p.blocks)}
+                          "jarvis": key.startswith("jarvis/"), "blocks": len(p.blocks),
+                          "updated": int(p.path.stat().st_mtime)}  # seconds: how fresh the page is
             for target in p.links:
                 if target not in names and target not in nodes:
                     nodes[target] = {"id": target, "label": target, "journal": False,

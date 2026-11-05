@@ -96,6 +96,8 @@ def agent_with(script, ran, ask_for=frozenset()):
             return self.script.pop(0)
 
         async def json(self, messages, schema):
+            if "parts" in schema["properties"]:  # splitting a request into parts (agent/plan.py): keep it whole
+                return {"parts": []}
             return self.script.pop(0)
     return ToolAgent(LLM(), reg, ApprovalGate(EventBus(), 0.05), AuditStore(":memory:"), ask_for=ask_for)
 

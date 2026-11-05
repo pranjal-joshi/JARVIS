@@ -15,18 +15,23 @@ from jarvis_hub.agent.tool_agent import ToolAgent
 from jarvis_hub.api import control, events_ws, openai_compat
 from jarvis_hub.approval.gate import ApprovalGate
 from jarvis_hub.audit.store import AuditStore
+from jarvis_hub.audit.traces import TraceStore
 from jarvis_hub.config import get_settings
 from jarvis_hub.events.bus import EventBus
 from jarvis_hub.guard.policy import Policy
 from jarvis_hub.kb.graph import LogseqGraph
 from jarvis_hub.kb.index import KBIndex
+from jarvis_hub.automation.skill_tools import register_skill_tools
 from jarvis_hub.automation.skills import SkillEngine
 from jarvis_hub.devices.tools import register_device_tools
+from jarvis_hub.expert.jobs import Jobs, register_job_tools
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
+from jarvis_hub.kb.dreaming import Dreamer, register_dream_tool
 from jarvis_hub.kb.tools import register_kb_tools
 from jarvis_hub.automation.notify import Notifier, register_notify_tool
 from jarvis_hub.automation.watchers import WatchEngine
+from jarvis_hub.tools.reminders import Reminders, register_reminder_tools
 from jarvis_hub.tools.utility import register_utility_tools
 from jarvis_hub.llm.client import LLMClient
 from jarvis_hub.mcp.registry import ToolRegistry
@@ -67,6 +72,7 @@ async def lifespan(app: FastAPI):
     st.settings = s
     st.bus = EventBus()
     st.audit = AuditStore(s.hub_db_path)
+    st.traces = TraceStore(str(Path(s.hub_db_path).with_name("traces.db")), s.trace_days)
     st.gate = ApprovalGate(st.bus, s.approval_timeout_s, s.hub_db_path)
     st.policy = Policy(s.policy_file, s.ask_for(), s.hub_db_path)
     st.tools = ToolRegistry()
@@ -104,6 +110,12 @@ async def lifespan(app: FastAPI):
     st.announcer = Announcer(st.bus, s)
     st.notifier = Notifier(st.bus, s, st.announcer)
     register_notify_tool(st.tools, st.notifier)
+    st.reminders = Reminders(Path(s.hub_db_path).with_name("reminders.json"), st.notifier, st.bus)
+    register_reminder_tools(st.tools, st.reminders)
+    st.jobs = Jobs(s, st.kb_graph, st.notifier, st.bus, Path(s.hub_db_path).with_name("jobs_seen.json"))
+    st.jobs.on_change = lambda: asyncio.get_running_loop().create_task(st.kb_index.sync())
+    if register_job_tools(st.tools, st.jobs):
+        log.info("background jobs enabled via %s", s.expert_bridge_url)
     st.latency = deque(maxlen=20)  # seconds per model-answered reply, for the HUD's model badge
     st.bus.tap(lambda ev: ev.type == "trace" and ev.data.get("route") == "model" and not ev.data.get("dry_run")
                and st.latency.append(ev.data["seconds"]))
@@ -111,16 +123,32 @@ async def lifespan(app: FastAPI):
         st.llm, st.tools, st.gate, st.audit, s.ask_for(), hidden=s.hidden_tools(),
         selector=ToolSelector(embedder, s.embed_model, s.tool_select_k),
         sessions=st.sessions, voice_confirm=s.voice_confirm(), context_tokens=s.llm_context_tokens,
-        fast=FastPaths(st.kb_graph, s.home_place) if s.fast_paths else None, policy=st.policy)
+        fast=FastPaths(st.kb_graph, s.home_place) if s.fast_paths else None, policy=st.policy,
+        traces=st.traces, fallback=s.llm_fallback_model if s.llm_fallback_model in s.llm_choices() else "",
+        on_switch=st.llm_choice_file.write_text, remote_context_tokens=s.llm_remote_context_tokens)
     if isinstance(st.agent, ToolAgent):
         st.agent._bus = st.bus
         st.gate.on_orphan = st.agent.run_orphan  # approvals left over from before a restart
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
+    register_skill_tools(st.tools, st.skills, st.kb_graph)
     st.watch = WatchEngine(st.bus, s, st.notifier, st.skills, Path(s.hub_db_path).with_name("watchers_state.json"))
     if s.agent != "echo":
         st.skills.start()
         st.watch.start()
+        st.reminders.start()
+        if st.tools.get("start_job"):
+            st.jobs.start_polling()
+
+    st.dreamer = Dreamer(st.kb_graph, st.traces, st.llm, Path(s.hub_db_path).with_name("dreams.json"),
+                         s.dream_at, s.dream_days, st.bus,
+                         on_change=lambda: asyncio.get_running_loop().create_task(st.kb_index.sync()),
+                         model=s.dream_model if s.dream_model in s.llm_choices() else "")
+    register_dream_tool(st.tools, st.dreamer)
+    if isinstance(st.agent, ToolAgent) and s.dream_context:
+        st.agent.memory = st.dreamer.context
+    if s.agent != "echo" and s.dream_enabled:
+        st.dreamer.start()
 
     if n := st.timers.restore(st.bus):
         log.info("%d timers re-armed from before the restart", n)
@@ -139,13 +167,17 @@ async def lifespan(app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await t
         await st.skills.stop()
+        await st.dreamer.stop()
         await st.watch.stop()
+        await st.reminders.stop()
+        await st.jobs.stop()
         await st.tools.aclose()
         await st.llm.aclose()
         await embedder.aclose()
         await st.kb_index.aclose()
         await st.voice.aclose()
         st.audit.close()
+        st.traces.close()
 
 
 app = FastAPI(title="JARVIS hub", version=__version__, lifespan=lifespan,

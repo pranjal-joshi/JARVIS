@@ -48,7 +48,8 @@ def test_intents(tmp_path):
     assert plan(f, "what are my tasks") == ("tasks", [("kb_tasks", {})])
     assert plan(f, "what can you do")[0] == "help"
     for chat in ["tell me a joke", "what's the weather in Pune and the time in Tokyo", "what's the capital of France",
-                 "what is love", "remember my sister's birthday is 9 June"]:
+                 "what is love", "remember my sister's birthday is 9 June",
+                 "send a notification to my laptop saying take an umbrella", "text mum it's going to rain"]:
         assert plan(f, chat) is None, chat
 
 

@@ -704,7 +704,11 @@ button.deny:hover { background: rgba(255, 92, 92, 0.1); border-color: var(--red)
 
   /* only the chosen section is on screen */
   .hud > .side, .hud > .core { display: none; flex: 1 1 auto; min-height: 0; order: 0; }
-  .hud.tab-talk > .core, .hud.tab-activity > .side.left, .hud.tab-map > .side:not(.left) { display: flex; }
+  .hud.tab-talk > .core, .hud.tab-activity > .side.left, .hud.tab-watch > .map-dock, .hud.tab-map > .map-dock { display: flex; }
+  /* monitors and the knowledge map are a tab each: together the list pushed the map into a strip */
+  .hud.tab-watch > .map-dock > .kb, .hud.tab-map > .map-dock > .monitors { display: none; }
+  .hud.tab-watch > .map-dock { justify-content: flex-start; }
+  .hud.tab-watch > .map-dock > .monitors { flex: 1 1 auto; max-height: none; }
   .hud > .side { flex-direction: column; gap: 10px; padding-bottom: 8px; }
 
   /* talk: compact orb, chat fills, input pinned above the tab bar */
@@ -1239,3 +1243,176 @@ header { position: relative; z-index: 20; }
 .watch-summary > span { opacity: 0.75; }
 .watch-summary ul { margin: 2px 0 0; padding-left: 16px; list-style: disc; opacity: 0.8; }
 .watch-summary .warn { color: var(--amber); margin: 4px 0 0; }
+
+/* deleting one point in the knowledge explorer: a dim ✕ on every point, bright on hover, then delete / keep */
+.kbx-blocks li { display: flex; align-items: flex-start; gap: 6px; }
+.kbx-blocks li::before { content: "•"; color: var(--cyan-dim); flex: none; }
+.kbx-blocks { list-style: none; padding-left: 4px; }
+.kbx-text { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.kbx-del { flex: none; background: none; border: 1px solid transparent; border-radius: 3px; padding: 0 5px;
+  font: inherit; font-size: 12px; line-height: 1.5; color: var(--cyan); cursor: pointer; opacity: 0.6;
+  border-color: rgba(127, 231, 255, 0.3); }
+.kbx-blocks li:hover .kbx-del, .kbx-del:focus-visible, .kbx-asking .kbx-del { opacity: 1; }
+.kbx-del:hover, .kbx-del:focus-visible { color: var(--red); border-color: rgba(255, 92, 92, 0.55); outline: none; }
+.kbx-del.yes { color: var(--red); border-color: rgba(255, 92, 92, 0.55); }
+.kbx-del.yes:hover { background: rgba(255, 92, 92, 0.12); }
+.kbx-confirm { display: flex; gap: 4px; flex: none; }
+.kbx-page-del { margin-left: auto; }
+button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { color: var(--red); border-color: rgba(255, 92, 92, 0.55); }
+.kbx-confirm.kbx-page-del .kbx-del { padding: 4px 10px; }
+.kbx-bin { display: inline-block; vertical-align: -2px; }
+.kbx-asking .kbx-text { color: var(--red); text-decoration: line-through rgba(255, 92, 92, 0.6); }
+.kbx-failed { color: var(--red); }
+
+/* a model switch in the chat (rate limited): red, so it isn't mistaken for JARVIS speaking */
+.msg.alert { border-left: 2px solid var(--red); padding-left: 10px; background: rgba(255, 92, 92, 0.07); }
+.msg.alert .who { color: var(--red); }
+.msg.alert .text { color: var(--red); text-shadow: 0 0 6px rgba(255, 92, 92, 0.35); }
+
+/* knowledge map: provenance, editing, moving, trash, keyboard pick, graph focus */
+.kbx-tools { display: flex; gap: 3px; flex: none; }
+.kbx-tools .kbx-del:not(:last-child):hover, .kbx-tools .kbx-del:not(:last-child):focus-visible { color: var(--cyan); border-color: var(--cyan-dim); background: var(--cyan-faint); }
+.kbx-origin { display: block; margin-top: 1px; font-size: 10px; opacity: 0.45; white-space: normal; }
+.kbx-src { font-size: 11px; opacity: 0.85; }
+.kbx-edit, .kbx-rename, .kbx-moveto input, .kbx-add input {
+  width: 100%; box-sizing: border-box; background: #050b0f; border: 1px solid var(--cyan-dim); border-radius: 4px;
+  color: var(--text); font: inherit; padding: 4px 6px; resize: vertical;
+}
+.kbx-edit:focus, .kbx-rename:focus, .kbx-moveto input:focus, .kbx-add input:focus { outline: none; box-shadow: 0 0 0 3px rgba(127, 231, 255, 0.08); }
+.kbx-rename { flex: 1; font: 600 14px var(--display); color: var(--cyan); }
+.kbx-moveto { display: flex; gap: 4px; margin-top: 4px; }
+.kbx-add input { border-color: var(--cyan-faint); font-size: 12px; }
+.kbx-when { margin: -6px 0 0; font-size: 10px; }
+.kbx-head-tools { display: flex; gap: 8px; align-items: center; }
+.kbx-list button.cur { border-color: var(--cyan-faint); background: var(--cyan-faint); color: var(--cyan); }
+.kbx-trash { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.kbx-trash > p { margin: 0; }
+.kbx-trash-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 5px; font-size: 12px; }
+.kbx-trash-item:hover { background: var(--cyan-faint); }
+.kbx-trash-item > span:first-child { min-width: 0; display: grid; }
+.kbx-trash-item b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kbx-trash-item b.journal { color: var(--violet); }
+.kbx-trash-item small { opacity: 0.5; font-size: 10px; }
+.kbx-trash-item .kbx-del { opacity: 1; }
+.kbx-trash-item .kbx-del:not(.yes):hover { color: var(--cyan); border-color: var(--cyan-dim); }
+.kbx-legend-note { margin-left: 6px; opacity: 0.8; }
+.kb-label.far { opacity: 0.2; }
+.kb-label.match { color: #eafcff; font-size: 11px; text-shadow: 0 0 8px var(--cyan), 0 0 2px #04070a; opacity: 1; }
+.kb-label.fresh { color: rgba(225, 248, 255, 0.85); }
+.kbx-trash-list { list-style: none; margin: 0; padding: 0; overflow: auto; display: grid; align-content: start; gap: 2px; }
+
+/* knowledge map: JARVIS's tools (lime) and skills (magenta) */
+.dot.tool { background: #c3f970; color: #c3f970; }
+.dot.skill { background: #ff7ad9; color: #ff7ad9; }
+.kb-label.tool { color: rgba(195, 249, 112, 0.6); font-size: 8px; }
+.kb-label.family { color: rgba(228, 255, 176, 0.8); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.kb-label.skill { color: rgba(255, 122, 217, 0.85); }
+.kbx-list button.tool span { color: #c3f970; }
+.kbx-list button.skill span { color: #ff7ad9; }
+.kbx-toggle { display: flex; align-items: center; gap: 6px; font: 11px var(--mono); color: var(--text); opacity: 0.75; cursor: pointer; }
+.kbx-toggle input { accent-color: #c3f970; }
+.kbx-tool { display: grid; gap: 10px; font-size: 12px; line-height: 1.5; }
+.kbx-tool p { margin: 0; }
+.kbx-tool-name.tool { color: #c3f970; text-shadow: 0 0 10px rgba(195, 249, 112, 0.35); }
+.kbx-tool-name.family { color: #e4ffb0; }
+.kbx-tool-tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.kbx-risk { padding: 1px 6px; border-radius: 3px; border: 1px solid var(--cyan-faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.kbx-risk.read { color: var(--cyan); }
+.kbx-risk.write { color: var(--amber); border-color: rgba(255, 179, 71, 0.4); }
+.kbx-risk.destructive, .kbx-risk.external { color: var(--red); border-color: rgba(255, 92, 92, 0.45); }
+.kbx-risk.ask { color: #eafcff; }
+.kbx-tool-desc { opacity: 0.85; white-space: pre-wrap; }
+.kbx-skill { margin: -4px 0 0; font-size: 11px; color: #ff7ad9; }
+.kbx-skill b { font-weight: 500; }
+.kbx-skill b.on { color: #6dffa8; }
+/* the graph's canvas must never spill over the side panel (it keeps its last size while the column shrinks) */
+@media (min-width: 861px) { .kbx-body { grid-template-columns: minmax(0, 1fr) 380px; } }
+.kbx-graph { overflow: hidden; }
+.kbx-side { position: relative; z-index: 1; }
+.kbx-head small { display: inline-block; }
+
+/* knowledge map: what a dream kept */
+.kbx-dream { margin: 0; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(180, 139, 255, 0.4);
+  background: rgba(180, 139, 255, 0.08); color: #d9c7ff; font-size: 11px; line-height: 1.5; display: flex; gap: 8px; }
+.kbx-dream .kbx-back { margin-left: auto; align-self: flex-start; }
+.kbx-btn:disabled:not(.primary) { color: var(--cyan-dim); border-color: var(--cyan-faint); }
+
+/* ---------- background job: the orb moves aside, the job's steps show beside it (JobBox.jsx) ---------- */
+.job-box {
+  --job-tone: var(--cyan);
+  position: relative;
+  margin: 4px 0 10px;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--panel-edge);
+  border-left: 2px solid var(--job-tone);
+  background: linear-gradient(90deg, rgba(127, 231, 255, 0.07), transparent 70%), var(--panel);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+  backdrop-filter: blur(6px);
+  font-size: 11px;
+  line-height: 1.45;
+  animation: job-in 520ms var(--ease-out) both;
+}
+.job-box.ended.done { --job-tone: #7dffb0; }
+.job-box.ended.failed, .job-box.ended.cancelled { --job-tone: var(--red); }
+.job-box.closing { animation: job-out 420ms var(--ease-in-out, ease-in) both; }
+@keyframes job-in { from { opacity: 0; transform: translateX(-24px); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes job-out { to { opacity: 0; transform: translateX(-16px) scale(0.98); filter: blur(3px); } }
+.job-head { display: flex; justify-content: space-between; gap: 10px; font-family: var(--display); font-size: 9px;
+  letter-spacing: 0.22em; color: var(--job-tone); }
+.job-kind { display: inline-flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-time { color: var(--cyan-dim); flex: none; letter-spacing: 0.12em; }
+.job-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--job-tone); box-shadow: 0 0 8px var(--job-tone);
+  animation: job-pulse 1.4s ease-in-out infinite; }
+@keyframes job-pulse { 50% { opacity: 0.3; transform: scale(0.7); } }
+.job-goal { margin: 5px 0 6px; color: #d7f6ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.job-steps li { display: flex; gap: 8px; align-items: baseline; color: var(--cyan-dim); animation: rise 360ms var(--ease-out) both; }
+.job-steps li .text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-steps li .mark { flex: none; width: 1em; text-align: center; }
+.job-steps li.completed .text { text-decoration: line-through; text-decoration-color: rgba(127, 231, 255, 0.25); }
+.job-steps li.completed .mark { color: #7dffb0; }
+.job-steps li.in_progress { color: var(--cyan); }
+.job-steps li.in_progress .mark { color: var(--amber); animation: job-pulse 1.4s ease-in-out infinite; }
+.job-outcome { display: flex; gap: 8px; color: #d7f6ff; }
+.job-outcome .mark { color: var(--job-tone); flex: none; }
+.job-outcome span:last-child { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.job-foot { margin-top: 6px; font-size: 9px; letter-spacing: 0.14em; color: var(--cyan-dim); text-transform: uppercase; }
+
+.job-x { margin-left: 6px; padding: 0 5px; min-width: 0; height: 16px; line-height: 14px; font-size: 11px;
+  border: 1px solid var(--panel-edge); background: transparent; color: var(--cyan-dim); cursor: pointer; flex: none; }
+.job-x:hover { color: var(--cyan); border-color: var(--cyan-dim); }
+.live .job-x:hover { color: var(--red); border-color: rgba(255, 92, 92, 0.6); }
+.job-x:disabled { opacity: 0.4; cursor: default; }
+.job-time { margin-left: auto; }
+/* the stack of cards: newest first from the hub, scrolls when there are more than fit */
+.job-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; margin: 4px 0 10px;
+  overflow: hidden auto; scrollbar-width: thin;
+  scrollbar-color: var(--cyan-dim) transparent; view-transition-name: job-stack; }
+.job-stack .job-box { margin: 0; }
+.job-stack.many .job-steps li:nth-child(n+4) { display: none; } /* several jobs: three steps each */
+.job-stack.many .job-box { padding-top: 8px; padding-bottom: 6px; }
+
+@media (min-width: 721px) {
+  /* the orb shrinks to the left of the centre column; the cards take the space to its right */
+  .hud:not(.docked) .hero.has-job { min-height: 232px; }
+  .hud:not(.docked) .hero.has-job .orb-wrap { width: 168px; margin-left: 0; }
+  .hud:not(.docked) .hero.has-job .state { width: 168px; letter-spacing: 0.3em; }
+  .hud:not(.docked) .hero .job-stack { position: absolute; left: 188px; right: 0; top: 6px; bottom: 0; margin: 0; }
+  /* a panel has the focus and the orb is docked: the cards stay, under it */
+  .hud.docked .hero .job-stack { max-height: 34vh; margin-top: 8px; }
+  .hud.docked .hero.has-job .state { top: 48px; } /* beside the docked orb, not the middle of the taller hero */
+}
+
+/* phones: the header's chip row scrolls sideways (and fades out at its edge), which clipped the dropdowns to a
+   45 px strip: they opened, unseen. There they are a sheet fixed under the header, the full width of the screen. */
+@media (max-width: 720px) {
+  header.reveal { animation-fill-mode: backwards; } /* a kept transform would make it the sheet's frame */
+  .chips:has(.tools-list) { mask-image: none; }
+  .tools-list, .tools-list.wide {
+    position: fixed; left: 12px; right: 12px; top: calc(max(10px, env(safe-area-inset-top)) + 50px);
+    width: auto; max-height: calc(100dvh - 170px);
+  }
+}
+.win-btns button.mon-clear { width: auto; padding: 0 7px; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; }
+@media (max-width: 720px) { .mnav button { letter-spacing: 0.1em; min-width: 0; } } /* four sections fit a phone */
+

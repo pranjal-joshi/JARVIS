@@ -7,6 +7,7 @@ fails, every tool is offered as before."""
 
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 
 from jarvis_hub.llm.client import LLMClient, LLMError
@@ -15,6 +16,30 @@ from jarvis_hub.tools.cards import card, family_of
 
 log = logging.getLogger(__name__)
 CORE = ("get_time", "calculate", "kb_search")  # cheap, and often needed alongside anything else
+# Words that say which tool the user wants, whatever the embeddings score: "do a web search about REA"
+# matched ask_opencode best ("how to use" ~ "use opencode to explain"), and a link matched nothing.
+URL = re.compile(r"https?://\S+|\bwww\.\S+|\b[\w-]+\.(?:com|org|net|io|ai|dev|tools|in|co)(?:/\S*)?\b", re.I)
+WANTS = ((URL, ("fetch_page", "web_search")),
+         (re.compile(r"\b(?:web|online|internet|google|search (?:for|about|the)|look (?:it |that )?up|latest|news|"
+                     r"github|reddit|youtube|stack ?overflow|wikipedia|documentation|docs)\b", re.I), ("web_search",)),
+         # "search X" that doesn't say the notes: the web is offered beside search_notes (always offered)
+         (re.compile(r"\bsearch\b(?![^.?!]*\b(?:notes?|memory|memories|journal|kb|knowledge base)\b)", re.I),
+          ("web_search",)))
+# Asked to keep something: the memory tool whatever the embeddings score ("also remember that we need a nightly
+# job..." matched skills and dreaming, and remember wasn't offered).
+WANTS += ((re.compile(r"\b(?:remember|note (?:that|down)|jot (?:that |this |it )?down|keep (?:that|this|it) in mind|"
+                      r"don'?t forget|for the record)\b", re.I), ("kb_remember",)),)
+# "remind me what I'm called" asks what the notes say, not for a reminder: the timer and reminder tools stay out
+RECALL = re.compile(r"\bremind me (?:what|who|whose|where|which|how)\b", re.I)
+# Experts only when the user names them (the system prompt's rule): a 2B model otherwise sends anything it
+# can't do to Claude, which has no browsing or notes either.
+NAMED = {"ask_claude": re.compile(r"\bclaude\b", re.I), "ask_opencode": re.compile(r"\bopen ?code\b", re.I),
+         # background jobs: only when the user asks for a job or for work in the background
+         "start_job": re.compile(r"\b(?:background|long[- ]running|long)[- ](?:job|task)s?\b|\bin the background\b|"
+                                 r"\bas a (?:background )?job\b|\b(?:start|run|kick off|launch|create|make|do) (?:a |an |the |"
+                                 r"this |that |it )?(?:new )?(?:background )?job\b|^\W*job\b", re.I),
+         "job_status": re.compile(r"\bjobs?\b", re.I),
+         "cancel_job": re.compile(r"\bjobs?\b", re.I)}
 
 
 @dataclass
@@ -58,10 +83,18 @@ class ToolSelector:
             log.warning("tool selection unavailable, offering every tool: %s", e)
             return Ranking(tools)
         scores = {t.name: max(_dot(q, self._vectors[x]) for x in _texts(t)) for t in tools}
+        said = _latest(messages)
+        tools = [t for t in tools if t.name not in NAMED or NAMED[t.name].search(said)]
+        wanted = {n for rx, names in WANTS if rx.search(said) for n in names} | \
+                 {n for n, rx in NAMED.items() if rx.search(said)}
+        if RECALL.search(said):
+            tools = [t for t in tools if family_of(t.name) != "timers"]
+            scores = {n: v for n, v in scores.items() if family_of(n) != "timers"}  # not a fit to weigh either
+            wanted |= {"kb_search"}
         if self.k <= 0 or len(tools) <= self.k + len(self.core):
             return Ranking(tools, scores)
         ranked = sorted((t for t in tools if t.name not in self.core), key=lambda t: -scores[t.name])
-        keep = {t.name for t in ranked[:self.k]} | set(self.core)
+        keep = {t.name for t in ranked[:self.k]} | set(self.core) | wanted
         best = ranked[0].name if ranked else ""
         if fam := family_of(best):  # the best tool's siblings: set / list / cancel a timer
             keep |= {t.name for t in tools if family_of(t.name) == fam}
@@ -91,6 +124,12 @@ def _query(messages: list[dict]) -> str:
     if not said:
         return ""
     return (said[-2][:300] + "\n" if len(said) > 1 else "") + said[-1][:1000]
+
+
+def _latest(messages: list[dict]) -> str:
+    said = [m["content"].split("\n\n(Now: ")[0] for m in messages
+            if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    return said[-1] if said else ""
 
 
 def _unit(v: list[float]) -> list[float]:

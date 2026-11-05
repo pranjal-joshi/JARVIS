@@ -1,0 +1,331 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-04T14:14",
+ "cases": 21,
+ "passed": 18,
+ "passed_ignoring_style": 18,
+ "failure_kinds": {
+  "tool error": 1,
+  "style": 1,
+  "rejected": 2,
+  "missed part": 1
+ },
+ "first_words_median_s": 3.8,
+ "by_category": {
+  "general": "2/2",
+  "memory": "9/10",
+  "hard": "2/2",
+  "chain": "5/7"
+ },
+ "rows": [
+  {
+   "id": "gk-capital",
+   "cat": "general",
+   "say": "what's the capital of Australia",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [],
+   "reply": "The capital of Australia is Canberra. It is not widely known, but I can now tell you: it lies between Sydney and Melbourne.",
+   "first_s": 12.9,
+   "total_s": 13.5
+  },
+  {
+   "id": "chat-hello",
+   "cat": "general",
+   "say": "good morning jarvis",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [],
+   "reply": "Good morning, sir. How may I assist you today? (As of Wednesday, 4 November 2026, 14:12.)",
+   "first_s": 2.0,
+   "total_s": 2.4
+  },
+  {
+   "id": "mem-remember",
+   "cat": "memory",
+   "say": "remember that I take my tea without sugar",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user takes their tea without sugar.",
+   "first_s": 1.1,
+   "total_s": 1.1
+  },
+  {
+   "id": "mem-note",
+   "cat": "memory",
+   "say": "note that my passport expires on 12 August 2031",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user's passport expires on 12 August 2031.",
+   "first_s": 1.3,
+   "total_s": 1.3
+  },
+  {
+   "id": "mem-stated",
+   "cat": "memory",
+   "say": "my sister Chiku's birthday is 9 June",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user's sister Chiku's birthday is 9 June.",
+   "first_s": 1.3,
+   "total_s": 1.3
+  },
+  {
+   "id": "mem-prefer",
+   "cat": "memory",
+   "say": "I prefer aisle seats on trains, keep that in mind",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user prefers aisle seats on trains.",
+   "first_s": 1.3,
+   "total_s": 1.3
+  },
+  {
+   "id": "mem-question",
+   "cat": "memory",
+   "say": "do you remember my name?",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Yes, sir — your name is Pranjal.",
+   "first_s": 3.0,
+   "total_s": 3.0
+  },
+  {
+   "id": "page-add",
+   "cat": "memory",
+   "say": "add bread to my Groceries page",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_append_to_page"
+   ],
+   "reply": "Bread has been added to your Groceries page.",
+   "first_s": 3.5,
+   "total_s": 3.5
+  },
+  {
+   "id": "journal",
+   "cat": "memory",
+   "say": "add to my journal: finished the quarterly report",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Done — entry added to your journal: “Finished the quarterly report.”.",
+   "first_s": 3.8,
+   "total_s": 3.8
+  },
+  {
+   "id": "h-name",
+   "cat": "hard",
+   "say": "remind me what I'm called again",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "You are called Pranjal. Sir.",
+   "first_s": 2.4,
+   "total_s": 2.5
+  },
+  {
+   "id": "h-where",
+   "cat": "hard",
+   "say": "which area of Pune do I live in",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "According to your notes, you live in the Keshavnagar area of Pune.",
+   "first_s": 4.9,
+   "total_s": 4.9
+  },
+  {
+   "id": "chain-media-lock",
+   "cat": "chain",
+   "say": "pause the music and lock the laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_media",
+    "win_lock"
+   ],
+   "reply": "I would have paused or resumed the music, sir (dry run). I would have locked the laptop, sir (dry run).",
+   "first_s": 6.5,
+   "total_s": 6.5
+  },
+  {
+   "id": "chain-timer-text",
+   "cat": "chain",
+   "say": "set a timer for 10 minutes, then text Chiku I'm on my way",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer",
+    "get_time",
+    "adb_sms_send"
+   ],
+   "reply": "Timer set for 10 minutes, sir. Timer set for 10 minutes. Text to Chiku: \"I'm on my way. — sent.",
+   "first_s": 5.9,
+   "total_s": 5.9
+  },
+  {
+   "id": "chain-weather-notify",
+   "cat": "chain",
+   "say": "check the weather and then send a notification to my laptop saying take an umbrella",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "weather",
+    "notify"
+   ],
+   "reply": "In Pune it's overcast and 31 degrees, feeling like 33, sir. Today: overcast, 21 to 31 degrees, 27% chance of rain. I would have sent the notification \"Take an umbrella\", sir (dry run).",
+   "first_s": 5.4,
+   "total_s": 5.4
+  },
+  {
+   "id": "chain-three",
+   "cat": "chain",
+   "say": "open spotify on the laptop, play the music and set a timer for 20 minutes",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_open",
+    "win_media",
+    "set_timer"
+   ],
+   "reply": "I would have opened Spotify on the laptop, sir (dry run). I would have paused or resumed the music, sir (dry run). Timer set for 20 minutes, sir.",
+   "first_s": 8.0,
+   "total_s": 8.0
+  },
+  {
+   "id": "chain-tasks-time",
+   "cat": "chain",
+   "say": "what's on my task list? Then tell me what time it is",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks",
+    "get_time"
+   ],
+   "reply": "You have no open tasks on your to-do list. The current time is 14:13 on Wednesday, 4 November 2026. There are no open tasks on your to-do list. The current time is 14:13 on Wednesday, 4 November 2026.",
+   "first_s": 7.6,
+   "total_s": 7.7
+  },
+  {
+   "id": "chain-unsplit",
+   "cat": "chain",
+   "say": "pause and lock the laptop",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "tool error: win_info: ERROR: the device bridge is not reachable (ConnectError). Is it running on the host?",
+    "style: 5 sentences > 4"
+   ],
+   "tools": [
+    "win_media",
+    "win_lock",
+    "win_info"
+   ],
+   "reply": "I would have paused or resumed the music, sir (dry run). I would have locked the laptop, sir (dry run). The attempt to run `laptop_status` failed: the device bridge is not reachable (\"ConnectError\"). Consequently, I cannot report the laptop's battery, memory, or active window at this time. Please co",
+   "first_s": 13.9,
+   "total_s": 13.9
+  },
+  {
+   "id": "trace-promise-save",
+   "cat": "memory",
+   "say": "Remember that we need to configure ESP Home modules in our new home so Jarvis can use them as voice satellites",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user wants to configure ESP Home modules in their new home so Jarvis can use them as voice satellites.",
+   "first_s": 2.3,
+   "total_s": 2.3
+  },
+  {
+   "id": "trace-remember-it",
+   "cat": "memory",
+   "say": "what is the Atomberg SL1 lock / The Atomberg SL1 is a smart door lock that works over Bluetooth, sir. / remember it",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "rejected: kb_remember: ERROR: you already called remember with these arguments this turn; its result is above. An"
+   ],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Already done — noted as above.",
+   "first_s": 9.2,
+   "total_s": 9.2
+  },
+  {
+   "id": "trace-no-split",
+   "cat": "memory",
+   "say": "Also remember that we need a nightly job which looks at the daily conversations with Jarvis and then we can run it by the cloud session to improve the harness",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember",
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user wants a nightly job which looks at the daily conversations with Jarvis; The user wants to run it by the cloud session to improve the harness.",
+   "first_s": 2.4,
+   "total_s": 2.4
+  },
+  {
+   "id": "trace-search-then-save",
+   "cat": "chain",
+   "say": "Do a web search for Frida vs REA for Android apps, then save it to notes",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "rejected: kb_search: ERROR: you already called search_notes with these arguments this turn; its result is above",
+    "missed part: part 2 (kb_remember / kb_journal / kb_append_to_page) never ran; called ['web_search', 'kb_search']"
+   ],
+   "tools": [
+    "web_search",
+    "kb_search"
+   ],
+   "reply": "I seem to be going in circles, sir. Shall we try that differently? Or say \"ask Claude\" and I'll put it to Claude. So I haven't done the rest, sir: save it to notes.",
+   "first_s": 7.4,
+   "total_s": 7.4
+  }
+ ]
+}

@@ -14,6 +14,7 @@ MODEL_NAMES = {
     "kb_clear_memory": "clear_memory",
     "kb_delete_page": "delete_page",
     "kb_delete_item": "delete_item",
+    "kb_move_item": "move_note",
     "fetch_page": "read_web_page",
     "win_info": "laptop_status",
     "win_media": "media_control",

@@ -3,3 +3,7 @@
 # Native tool calling works on ollama 0.40.13 (architecture lfm3).
 FROM hf.co/AtomicChat/LFM3-1.7B-GGUF:AD-Q4_K_M
 PARAMETER num_gpu 99
+# The model card's sampling for chat, tool use and agents (the hub also sends these per request)
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.1

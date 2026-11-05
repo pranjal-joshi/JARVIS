@@ -1,0 +1,309 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-03T11:27",
+ "cases": 22,
+ "passed": 18,
+ "first_words_median_s": 7.8,
+ "by_category": {
+  "composite": "2/3",
+  "notes": "5/6",
+  "memory": "7/7",
+  "devices": "4/6"
+ },
+ "rows": [
+  {
+   "id": "days-until",
+   "cat": "composite",
+   "say": "how many days until 25 December",
+   "pass": false,
+   "fails": [
+    "reply lacks /\\b(53|fifty-three)\\b/"
+   ],
+   "tools": [],
+   "reply": "52 days, sir, until Friday 25 December.",
+   "first_s": 0.0,
+   "total_s": 0.0
+  },
+  {
+   "id": "weather-home",
+   "cat": "composite",
+   "say": "what's the weather where I live",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "weather"
+   ],
+   "reply": "In Pune it's clear and 28 degrees, feeling like 31, sir. Today: mainly clear, 21 to 30 degrees, 22% chance of rain.",
+   "first_s": 1.7,
+   "total_s": 1.7
+  },
+  {
+   "id": "timer-remind",
+   "cat": "composite",
+   "say": "remind me in 20 minutes to call mum",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer"
+   ],
+   "reply": "I'll remind you to call mum in 20 minutes, sir.",
+   "first_s": 0.0,
+   "total_s": 0.0
+  },
+  {
+   "id": "tasks",
+   "cat": "notes",
+   "say": "what are my open tasks",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "No open tasks, sir.",
+   "first_s": 0.1,
+   "total_s": 0.1
+  },
+  {
+   "id": "notes-where",
+   "cat": "notes",
+   "say": "where do I live",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "You live in the Keshavnagar area of Pune, in the Unique Legacy Imperia society.",
+   "first_s": 14.8,
+   "total_s": 14.8
+  },
+  {
+   "id": "notes-name",
+   "cat": "notes",
+   "say": "what's my name",
+   "pass": false,
+   "fails": [
+    "called nothing, expected one of ['kb_search', 'kb_read_page']",
+    "reply lacks /(?i)pranjal/",
+    "style: offer"
+   ],
+   "tools": [],
+   "reply": "You're JARVIS. What would you like to know? (Note: I do not have access to your personal profile records to state your name explicitly; however, in this context my operating name is already established as JARVIS.)",
+   "first_s": 3.5,
+   "total_s": 4.3
+  },
+  {
+   "id": "notes-society",
+   "cat": "notes",
+   "say": "what is the name of my society",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your society is named Unique Legacy Imperia.",
+   "first_s": 5.4,
+   "total_s": 5.4
+  },
+  {
+   "id": "notes-page",
+   "cat": "notes",
+   "say": "read your people page",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_read_page",
+    "kb_read_page"
+   ],
+   "reply": "Sir, the \"people\" page (found under `jarvis/people`) reads as follows. We live in the Pune – Keshavnagar area; the society name is Unique Legacy Imperia. My name is Pranjal (learned 2 Nov 2026). Please advise if you would like to modify or search further.",
+   "first_s": 8.5,
+   "total_s": 11.3
+  },
+  {
+   "id": "notes-missing",
+   "cat": "notes",
+   "say": "how do I take my coffee",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "No note on file regarding your coffee brewing method. To make a simple cup, consider steeping plain water in your chosen beans, or perhaps using a machine?",
+   "first_s": 15.5,
+   "total_s": 17.3
+  },
+  {
+   "id": "mem-remember",
+   "cat": "memory",
+   "say": "remember that I take my tea without sugar",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user takes their tea without sugar.",
+   "first_s": 2.1,
+   "total_s": 2.1
+  },
+  {
+   "id": "mem-note",
+   "cat": "memory",
+   "say": "note that my passport expires on 12 August 2031",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir. Your passport expiry date of 12 August 2031 has been recorded.",
+   "first_s": 8.8,
+   "total_s": 9.6
+  },
+  {
+   "id": "mem-stated",
+   "cat": "memory",
+   "say": "my sister Chiku's birthday is 9 June",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user's sister Chiku's birthday is 9 June.",
+   "first_s": 2.7,
+   "total_s": 2.7
+  },
+  {
+   "id": "mem-prefer",
+   "cat": "memory",
+   "say": "I prefer aisle seats on trains, keep that in mind",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_remember",
+    "kb_remember"
+   ],
+   "reply": "Noted, sir: The user prefers aisle seats on trains; The user keeps that in mind.",
+   "first_s": 4.5,
+   "total_s": 4.5
+  },
+  {
+   "id": "mem-question",
+   "cat": "memory",
+   "say": "do you remember my name?",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Yes, sir — my notes indicate that your name is Pranjal.",
+   "first_s": 9.5,
+   "total_s": 9.5
+  },
+  {
+   "id": "page-add",
+   "cat": "memory",
+   "say": "add bread to my Groceries page",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_append_to_page"
+   ],
+   "reply": "Bread has been added to your Groceries page.",
+   "first_s": 9.0,
+   "total_s": 9.0
+  },
+  {
+   "id": "journal",
+   "cat": "memory",
+   "say": "add to my journal: finished the quarterly report",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Journal entry added: \"Finished the quarterly report.\"",
+   "first_s": 7.8,
+   "total_s": 7.8
+  },
+  {
+   "id": "laptop-battery",
+   "cat": "devices",
+   "say": "how much battery does my laptop have",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "win_info"
+   ],
+   "reply": "",
+   "first_s": 6.9,
+   "total_s": 7.0
+  },
+  {
+   "id": "phone-connected",
+   "cat": "devices",
+   "say": "is my phone connected",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "adb_devices"
+   ],
+   "reply": "",
+   "first_s": 7.8,
+   "total_s": 7.8
+  },
+  {
+   "id": "phone-notifs",
+   "cat": "devices",
+   "say": "any new notifications on my phone",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "adb_notifications"
+   ],
+   "reply": "",
+   "first_s": 9.7,
+   "total_s": 14.8
+  },
+  {
+   "id": "text-send",
+   "cat": "devices",
+   "say": "text Chiku I'm running ten minutes late",
+   "pass": true,
+   "fails": [],
+   "tools": [
+    "adb_sms_send"
+   ],
+   "reply": "",
+   "first_s": 6.8,
+   "total_s": 6.8
+  },
+  {
+   "id": "call",
+   "cat": "devices",
+   "say": "call mum",
+   "pass": false,
+   "fails": [
+    "style: offer"
+   ],
+   "tools": [
+    "adb_call"
+   ],
+   "reply": "",
+   "first_s": 6.4,
+   "total_s": 7.2
+  },
+  {
+   "id": "media-pause",
+   "cat": "devices",
+   "say": "pause the music on my laptop",
+   "pass": false,
+   "fails": [
+    "called ['win_media'], expected one of ['win_media_key']"
+   ],
+   "tools": [
+    "win_media"
+   ],
+   "reply": "",
+   "first_s": 8.3,
+   "total_s": 8.3
+  }
+ ]
+}

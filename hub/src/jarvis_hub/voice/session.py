@@ -36,12 +36,14 @@ class PendingTool:
     call_id: str
     convo: list[dict]  # the conversation up to and including the assistant's tool call
     expires: float
+    chain: dict | None = None  # a part of a request with several: the parts and what's done (agent/_chain)
 
 
 @dataclass
 class Session:
     turns: list[dict] = field(default_factory=list)
     last: float = 0.0
+    started: float = 0.0  # when this conversation began (its trace session)
     pending: PendingTool | None = None
 
 
@@ -53,7 +55,7 @@ class Sessions:
     def _get(self, key: str) -> Session:
         s = self._by_key.setdefault(key, Session())
         if time.time() - s.last > self.window_s:  # a new conversation: forget the old one
-            s.turns, s.pending = [], None
+            s.turns, s.pending, s.started = [], None, time.time()
         return s
 
     def merge(self, key: str, messages: list[dict]) -> list[dict]:
@@ -61,6 +63,10 @@ class Sessions:
         own_history = any(m.get("role") == "assistant" for m in messages) or \
             sum(m.get("role") == "user" for m in messages) > 1
         return messages if own_history else [*self._get(key).turns, *messages]
+
+    def started(self, key: str) -> float:
+        """When this satellite's current conversation began."""
+        return self._get(key).started
 
     def record(self, key: str, user: str, reply: str) -> None:
         s = self._get(key)

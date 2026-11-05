@@ -1,7 +1,7 @@
 "use client";
 
-// Skills: knowledge-base pages under skills/ that run when an event fires (a phone joins, a timer
-// ends, a schedule). A page only runs after it is enabled here, and only while it is unchanged.
+// Skills: knowledge-base pages under skills/ that run when asked or when an event fires (a phone joins, a timer
+// ends, a schedule). A skill is on as soon as it exists; it can be switched off here or by asking JARVIS.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -32,9 +32,8 @@ export default function SkillsPanel({ onCount, version }) {
   return (
     <div className="dev-panel">
       <p className="tools-note">
-        Skills are knowledge-base pages under <b>skills/</b> with a <b>trigger::</b> property. They run only once you
-        enable them here; editing a page switches it off until you enable it again. A newly enabled skill runs as a
-        <b>dry run</b> (it shows in the console what it would do) until you let it go live.
+        Skills are knowledge-base pages under <b>skills/</b> with a <b>trigger::</b> property. They are on as soon as
+        they exist. Ask JARVIS to make, change, run, switch off or delete one (“make a skill that…”).
       </p>
       <ul className="skill-list">
         {(data?.skills || []).map((s) => (
@@ -43,25 +42,17 @@ export default function SkillsPanel({ onCount, version }) {
               <b>{s.name.replace(/^skills\//i, "")}</b>
               <button type="button" className={`gate ${s.enabled ? "auto" : "ask"}`}
                 onClick={() => post(s.name, "enable", { enabled: !s.enabled })}
-                title={s.enabled ? "Switch off" : "Allow this skill to run on its trigger"}>
-                {s.enabled ? "on" : s.changed ? "edited · enable" : "enable"}
+                title={s.enabled ? "Switch off" : "Switch back on"}>
+                {s.enabled ? "on" : "off"}
               </button>
               <button type="button" className="gate" disabled={!s.enabled} onClick={() => post(s.name, "run")}
                 title="Run it now">run</button>
-              {s.enabled && (
-                <button type="button" className={`gate ${s.dry_run ? "ask" : "auto"}`}
-                  onClick={() => post(s.name, "promote", { enabled: s.dry_run })}
-                  title={s.dry_run ? "Dry run: it only shows what it would do. Let it act for real."
-                    : "It acts for real. Back to dry run."}>
-                  {s.dry_run ? "dry run · go live" : "live"}
-                </button>
-              )}
             </div>
             <i>{when(s)}{s.last_run ? ` · ran ${new Date(s.last_run * 1000).toLocaleTimeString()}` : ""}</i>
             <small>{s.instructions}</small>
           </li>
         ))}
-        {data && !data.skills.length && <li className="kbx-dim">No skill pages yet. Add one in Logseq under skills/.</li>}
+        {data && !data.skills.length && <li className="kbx-dim">No skills yet. Ask JARVIS to make one, or add a page under skills/.</li>}
       </ul>
       {data?.events?.length > 0 && (
         <div className="hook-log">

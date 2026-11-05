@@ -34,6 +34,9 @@ CARDS: dict[str, Card] = {
                        "new facts (use remember)"),
     "kb_journal": Card(("add to my journal: finished the report", "log in my journal that I ran 5 km",
                         "journal entry: met Rohan for lunch"), "write-notes"),
+    "kb_move_item": Card(("move the ESP Home tasks to my Jarvis Project page", "put everything about the car on the Car page",
+                          "organize my notes about the trip into the Trip page", "move that note to Work",
+                          "file the plumber note under Home"), "write-notes"),
     "kb_append_to_page": Card(("add bread to my groceries page", "put milk on the shopping list",
                                "add it to my groceries", "add Rohan's number to my people page"), "write-notes"),
     # time, maths, weather, timers
@@ -47,6 +50,26 @@ CARDS: dict[str, Card] = {
     "list_timers": Card(("how long left on the pasta", "what timers are running", "how much time is left"), "timers"),
     "cancel_timer": Card(("cancel the pasta timer", "never mind the timer", "stop the timer", "forget the tea timer"),
                          "timers"),
+    "set_reminder": Card(("remind me every morning at 10 to follow up", "remind me tomorrow at 9 to call the bank",
+                          "set a daily reminder at 8 pm", "remind me on my phone at 6 pm to leave",
+                          "remind me every Monday to pay rent", "remind me at 10 AM tomorrow"), "timers",
+                         "a countdown in minutes (use set_timer)"),
+    "list_reminders": Card(("what reminders do I have", "show my reminders"), "timers"),
+    "cancel_reminder": Card(("cancel the acrylic reminder", "stop reminding me to call the bank",
+                             "delete my morning reminder"), "timers"),
+    # skills (automations)
+    "list_skills": Card(("what skills do you have", "list my skills", "which automations are on"), "skills"),
+    "create_skill": Card(("make a skill that says hello world", "create a skill that tells me the weather every morning at 7",
+                          "add an automation for when my phone connects", "new skill: summarise my notifications"), "skills",
+                         "a one-off reminder (use set_reminder)"),
+    "update_skill": Card(("change the morning skill to run at 8", "edit the hello world skill", "update that skill",
+                          "add a step to the hello world skill", "make the skill also tell me the date"), "skills"),
+    "delete_skill": Card(("delete the hello world skill", "remove that automation"), "skills"),
+    "enable_skill": Card(("switch the morning skill off", "turn off that skill", "turn the hello world skill back on",
+                          "pause that automation"), "skills"),
+    "run_skill": Card(("run the hello world skill", "run that skill now", "try the skill"), "skills"),
+    "dream": Card(("dream now", "go to sleep and dream", "consolidate your memory", "tidy up what you know about me",
+                   "go through today's notes and keep what matters")),
     # laptop
     "win_info": Card(("how much battery does my laptop have", "how's the laptop holding up", "is my laptop charging",
                       "laptop memory use", "what window is open"), "laptop", "disk space or processes (use powershell_read)"),
@@ -93,6 +116,12 @@ CARDS: dict[str, Card] = {
     "fetch_page": Card(("read this web page", "what does this link say")),
     "ask_claude": Card(("ask Claude to explain public key cryptography", "ask Claude about this error")),
     "ask_opencode": Card(("ask opencode about this", "use opencode to explain")),
+    # background jobs (long work by Claude Code on the laptop)
+    "start_job": Card(("run a background job to research the best 2B models and write a summary",
+                       "start a job to go through C:\\logs and find the errors",
+                       "do this in the background: compare these three libraries", "run it as a job"), "jobs"),
+    "job_status": Card(("how's the job going", "is the background job done yet", "what did the job find"), "jobs"),
+    "cancel_job": Card(("stop the job", "cancel that background job"), "jobs"),
 }
 
 

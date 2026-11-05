@@ -10,7 +10,8 @@ tools that change anything or send data out are recorded in the audit and not ru
 
 Each failure also gets a kind, counted in the report: skipped (a tool was expected, none ran), wrong tool,
 rejected (the call was refused before running: bad arguments, an unknown tool, a hook), tool error, false
-claim (the reply says something was done and no tool did it), reply, style.
+claim (the reply says something was done and no tool did it), missed part (a request with several parts,
+"steps": one list of acceptable tools per part, in order), reply, style.
 
 Writes docs/testing/evals/<date>-<model>.md and .json, and posts the summary to the hub (HUD → Evals).
 Standard library only."""
@@ -56,7 +57,9 @@ class Hub:
     def ask(self, case: dict) -> dict:
         """Stream one turn; return reply, request id, time to first words and total time."""
         source = case.get("source", "web")
-        msgs = [{"role": "user", "content": t} for t in (case["turns"] if "turns" in case else [case["say"]])]
+        # turns: the user's words, or {"role": "assistant", "content": ...} for a reply before the last turn
+        msgs = [t if isinstance(t, dict) else {"role": "user", "content": t}
+                for t in (case["turns"] if "turns" in case else [case["say"]])]
         t0 = time.time()
         first, reply, rid, streamed = None, "", None, ""
         with self.call("/v1/chat/completions", {"model": "jarvis", "stream": True, "messages": msgs}, source,
@@ -107,6 +110,14 @@ def score(case: dict, out: dict, calls: list[dict]) -> list[str]:
             fails.append(f"skipped: called nothing, expected one of {case['tools']}")
         elif case["tools"] and not set(names) & set(case["tools"]):
             fails.append(f"wrong tool: called {names}, expected one of {case['tools']}")
+    if "steps" in case:  # every part done, in order: each part's tools after the previous part's
+        at = 0
+        for i, part in enumerate(case["steps"], 1):
+            hit = next((j for j in range(at, len(names)) if names[j] in part), None)
+            if hit is None:
+                fails.append(f"missed part: part {i} ({' / '.join(part)}) never ran; called {names}")
+                break
+            at = hit + 1
     acted = any(c.get("risk") != "read" or "screenshot" in c["tool"] for c in ran)  # a screenshot saves a file
     if CLAIM.search(out["reply"]) and not acted and case.get("tools") != []:
         fails.append("false claim: the reply says it was done, no tool did it")
@@ -128,7 +139,7 @@ def score(case: dict, out: dict, calls: list[dict]) -> list[str]:
     for name, rx in STYLE:
         if rx.search(reply) and "```" not in reply:
             fails.append(f"style: {name}")
-    cap = MAX_SENTENCES[case.get("source", "web")]
+    cap = max(MAX_SENTENCES[case.get("source", "web")], 2 * len(case.get("steps", [])))  # a sentence or two a part
     if sentences(reply) > cap and "```" not in reply:
         fails.append(f"style: {sentences(reply)} sentences > {cap}")
     return fails
@@ -161,7 +172,7 @@ def main() -> None:
             except Exception as ex:  # a hub error is a failed case, not a crashed run
                 out, calls, fails = {"reply": "", "first_s": 0, "total_s": 0}, [], [f"hub error: {ex}"]
             hard = [f for f in fails if not f.startswith("style")]
-            rows.append({"id": case["id"], "cat": case["cat"], "say": case.get("say") or " / ".join(case.get("turns", [])),
+            rows.append({"id": case["id"], "cat": case["cat"], "say": case.get("say") or " / ".join(t if isinstance(t, str) else t.get("content", "") for t in case.get("turns", [])),
                          "pass": not fails, "tool_pass": not hard,
                          "fails": fails, "tools": [c["tool"] for c in calls if c.get("status") != "rejected"],
                          # phone and laptop replies can quote messages and notifications: not kept

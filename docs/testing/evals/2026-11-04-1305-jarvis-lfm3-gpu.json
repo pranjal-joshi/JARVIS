@@ -1,0 +1,97 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-04T13:05",
+ "cases": 5,
+ "passed": 2,
+ "passed_ignoring_style": 2,
+ "failure_kinds": {
+  "rejected": 2,
+  "skipped": 1,
+  "missed part": 1
+ },
+ "first_words_median_s": 6.6,
+ "by_category": {
+  "memory": "0/2",
+  "web": "1/1",
+  "chain": "0/1",
+  "notes": "1/1"
+ },
+ "rows": [
+  {
+   "id": "trace-remember-it",
+   "cat": "memory",
+   "say": "what is the Atomberg SL1 lock / The Atomberg SL1 is a smart door lock that works over Bluetooth, sir. / remember it",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "rejected: kb_remember: ERROR: you already called remember with these arguments this turn; its result is above. An"
+   ],
+   "tools": [
+    "kb_remember"
+   ],
+   "reply": "Already recorded. The Atomberg SL1 is a smart door lock that operates via Bluetooth, sir.",
+   "first_s": 4.9,
+   "total_s": 11.0
+  },
+  {
+   "id": "trace-no-split",
+   "cat": "memory",
+   "say": "Also remember that we need a nightly job which looks at the daily conversations with Jarvis and then we can run it by the cloud session to improve the harness",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "rejected: get_time: ERROR: the user didn't ask about a time or date. Answer them without it.",
+    "skipped: called nothing, expected one of ['kb_remember', 'kb_journal']"
+   ],
+   "tools": [],
+   "reply": "I haven't actually saved or changed anything, sir. Say \"remember ...\" and I will.",
+   "first_s": 6.4,
+   "total_s": 8.3
+  },
+  {
+   "id": "trace-github-search",
+   "cat": "web",
+   "say": "search home assistant integration for Atomberg SL1 locks on github",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "web_search"
+   ],
+   "reply": "I wasn’t able to locate specific GitHub integrations for an \"Atomberg SL1\" locking feature in Home Assistant through the search. Could you clarify the spelling or provide more context? For example, is \"Atomberg\" a project, an Atomberg SL1 firmware, or something else? That will help me find the right",
+   "first_s": 6.6,
+   "total_s": 7.3
+  },
+  {
+   "id": "trace-search-then-save",
+   "cat": "chain",
+   "say": "Do a web search for Frida vs REA for Android apps, then save it to notes",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "missed part: part 2 (kb_remember / kb_journal / kb_append_to_page) never ran; called ['web_search', 'web_search']"
+   ],
+   "tools": [
+    "web_search",
+    "web_search"
+   ],
+   "reply": "I haven't actually saved or changed anything, sir. Say \"remember ...\" and I will. So I haven't done the rest, sir: save it to notes.",
+   "first_s": 10.2,
+   "total_s": 10.2
+  },
+  {
+   "id": "trace-move-notes",
+   "cat": "notes",
+   "say": "Move any notes about ESP Home to the Jarvis Project page",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_move_item"
+   ],
+   "reply": "I've moved all notes containing \"ESP Home\" to your Jarvis Project page.",
+   "first_s": 6.7,
+   "total_s": 6.7
+  }
+ ]
+}

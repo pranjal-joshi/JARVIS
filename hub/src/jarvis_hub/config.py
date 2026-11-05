@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     hub_token_web: SecretStr | None = None
     hub_token_phone: SecretStr | None = None
     hub_db_path: str = "jarvis.db"
+    # every conversation turn as the model saw it, in traces.db next to the hub's database (0 = not kept)
+    trace_days: float = 30
+    # dreaming (kb/dreaming.py): each night the last days' notes and what the user said become jarvis/dreams,
+    # whose short version rides in every conversation
+    dream_enabled: bool = True
+    dream_at: str = "03:00"  # local time
+    dream_days: int = 3  # how far back a dream looks (it carries on from the last one)
+    dream_context: bool = True  # put what is kept on jarvis/dreams into the system prompt
+    dream_model: str = ""  # the model a dream asks, one of LLM_CHOICES ("" = the chat model of the moment)
     hub_log_level: str = "info"
     # Browser origins allowed to call the hub directly (the UI proxies, so usually none).
     hub_cors_origins: str = ""
@@ -41,6 +50,12 @@ class Settings(BaseSettings):
     # beside the local ones: JSON {"name": {"base_url": "http://host:port/v1", "model": "id on that server",
     # "key_env": "ENV_VAR_WITH_ITS_KEY"}}. "model" defaults to the name; "key_env" may be left out.
     llm_endpoints: str = "{}"
+    # where requests go when the selected model is rate limited (HTTP 429): the picker switches to it and
+    # the HUD shows an alert; empty = no fallback (the user is told to try again)
+    llm_fallback_model: str = ""
+    # a model on another server (LLM_ENDPOINTS) gets at most this much context per request: a cloud free tier
+    # counts tokens per minute (Groq about 8,000), so a smaller request means fewer rate limits; 0 = no cap
+    llm_remote_context_tokens: int = 4000
     approval_timeout_s: float = 90
     # Claude models (ids starting "claude-") go to the Anthropic API instead of llm_base_url.
     # Empty key = Claude models are hidden from the model picker and never used.
@@ -91,8 +106,8 @@ class Settings(BaseSettings):
     # device bridge (bridge/device_bridge.py on the host): empty token = device tools off
     device_bridge_url: str = "http://host.docker.internal:8791"
     device_bridge_token: SecretStr = SecretStr("")
-    # web search (Firecrawl, free plan): empty key = web_search tool off
-    firecrawl_api_key: SecretStr = SecretStr("")
+    # web search (Exa, exa.ai): empty key = web_search tool off
+    exa_api_key: SecretStr = SecretStr("")
     web_search_approval: bool = True  # the query leaves this machine: ask each time unless set false
 
     # voice satellites

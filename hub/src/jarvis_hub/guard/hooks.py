@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.guard.validate import check
+from jarvis_hub.tools.when import clock, day_words, repeat_of
 
 # tools whose output is someone else's words
 TAINT_SOURCES = {"web_search", "fetch_page", "adb_notifications", "adb_sms_read", "adb_call_log", "fs_read",
@@ -26,10 +27,25 @@ REDACT_IN_AUDIT = {"adb_notifications", "adb_sms_read", "adb_call_log", "fs_read
 CURRENT = re.compile(
     r"\b(search|look (?:it |that )?up|google|web|online|internet|latest|news|today|tonight|yesterday|tomorrow|"
     r"current(?:ly)?|now|recent(?:ly)?|this (?:week|month|year|season)|price|cost|rate|score|stock|"
-    r"open|hours|release[ds]?|update[ds]?|live|20\d\d|who won|result)\b", re.I)
+    r"open|hours|release[ds]?|update[ds]?|live|20\d\d|who won|result)\b|https?://|\bwww\.", re.I)
+# What a 2B model does know: textbook facts, meanings, everyday advice. Anything else (a tool, a product,
+# a name it hasn't seen: "what is Ghidra") it makes up when it can't search, so only these are refused.
+TEXTBOOK = re.compile(
+    r"\b(?:capital|population|currency|language) of\b|\b(?:mean|means|meaning|define|definition|synonym|antonym|"
+    r"spell|spelling|translate)\b|\b(?:tips?|advice)\b|\bwho (?:wrote|painted|invented|discovered)\b"
+    r"|\b(?:joke|poem|story)\b", re.I)
+# Notes JARVIS writes: only when the user's latest message asks for it, and only in words the user said or a
+# tool returned. A 2B model whose search was refused wrote its own (wrong) description of Ghidra into a page,
+# and journaled the conversation unasked.
+NOTE_WRITES = {"kb_journal", "kb_append_to_page"}
+NOTE_TOOLS = NOTE_WRITES | {"kb_remember"}
+ASKS_TO_SAVE = re.compile(r"\b(?:save|note|jot|journal|log|add|put|write|remember|record|keep|store|track)\b", re.I)
+_PLAIN = set("""about after again also been before being from have here into just like more much only over said
+some than that their them then there these they this those very what when where which while will with would your
+user user's today sir jarvis""".split())
 # What makes get_time worth calling: the question is about a time, a date or a day.
 ABOUT_TIME = re.compile(
-    r"\b(time|clock|o'?clock|date|day|days|today|tonight|tomorrow|yesterday|now|when|hour|hours|minute|minutes|"
+    r"\b(time|clock|o'?clock|date\w*|timestamp|day|days|today|tonight|tomorrow|yesterday|now|when|hour|hours|minute|minutes|"
     r"week|weekend|month|year|morning|afternoon|evening|night|late|early|until|till|ago|since|age|old|"
     r"birthday|anniversary|calendar|schedule|zone|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
     r"jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)\b", re.I)
@@ -44,6 +60,7 @@ _NOT_NAMES = {"User", "User's", "I", "I'm", "The", "Sir", "JARVIS", "Jarvis", "M
               "Remember", "Note", "Today", "Tomorrow", "Yesterday"}
 _MONTH = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", re.I)
 _WORDS = re.compile(r"[a-z0-9']+")
+LINK = re.compile(r"https?://[^\s<>()\[\]\"'`]+[^\s<>()\[\]\"'`.,;:!?]")
 SPAN = 5  # this many words in a row from outside text = carried over
 
 
@@ -112,7 +129,8 @@ def arguments(tool, args, t) -> Verdict | None:
 
 
 def needless_search(tool, args, t) -> Verdict | None:
-    if tool.name == "web_search" and not CURRENT.search(t.heard):
+    said = getattr(t, "said", "") or t.heard
+    if tool.name == "web_search" and not CURRENT.search(t.heard) and TEXTBOOK.search(said):
         # a 2B model searches for "the capital of Australia": a credit, an approval and 20 s, for nothing
         return Verdict("error", "ERROR: that is general knowledge, not current news. Answer it yourself without "
                                 "searching; if you really don't know, say so.")
@@ -123,6 +141,64 @@ def needless_time(tool, args, t) -> Verdict | None:
     if tool.name == "get_time" and not ABOUT_TIME.search(getattr(t, "said", "") or t.heard):
         # a 2B model checks the clock before "what's the capital of Australia"
         return Verdict("error", "ERROR: the user didn't ask about a time or date. Answer them without it.")
+    return None
+
+
+def clock_time(tool, args, t) -> Verdict | None:
+    """The clock time, day and repeat the user said go into a timer or reminder as they said them; code works
+    out the seconds (tools/when.py). A 2B model set "10 AM tomorrow" as a 12-hour countdown ending at 06:24."""
+    if tool.name not in ("set_timer", "set_reminder"):
+        return None
+    said = getattr(t, "said", "") or ""
+    hm, on = clock(said), day_words(said)
+    fixed = dict(args)
+    if tool.name == "set_timer" and hm:
+        at = f"{hm[0]:02}:{hm[1]:02}" + (f" {on}" if on else "")
+        if clock(str(args.get("at") or ""), True) != hm or day_words(str(args.get("at") or "")) != on:
+            fixed = {k: v for k, v in args.items() if k not in ("minutes", "seconds")} | {"at": at}
+    if tool.name == "set_reminder":
+        if hm and clock(str(args.get("time") or ""), True) != hm:
+            fixed["time"] = f"{hm[0]:02}:{hm[1]:02}"
+        repeat, weekday = repeat_of(said)
+        if repeat and args.get("repeat") != repeat:
+            fixed["repeat"] = repeat
+        if weekday and weekday not in str(args.get("day") or "").lower():
+            fixed["day"] = weekday
+        elif on and not repeat and not day_words(str(args.get("day") or "")):
+            fixed["day"] = on
+    if fixed == args:
+        return None
+    t.trace.append({"tool": tool.name, "decision": "fixed", "rule": "arguments",
+                    "why": ", ".join(f"{k}={fixed.get(k)!r}" for k in fixed if fixed.get(k) != args.get(k))})
+    return Verdict("fix", "", fixed)
+
+
+def keep_links(tool, args, t) -> Verdict | None:
+    """A note saved about a link the user gave (or a page just read) keeps the link: a 2B model wrote the
+    article's gist and dropped its URL."""
+    links = getattr(t, "links", None)
+    key = "fact" if "fact" in args else "text"
+    if tool.name not in NOTE_TOOLS or not links or not isinstance(args.get(key), str) \
+            or any(u in args[key] for u in links):
+        return None
+    fixed = {**args, key: f"{args[key].rstrip()} ({' '.join(links[:2])})"}
+    t.trace.append({"tool": tool.name, "decision": "fixed", "rule": "arguments", "why": "kept the link"})
+    return Verdict("fix", "", fixed)
+
+
+def own_words(tool, args, t) -> Verdict | None:
+    if tool.name not in NOTE_TOOLS:
+        return None
+    said = getattr(t, "said", "") or t.heard
+    if tool.name in NOTE_WRITES and not ASKS_TO_SAVE.search(said):
+        return Verdict("error", "ERROR: the user didn't ask you to write anything down. Answer them without it.")
+    text = " ".join(str(v) for k, v in args.items() if k in ("text", "fact") and isinstance(v, str))
+    words = [w for w in _WORDS.findall(text.lower()) if len(w) > 3 and w not in _PLAIN]
+    known = set(_WORDS.findall((t.heard + " " + " ".join(t.seen)).lower()))
+    new = [w for w in words if w not in known]
+    if words and len(new) > max(2, len(words) // 3):
+        return Verdict("error", f"ERROR: {tool.model_name} would save words nobody said ({', '.join(new[:5])}). "
+                                "Save only what the user said or a tool returned; never your own knowledge.")
     return None
 
 
@@ -146,7 +222,7 @@ def record_taint(tool, args, output: str, t) -> str:
     return output
 
 
-PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, slots, taint]
+PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, clock_time, keep_links, own_words, slots, taint]
 POST_TOOL: list[Callable] = [record_taint]
 
 

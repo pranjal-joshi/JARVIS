@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+from jarvis_hub.automation.skill_fast import skill_plan
 from jarvis_hub.kb.graph import LogseqGraph
 
 MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
@@ -119,6 +120,8 @@ class FastPaths:
         return ""
 
     def match(self, utterance: str, today: date | None = None) -> Plan | None:
+        if plan := self._skills(utterance):  # skill steps may say "and": checked before that rule
+            return plan
         text = _clean(utterance)
         if not text or len(text) > 90 or re.search(r"\b(and|then|also)\b", text):
             return None  # several requests in one: the model handles those
@@ -130,6 +133,23 @@ class FastPaths:
         return None
 
     # ---------- intents ----------
+    def _skills(self, utterance: str) -> Plan | None:
+        # a short request may just name the skill ("fun fact, go"); a longer one says skill, run, turn...
+        if len(utterance) > 500 or len(utterance) > 60 and not re.search(
+                r"skill|automation|\brun\b|\btry\b|\bturn\b|\bswitch\b|\bdisable|\benable|\bpause|\bresume|\bstop\b",
+                utterance, re.I):
+            return None
+        names = [p.name[len("skills/"):] for p in self.graph.pages()
+                 if not p.is_journal and p.name.lower().startswith("skills/")]
+        text = re.sub(r"^\W*(?:hey |ok |okay )?(?:jarvis\W+)?(?:please |could you |can you |would you )?", "",
+                      utterance.strip(), flags=re.I)
+        text = re.sub(r"\s+(?:please|jarvis)\W*$", "", text, flags=re.I)
+        if not (hit := skill_plan(text, names)):
+            return None
+        tool, args = hit
+        return Plan(f"skill_{tool}", [(tool, args)], lambda r: _body(r[0]))
+
+
     def _time(self, text: str, today: date) -> Plan | None:
         if re.fullmatch(r"(?:what(?:'s| is) the )?(?:date|day)(?: is it)?(?: today)?|what day is (?:it|today)"
                         r"|what(?:'s| is) (?:the date|today's date|today)", text):
@@ -161,6 +181,9 @@ class FastPaths:
     def _weather(self, text: str, today: date) -> Plan | None:
         if not re.search(r"\b(weather|forecast|temperature|rain|raining|sunny|hot|cold|umbrella)\b", text):
             return None
+        if re.match(r"(?:send|notify|ping|text|message|whatsapp|tell (?!me\b)|remind|remember|note|save|add|write|"
+                    r"email|post)\b", text):
+            return None  # "send a notification saying take an umbrella": a message about the weather, not a question
         m = re.search(r"\b(?:in|at|for) ([a-z][a-z .'-]{1,40}?)(?: (?:today|tomorrow|now|this week|on \w+day))?$", text)
         place = m[1].strip() if m else ""
         if re.search(HOME_WORDS, text) or place in ("home", "here", "today", "tomorrow"):

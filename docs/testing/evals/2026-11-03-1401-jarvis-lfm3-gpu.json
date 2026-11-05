@@ -1,0 +1,85 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-03T14:01",
+ "cases": 5,
+ "passed": 5,
+ "passed_ignoring_style": 5,
+ "failure_kinds": {},
+ "first_words_median_s": 5.1,
+ "by_category": {
+  "hard": "5/5"
+ },
+ "rows": [
+  {
+   "id": "h-son",
+   "cat": "hard",
+   "say": "when is my son's birthday",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "According to your notes, your son Chiku's birthday is 13 May. (Note: today's date is Tuesday, 3 November 2026 — so this is likely a recurring annual birthday.)",
+   "first_s": 14.6,
+   "total_s": 15.0
+  },
+  {
+   "id": "h-week",
+   "cat": "hard",
+   "say": "anything coming up this week I should know about",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks",
+    "kb_search"
+   ],
+   "reply": "Based on your notes and current to-do list, there is nothing scheduled for this week. The notable upcoming item is Diwali on 8th November — you might want to keep that in mind.",
+   "first_s": 5.1,
+   "total_s": 5.7
+  },
+  {
+   "id": "h-jot",
+   "cat": "hard",
+   "say": "jot down that the plumber comes Friday at 10",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Noted in your journal: the plumber is scheduled for Friday at 10:00.",
+   "first_s": 3.4,
+   "total_s": 3.4
+  },
+  {
+   "id": "h-f1",
+   "cat": "hard",
+   "say": "look up who won the F1 race last weekend",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "web_search"
+   ],
+   "reply": "I’m unable to locate the result of the F1 race from last weekend (Tuesday, 3 November 2026) in the available data. Could you confirm the date or race (e.g., Monaco, Silverstone) so I can search again?",
+   "first_s": 3.4,
+   "total_s": 3.7
+  },
+  {
+   "id": "h-shot",
+   "cat": "hard",
+   "say": "grab a screenshot of my laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_screenshot"
+   ],
+   "reply": "The screenshot has been saved to `data/screenshots/win-20261103-140101.png`.",
+   "first_s": 6.2,
+   "total_s": 6.2
+  }
+ ]
+}

@@ -190,12 +190,12 @@ def test_streamed_text_is_reset_when_a_tool_follows(parts):
 
 def test_claimed_save_without_a_tool_is_sent_back_then_refused(parts):
     bus, gate, audit, reg, calls = parts
-    # claims "noted" after only a read: nudged once, then it really calls the tool
-    llm = FakeLLM([call("ha__GetLiveContext"), say("Noted, sir. I've saved that."), call("ha__HassTurnOn", name="x"),
-                   say("Saved, sir.")])
-    assert asyncio.run(run(ToolAgent(llm, reg, gate, audit, ask_for=frozenset()), bus)) == "Saved, sir."
+    # claims an action after only a read: nudged once, then it really calls the tool
+    llm = FakeLLM([call("ha__GetLiveContext"), say("I've turned it on, sir."), call("ha__HassTurnOn", name="x"),
+                   say("It's on, sir.")])
+    assert asyncio.run(run(ToolAgent(llm, reg, gate, audit, ask_for=frozenset()), bus)) == "It's on, sir."
     assert calls == [{"name": "x"}]
-    assert any("no tool that changes anything ran" in m["content"] for m in llm.seen[-1] if m["role"] == "user")
+    assert any("no tool did that this turn" in m["content"] for m in llm.seen[-1] if m["role"] == "user")  # a device claim
     # claims it twice: the claim never reaches the user
     llm = FakeLLM([say("I'll remember that, sir."), say("Noted.")])
     assert asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus)).startswith("I haven't actually saved")

@@ -1,0 +1,83 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-04T20:01",
+ "cases": 5,
+ "passed": 5,
+ "passed_ignoring_style": 5,
+ "failure_kinds": {},
+ "first_words_median_s": 6.4,
+ "by_category": {
+  "jobs": "5/5"
+ },
+ "rows": [
+  {
+   "id": "job-hello",
+   "cat": "jobs",
+   "say": "run a job to print \"Hello World from the job\"",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "start_job"
+   ],
+   "reply": "Job started. It will print \"Hello World from the job\" on the laptop and run in the background. (Note: the system reports a dry-run record; I have initiated it as requested.)",
+   "first_s": 20.8,
+   "total_s": 21.5
+  },
+  {
+   "id": "job-web",
+   "cat": "jobs",
+   "say": "run it as a job - 'web search for know everything github repo'",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "start_job",
+    "web_search"
+   ],
+   "reply": "The job has been launched (dry-run confirmed). It will conduct a web search for \"know everything GitHub repo\" and I'll let you know once it completes.",
+   "first_s": 6.4,
+   "total_s": 14.7
+  },
+  {
+   "id": "job-bg",
+   "cat": "jobs",
+   "say": "do this in the background: compare the top three 2B tool-calling models and write me a summary",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "start_job"
+   ],
+   "reply": "JARVIS has launched the background job. It will compare the leading 2B-parameter language models and produce a summary shortly. I'll report back once it completes.",
+   "first_s": 6.7,
+   "total_s": 7.3
+  },
+  {
+   "id": "job-status",
+   "cat": "jobs",
+   "say": "how's the background job going",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "job_status"
+   ],
+   "reply": "The background job b54d7f86 (reverse-engineer-anything) finished 21 minutes ago, costing $0.019. It triaged `whoami.exe` — a Windows 64-bit console tool that reports the current user, groups and privileges, importing about 11 DLLs mainly for security and identity APIs. All done.",
+   "first_s": 6.1,
+   "total_s": 7.2
+  },
+  {
+   "id": "job-praise",
+   "cat": "jobs",
+   "say": "good job jarvis",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [],
+   "reply": "Good day, sir. I am JARVIS. How may I assist you today?",
+   "first_s": 6.3,
+   "total_s": 6.6
+  }
+ ]
+}

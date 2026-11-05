@@ -2,7 +2,9 @@
 
 // 3D knowledge-graph of the Logseq KB. Loaded client-only (next/dynamic, ssr: false)
 // from Hud.jsx. Pages touched by JARVIS light up by tool kind: reads cyan, tasks green, writes amber,
-// erases red, blocked/failed pink.
+// erases red, blocked/failed pink. In the explorer a picked page keeps its neighbourhood bright and dims the rest,
+// search matches stand out, and pages changed lately glow brighter than ones untouched for a month. With `agent`,
+// what JARVIS can do joins the map: its tools (lime, grouped by family) and its skills (magenta).
 import { useEffect, useRef } from "react";
 import ForceGraph3D from "3d-force-graph";
 import { AdditiveBlending, CanvasTexture, Color, FogExp2, Group, Sprite, SpriteMaterial } from "three";
@@ -12,16 +14,37 @@ const C = {
   page: "#9fd8ff",
   jarvis: "#7fe7ff",
   journal: "#b48bff",
+  tool: "#c3f970",
+  family: "#e4ffb0",
+  skill: "#ff7ad9",
   read: "#7fe7ff",
   tasks: "#6dffa8",
   write: "#ffb347",
   erase: "#ff6b6b",
   fault: "#ff5c9a",
   link: "rgba(127,231,255,0.16)",
+  near: "rgba(234,252,255,0.55)", // a link of the picked page
+  far: "rgba(127,231,255,0.04)", // any other link while a page is picked
   select: "#eafcff",
 };
 const RANK = ["read", "tasks", "write", "erase", "fault"];
 const LIT_MS = 9000; // a touched page stays lit this long, then fades to ambient
+const DAY = 86400;
+
+// how bright a page is for its age: changed in the last two days > the last month > older
+const freshness = (n) => {
+  if (!n.updated) return 1;
+  const days = (Date.now() / 1000 - n.updated) / DAY;
+  return days < 2 ? 1.35 : days < 30 ? 1 : 0.7;
+};
+
+// hops from `from` (0, 1, 2) over the links, for the picked page's neighbourhood
+function hops(adj, from) {
+  const out = new Map([[from, 0]]);
+  for (const a of adj.get(from) || []) out.set(a, 1);
+  for (const a of adj.get(from) || []) for (const b of adj.get(a) || []) if (!out.has(b)) out.set(b, 2);
+  return out;
+}
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
@@ -64,14 +87,20 @@ function core() {
   return coreTexture;
 }
 
-const baseColor = (n) => (n.journal ? C.journal : n.jarvis ? C.jarvis : C.page);
-const baseSize = (n) => 10 + Math.sqrt(n.blocks || 0) * 3.5;
+const baseColor = (n) => C[n.kind] || (n.journal ? C.journal : n.jarvis ? C.jarvis : C.page);
+const baseSize = (n) => (n.kind === "family" ? 16 : n.kind === "tool" ? 8 : 10 + Math.sqrt(n.blocks || 0) * 3.5);
+const tipOf = (n) => n.kind === "tool" ? `<span>tool · ${esc(n.family)} · ${esc(n.risk)}${n.asks ? " · asks first" : ""}</span>`
+  : n.kind === "skill" ? `<span>skill · ${esc(n.trigger)} · ${n.enabled ? "on" : "off"}</span>`
+  : n.blocks ? `<span>${n.blocks} blocks</span>` : "";
 
-export default function KbGraph({ pulse, active, version, onStats, interactive = false, selected = null, onPick }) {
+export default function KbGraph({ pulse, active, version, onStats, interactive = false, selected = null, onPick,
+  highlight = null, agent = false }) {
   const host = useRef(null);
-  // interactive (explorer) mode: click picks a page, nodes drag, the camera is the user's
-  const live = useRef({ selected, onPick });
-  live.current = { selected, onPick };
+  // interactive (explorer) mode: click picks a page, nodes drag, the camera is the user's.
+  // near: hops from the picked page; marked: the search's matches (null = no search)
+  const live = useRef({ selected, onPick, near: null, marked: null });
+  live.current.selected = selected;
+  live.current.onPick = onPick;
   const api = useRef(null); // { graph, lit, reduced, flyTo, refreshLinks, load }
 
   // mount the renderer once
@@ -80,6 +109,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const narrow = window.matchMedia("(max-width: 1000px)").matches;
     const lit = new Map(); // id -> { kind, at }
+    const adj = new Map(); // id -> Set of linked ids
     let stopped = false;
 
     // Page names as real DOM text (CSS2D) so they render sharp at any zoom.
@@ -93,7 +123,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       .backgroundColor("rgba(0,0,0,0)")
       .showNavInfo(false)
       .enableNodeDrag(interactive)
-      .nodeLabel((n) => `<div class="kb-tip"><b>${esc(n.label)}</b>${n.blocks ? `<span>${n.blocks} blocks</span>` : ""}</div>`)
+      .nodeLabel((n) => `<div class="kb-tip"><b>${esc(n.label)}</b>${tipOf(n)}</div>`)
       .nodeThreeObject((n) => {
         const sprite = (map, opacity, additive) => new Sprite(new SpriteMaterial({
           map, color: new Color(baseColor(n)), transparent: true, depthWrite: false, opacity,
@@ -105,7 +135,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
         const dot = sprite(core(), 0.95, false);
         dot.scale.set(sz * 0.32, sz * 0.32, 1);
         const tag = document.createElement("div");
-        tag.className = "kb-label";
+        tag.className = `kb-label${n.kind ? ` ${n.kind}` : ""}`;
         tag.textContent = n.label;
         const label = new CSS2DObject(tag);
         label.position.set(0, -sz * 0.32, 0);
@@ -118,14 +148,25 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       })
       .linkColor((l) => {
         const k = litKind(l);
-        return k ? C[k] : C.link;
+        if (k) return C[k];
+        const near = live.current.near;
+        if (!near) return C.link;
+        return touches(l, live.current.selected) ? C.near : C.far;
       })
-      .linkWidth((l) => (litKind(l) ? 0.8 : 0))
+      .linkWidth((l) => (litKind(l) ? 0.8 : live.current.near && touches(l, live.current.selected) ? 0.45 : 0))
       .linkOpacity(0.55)
       .linkDirectionalParticles((l) => (litKind(l) && !reduced ? 3 : 0))
       .linkDirectionalParticleSpeed(0.007)
       .linkDirectionalParticleWidth(1.4)
       .linkDirectionalParticleColor((l) => C[litKind(l)] || C.read);
+
+    function ends(l) {
+      return [typeof l.source === "object" ? l.source.id : l.source, typeof l.target === "object" ? l.target.id : l.target];
+    }
+    function touches(l, id) {
+      const [s, t] = ends(l);
+      return s === id || t === id;
+    }
 
     function litKind(l) {
       const s = typeof l.source === "object" ? l.source.id : l.source;
@@ -154,14 +195,28 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
     controls.autoRotate = !reduced;
     controls.autoRotateSpeed = 0.35;
     controls.enableDamping = true;
-    if (narrow && !interactive) controls.enabled = false; // let touch scroll the stacked page
-    if (interactive) controls.addEventListener("start", () => { controls.autoRotate = false; state.busy = true; });
+    // A phone shows the map in a tab of its own: it takes touch there (one finger turns it, two pinch to zoom
+    // and drag to pan), no need to open the explorer first. Between phone and desktop widths it sits in a page
+    // that scrolls, so a finger on it scrolls the page.
+    const phoneTab = window.matchMedia("(max-width: 720px)").matches;
+    if (narrow && !interactive && !phoneTab) controls.enabled = false;
+    if (interactive || phoneTab) controls.addEventListener("start", () => { controls.autoRotate = false; state.busy = true; });
 
     // refit once the layout settles, unless we're focused on touched pages
     const state = { busy: false };
-    graph.onEngineStop(() => { if (!state.busy && !stopped) graph.zoomToFit(reduced ? 0 : 900, 18); });
+    let hidden = !el.clientWidth || !el.clientHeight; // see size() below
+    graph.onEngineStop(() => { if (!state.busy && !stopped && !hidden) graph.zoomToFit(reduced ? 0 : 900, 18); });
 
-    const size = () => graph.width(el.clientWidth).height(el.clientHeight);
+    // A phone shows the map in a tab of its own. Hidden, it has no size: a 0×0 graph gets a NaN camera aspect,
+    // the fit then puts the camera at NaN for good, and the tab opened on an empty map. So a hidden map keeps its
+    // last size and isn't fitted; it is fitted once it is shown.
+    const size = () => {
+      const w = el.clientWidth, h = el.clientHeight;
+      if (!w || !h) { hidden = true; return; }
+      graph.width(w).height(h);
+      if (hidden && !stopped) setTimeout(() => !stopped && graph.zoomToFit(0, 18), 30);
+      hidden = false;
+    };
     const ro = new ResizeObserver(size);
     ro.observe(el);
     size();
@@ -194,8 +249,17 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
         const sz = baseSize(n);
         let target = baseColor(n);
         let scale = sz;
-        let op = 0.45;
         const picked = n.id === live.current.selected;
+        // in focus: the picked page's neighbourhood and the search's matches; everything else fades back
+        const { near, marked } = live.current;
+        const hop = near ? near.get(n.id) : 0;
+        const hit = marked ? marked.has(n.id) : null;
+        const focus = (hop === undefined ? 0.12 : hop === 2 ? 0.55 : 1) * (hit === false ? 0.15 : 1);
+        const fresh = freshness(n);
+        let op = 0.45 * fresh * focus;
+        n.__tag?.classList.toggle("far", focus < 0.5);
+        n.__tag?.classList.toggle("match", hit === true);
+        n.__tag?.classList.toggle("fresh", fresh > 1);
         n.__tag?.classList.toggle("lit", !!L);
         for (const k of RANK) n.__tag?.classList.toggle(k, L?.kind === k);
         if (L) {
@@ -211,8 +275,12 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
           target = C.select;
           scale = sz * (1.9 + (reduced ? 0 : 0.15 * Math.sin(now / 240)));
           op = 0.95;
+        } else if (hit) {
+          target = C.select;
+          scale = sz * 1.5;
+          op = 0.85;
         } else if (!reduced) {
-          op = 0.5 + 0.08 * Math.sin(now / 900 + sz);
+          op = (0.5 + 0.08 * Math.sin(now / 900 + sz)) * fresh * focus;
         }
         n.__tag?.classList.toggle("picked", picked);
         s.material.color.lerp(tmp.set(target), reduced ? 1 : 0.12);
@@ -237,20 +305,34 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
 
     const load = async () => {
       try {
-        const r = await fetch("/api/hub/kb/graph", { cache: "no-store" });
+        const r = await fetch(`/api/hub/kb/graph${agent ? "?agent=true" : ""}`, { cache: "no-store" });
         if (!r.ok || stopped) return;
         const { nodes = [], edges = [] } = await r.json();
         const prev = new Map(graph.graphData().nodes.map((n) => [n.id, n]));
         const merged = nodes.map((n) => Object.assign(prev.get(n.id) || {}, n));
         graph.graphData({ nodes: merged, links: edges.map((e) => ({ source: e.source, target: e.target })) });
+        adj.clear();
+        for (const e of edges) {
+          if (!adj.has(e.source)) adj.set(e.source, new Set());
+          if (!adj.has(e.target)) adj.set(e.target, new Set());
+          adj.get(e.source).add(e.target);
+          adj.get(e.target).add(e.source);
+        }
+        focusOn(live.current.selected);
         onStats?.({ pages: nodes.length, links: edges.length });
-        if (!prev.size) setTimeout(() => !stopped && graph.zoomToFit(reduced ? 0 : 1200, 18), reduced ? 50 : 900);
+        if (!prev.size) setTimeout(() => !stopped && !hidden && graph.zoomToFit(reduced ? 0 : 1200, 18), reduced ? 50 : 900);
       } catch {
         /* hub offline: keep whatever is shown */
       }
     };
 
-    api.current = { graph, lit, reduced, flyTo, refreshLinks, load, controls, state };
+    // the picked page's neighbourhood (explorer only); null = nothing picked, all pages in focus
+    const focusOn = (id) => {
+      live.current.near = interactive && id ? hops(adj, id) : null;
+      refreshLinks();
+    };
+
+    api.current = { graph, lit, reduced, flyTo, refreshLinks, load, controls, state, focusOn, isHidden: () => hidden };
     load();
 
     return () => {
@@ -264,16 +346,23 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       api.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onStats, interactive]);
+  }, [onStats, interactive, agent]);
 
-  // explorer: a page picked from the list (or a link) flies the camera to it too
+  // explorer: a page picked from the list (or a link) flies the camera to it too, and becomes the focus
   useEffect(() => {
     const a = api.current;
-    if (!a || !interactive || !selected) return;
+    if (!a || !interactive) return;
+    a.focusOn(selected);
+    if (!selected) return;
     a.controls.autoRotate = false;
     a.state.busy = true;
     a.flyTo([selected], 900);
   }, [selected, interactive]);
+
+  // explorer: the search's matches stand out (null or an empty search = no marking)
+  useEffect(() => {
+    live.current.marked = highlight && highlight.length ? new Set(highlight) : null;
+  }, [highlight]);
 
   // refetch after writes so new pages appear
   useEffect(() => {
@@ -307,7 +396,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
     const a = api.current;
     if (!a || active) return;
     a.state.busy = false;
-    a.graph.zoomToFit(a.reduced ? 0 : 1600, 18);
+    if (!a.isHidden()) a.graph.zoomToFit(a.reduced ? 0 : 1600, 18);
     a.controls.autoRotate = !a.reduced;
   }, [active]);
 

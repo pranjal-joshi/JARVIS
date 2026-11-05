@@ -4,8 +4,10 @@ the hub acts only through its own allow-listed tools and approval gate."""
 
 import asyncio
 import json
+import re
 import time
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -14,9 +16,11 @@ from pydantic import BaseModel
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.config import Source
 from jarvis_hub.voice.speakable import for_ear, to_speech
+from jarvis_hub.voice.spoken import symbols
 
 router = APIRouter(prefix="/v1")
 MODEL_ID = "jarvis"
+SESSION_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")  # X-Jarvis-Session: the HUD's id for a conversation
 
 
 class ChatMessage(BaseModel):
@@ -48,14 +52,20 @@ async def chat(body: ChatRequest, request: Request,
     request_id = uuid.uuid4().hex
     messages = [{"role": m.role, "content": _text(m.content)} for m in body.messages]
     session = None
+    trace = request.headers.get("x-jarvis-session", "")
+    trace = f"{source}-{trace}" if SESSION_ID.match(trace) else None
     if source is Source.SATELLITE:  # one conversation per satellite, kept by the hub (see voice/session.py)
         session = "satellite:" + (request.headers.get("x-satellite-id") or "default")[:64]
+        if messages and messages[-1]["role"] == "user":  # spoken: "work slash AI Studio" -> "work/AI Studio"
+            messages[-1]["content"] = symbols(messages[-1]["content"])
         messages = request.app.state.sessions.merge(session, messages)
+        started = request.app.state.sessions.started(session)
+        trace = f"{session.replace(':', '-')}-{datetime.fromtimestamp(started):%Y%m%d-%H%M%S}"
     heard = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
     # evals and skill dry-runs: tools that change anything are recorded, not run
     dry_run = request.headers.get("x-jarvis-dry-run", "").lower() in ("1", "true", "yes")
     run = dict(messages=messages, source=source, request_id=request_id, bus=request.app.state.bus,
-               session=session, dry_run=dry_run)
+               session=session, dry_run=dry_run, trace_session=trace)
 
     def remember(reply: str) -> None:
         if session:

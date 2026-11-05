@@ -26,3 +26,6 @@ voice/samples/
 
 # your watchers (commands, repo and org names): kept local
 config/watchers.json
+
+# SFT data built from traces: holds personal notes and conversations (scripts/sft/build_sft.py)
+docs/testing/sft/*.jsonl

@@ -17,6 +17,7 @@ from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
 _PROPS = re.compile(r"(?m)^\s*[\w-]+:: .*$\n?")
 MAX_CORRECT = 3  # more memories than this match the wrong words: ask which, rather than replace them all
+MAX_MOVE = 8  # more notes than this match: ask which, rather than move them all
 SAME_FACT = 0.9  # share of the shorter fact's words the other one also has: the same memory, not a new one
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 _DAY_WORDS = re.compile(r"\b(today|tonight|tomorrow|yesterday|(?:this|next|on) (?:" + "|".join(WEEKDAYS) + r"))\b",
@@ -126,12 +127,48 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
 
     async def kb_append_to_page(args: dict, ctx: ToolCtx) -> str:
         page, text = str(args.get("page", "")), str(args.get("text", ""))
+        if page.strip().lower().startswith("skills/"):  # a skill runs as soon as it changes: only its tools write it
+            return "ERROR: skill pages are changed with update_skill (add_steps for a new step), not add_to_page"
         if page.lower().startswith("jarvis/"):
             graph.write_jarvis_page(page, text)
         else:
             graph.append_to_user_page(page, text)
         await index.sync()
         return f'Added "{text}" to [[{page}]].'
+
+    async def kb_move_item(args: dict, ctx: ToolCtx) -> str:
+        """Move notes (with what is nested under them) that contain some words to another page: "move the ESP
+        Home tasks to my Jarvis Project page", "organize my memory". Journals and pages are looked through,
+        or only the page named; the pages as they were are kept in .trash/."""
+        match, to = str(args.get("match", "")).strip(), str(args.get("to_page", "")).strip()
+        where = str(args.get("from_page") or "").strip()
+        if len(match) < 3 or not to:
+            return "ERROR: move_note needs match (a few words from the notes) and to_page."
+        names = [p.name for p in graph.pages() if not p.is_journal]
+        to = to if to in names else best_name(to, names) or to  # "jarvis project" -> "Jarvis Project"
+        if where and graph.page(where) is None:
+            where = best_name(where, names) or where
+            if graph.page(where) is None:
+                return missing_page(graph, where, "move_note")
+        sources = [graph.page(where)] if where else [
+            p for p in graph.pages() if p.name.lower() != to.lower() and not p.name.lower().startswith("skills/")]
+        found = [(p.name, b.text) for p in sources for b in p.blocks if match.lower() in b.text.lower()]
+        if not found:
+            return (f"ERROR: no note contains {match!r}. Call search_notes to find the exact words, then call "
+                    "move_note with a few of them.")
+        if len(found) > MAX_MOVE:
+            listed = "; ".join(t.split("\n")[0][:50] for _, t in found[:5])
+            return (f"ERROR: {len(found)} notes contain {match!r} ({listed}...). Ask the user which, or call move_note "
+                    "with more of their words or a from_page.")
+        moved = []
+        for page in dict.fromkeys(name for name, _ in found):
+            for block in graph.take_blocks(page, match):
+                (graph.write_jarvis_page if to.lower().startswith("jarvis/") else graph.append_to_user_page)(to, block)
+                moved.append(page)
+        await index.sync()
+        pages = ", ".join(f"[[{p}]]" for p in dict.fromkeys(moved))
+        return (f"Moved {len(moved)} note{'s' * (len(moved) != 1)} containing {match!r} from {pages} to [[{to}]] "
+                "(old copies kept in .trash).")
 
     reg.add(Tool("kb_search", "builtin",
                  "Search the user's notes and your memories. Use for: 'what did I decide about X', 'how do I "
@@ -182,6 +219,14 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
                  "Add a line to one of the user's notes pages. Use for: 'add milk to my Groceries page'.",
                  _obj({"page": {"type": "string"}, "text": {"type": "string"}}, ["page", "text"]),
                  Risk.WRITE, kb_append_to_page))
+    reg.add(Tool("kb_move_item", "builtin",
+                 "Move notes that contain some words, with what is under them, to another page (made if it isn't "
+                 "there). Use for: 'move the ESP Home tasks to my Jarvis Project page', 'put everything about the car "
+                 "on the Car page', 'organize my notes'. Old copies are kept.",
+                 _obj({"match": {"type": "string", "description": "a few words the notes contain"},
+                       "to_page": {"type": "string", "description": "the page to move them to"},
+                       "from_page": {"type": "string", "description": "optional: only from this page"}},
+                      ["match", "to_page"]), Risk.WRITE, kb_move_item))
 
 def missing_page(graph: LogseqGraph, name: str, tool: str) -> str:
     """An error a small model can act on: the closest page names, or where to look instead."""

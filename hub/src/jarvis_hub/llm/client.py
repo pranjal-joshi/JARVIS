@@ -4,6 +4,7 @@ llama.cpp, vLLM or a cloud endpoint; nothing here is Ollama-specific."""
 import json
 import logging
 import os
+import re
 from collections.abc import Callable
 
 import anthropic
@@ -14,6 +15,40 @@ log = logging.getLogger(__name__)
 
 class LLMError(RuntimeError):
     pass
+
+
+class RateLimited(LLMError):
+    """The model's server said too many requests (HTTP 429). retry_s: when it says to try again."""
+
+    def __init__(self, model: str, retry_s: float) -> None:
+        super().__init__(f"{model} is rate limited (try again in {retry_s:.0f} s)")
+        self.model, self.retry_s = model, retry_s
+
+
+def _retry_s(headers) -> float:
+    """Seconds until the server takes requests again: Retry-After, else the token or request reset
+    ("2.137s", "2m52.8s", "120ms" in Groq's and OpenAI's x-ratelimit-reset-* headers)."""
+    try:
+        return float(headers.get("retry-after", ""))
+    except ValueError:
+        pass
+    waits = []
+    for h in ("x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        if m := re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?(?:([\d.]+)ms)?", headers.get(h, "")):
+            h_, m_, s_, ms = (float(x) if x else 0.0 for x in m.groups())
+            waits.append(h_ * 3600 + m_ * 60 + s_ + ms / 1000)
+    return min((w for w in waits if w > 0), default=60.0)
+
+
+# Sampling the model's makers recommend for tool use, sent unless LLM_EXTRA_BODY / LLM_MODEL_EXTRA say otherwise.
+# LFM3 (LiquidAI model card, "chat, tool use, agents"): without these Ollama's own, much more random, defaults
+# applied. top_k and repeat_penalty are Ollama's names; servers that don't know them ignore them.
+SAMPLING = (("lfm3", {"temperature": 0.1, "top_k": 50, "repeat_penalty": 1.1}),)
+
+
+def sampling(model: str) -> dict:
+    m = model.lower()
+    return next((dict(s) for key, s in SAMPLING if key in m), {})
 
 
 class LLMClient:
@@ -39,6 +74,11 @@ class LLMClient:
                                                     timeout=httpx.Timeout(timeout_s, connect=10)),
                                   ep.get("model") or name)
 
+    @property
+    def remote(self) -> bool:
+        """The selected model is on another server (LLM_ENDPOINTS), often a rate-limited cloud one."""
+        return self.model in self._remote
+
     def _route(self) -> tuple[httpx.AsyncClient, str]:
         """The server and model id for the selected model."""
         return self._remote.get(self.model, (self._http, self.model))
@@ -55,7 +95,8 @@ class LLMClient:
             except anthropic.APIError as e:
                 raise LLMError(f"Claude request failed: {type(e).__name__}: {getattr(e, 'message', e)}") from e
         http, model_id = self._route()
-        body = {"model": model_id, "messages": messages, **self._extra, **self._per_model.get(self.model, {})}
+        body = {"model": model_id, "messages": messages, **sampling(model_id), **self._extra,
+                **self._per_model.get(self.model, {})}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -63,13 +104,31 @@ class LLMClient:
             try:
                 return await self._stream(body, on_text)
             except LLMError as e:
-                if not tools or "500" not in str(e):
+                # a cloud server (Groq) answers 400 when the model's tool call doesn't parse: it's sampled, so ask
+                # once more; Ollama answers 500. Then answer without tools.
+                cloud = "400" in str(e) and self.remote
+                if not tools or not ("500" in str(e) or cloud):
                     raise
+                if cloud:
+                    log.warning("the model's tool call didn't parse (%s); asking again", e)
+                    try:
+                        return await self._stream(body, on_text)
+                    except LLMError as again:
+                        if "400" not in str(again):
+                            raise
                 log.warning("tool call unparseable; retrying without tools")
                 return await self._stream({k: v for k, v in body.items() if k not in ("tools", "tool_choice")},
                                           on_text)
         try:
             r = await http.post("/chat/completions", json=body)
+            if r.status_code == 429:
+                raise RateLimited(self.model, _retry_s(r.headers))
+            if r.status_code == 400 and tools and self.remote and "tool_use_failed" in r.text:
+                log.warning("the model's tool call didn't parse (%s); asking again", r.text[:200])
+                r = await http.post("/chat/completions", json=body)  # sampled again; a 400 again falls through
+                if r.status_code == 400 and "tool_use_failed" in r.text:
+                    r = await http.post("/chat/completions", json={k: v for k, v in body.items()
+                                                                          if k not in ("tools", "tool_choice")})
             if r.status_code == 500 and tools:  # Ollama can't parse the model's tool call: answer without tools
                 log.warning("tool call unparseable (%s); retrying without tools", r.text[:200])
                 r = await http.post("/chat/completions", json={k: v for k, v in body.items()
@@ -95,6 +154,8 @@ class LLMClient:
                                                       "json_schema": {"name": "out", "schema": schema}}}
         try:
             r = await http.post("/chat/completions", json=body)
+            if r.status_code == 429:
+                raise RateLimited(self.model, _retry_s(r.headers))
             r.raise_for_status()
             return json.loads(r.json()["choices"][0]["message"]["content"] or "{}")
         except (httpx.HTTPError, ValueError, KeyError) as e:
@@ -104,6 +165,8 @@ class LLMClient:
         content, calls = "", {}  # tool calls arrive in pieces keyed by index
         try:
             async with self._route()[0].stream("POST", "/chat/completions", json={**body, "stream": True}) as r:
+                if r.status_code == 429:
+                    raise RateLimited(self.model, _retry_s(r.headers))
                 r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line.startswith("data:") or line.strip() == "data: [DONE]":

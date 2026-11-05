@@ -30,7 +30,7 @@ function Ring({ frac, warn }) {
   );
 }
 
-export default function MonitorsPanel({ data, pulse, ghosts, active, focused, headProps, onManage }) {
+export default function MonitorsPanel({ data, pulse, ghosts, active, focused, headProps, onManage, onClearJobs }) {
   const [now, setNow] = useState(() => Date.now() / 1000); // its own clock, so only this panel ticks
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now() / 1000), 1000);
@@ -39,9 +39,11 @@ export default function MonitorsPanel({ data, pulse, ghosts, active, focused, he
   const watchers = data?.watchers || [];
   const timers = data?.timers || [];
   const schedules = (data?.schedules || []).filter((s) => s.enabled);
+  const jobs = data?.jobs || []; // background jobs: running ones, and those that ended in the last hours
   const fx = (kind, name) => (pulse && pulse.name === name && pulse.kind === kind ? ` fx-${kind}` : "");
   const rowFx = (name) => (pulse && pulse.name === name ? ` fx-${pulse.kind}` : "");
-  const count = watchers.filter((w) => w.enabled).length + timers.length + schedules.length;
+  const count = watchers.filter((w) => w.enabled).length + timers.length + schedules.length
+    + jobs.filter((j) => j.state === "running" || j.state === "queued").length;
 
   return (
     <section className={`panel monitors${active ? ` active m-${pulse?.kind || "ran"}` : ""}${focused ? " focused" : ""}`}
@@ -58,6 +60,11 @@ export default function MonitorsPanel({ data, pulse, ghosts, active, focused, he
           </span>
         </h2>
         <div className="win-btns">
+          {onClearJobs && jobs.some((j) => !(j.state === "running" || j.state === "queued")) && (
+            <button type="button" className="mon-clear" onClick={(e) => { e.stopPropagation(); onClearJobs(); }}
+              title="Clear finished background jobs from this list (their reports stay in your notes)"
+              aria-label="Clear finished jobs">clear</button>
+          )}
           <button type="button" onClick={onManage} title="Add or change watchers" aria-label="Manage watchers">＋</button>
         </div>
       </div>
@@ -114,6 +121,28 @@ export default function MonitorsPanel({ data, pulse, ghosts, active, focused, he
               <time>{s.last_run ? `ran ${ago(s.last_run, now)}` : "not yet"}</time></div>
           </li>
         ))}
+        {jobs.map((j) => {
+          const live = j.state === "running" || j.state === "queued";
+          const state = live ? "running" : j.state === "done" ? "ok" : j.state === "failed" ? "error" : "paused";
+          return (
+            <li key={`j-${j.id}`} className={`mon j ${state}${rowFx(j.id)}`}
+              title={[j.goal, j.target && `target: ${j.target}`, j.error && `error: ${j.error}`, j.dir].filter(Boolean).join("\n")}>
+              <span className="mon-glyph" aria-hidden="true">
+                {live ? <Ring frac={Math.max(0, 1 - (now - (j.started || j.created)) / (j.timeout_s || 3600))} />
+                  : <i className="mon-dot" />}
+              </span>
+              <div className="mon-main">
+                <div className="mon-title">⛭ {j.skill || "background job"}
+                  <span className="mon-targets">{j.id}</span></div>
+                <div className="mon-detail">{live ? `↳ ${j.last || "starting…"}` : j.error || j.summary || j.goal}</div>
+              </div>
+              <div className="mon-meta">
+                <span>{live ? `${left(now - (j.started || j.created))} · ${j.steps || 0} steps` : j.state}</span>
+                <time>{live ? `cap $${j.budget_usd}` : `${j.cost_usd != null ? `$${j.cost_usd} · ` : ""}${ago(j.ended, now)}`}</time>
+              </div>
+            </li>
+          );
+        })}
         {(ghosts || []).map((g) => (
           <li key={`g-${g.seq}`} className={`mon ghost fx-${g.kind}`} aria-hidden="true">
             <span className="mon-glyph"><i className="mon-dot" /></span>

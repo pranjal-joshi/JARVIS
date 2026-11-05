@@ -164,3 +164,13 @@ def test_announcer_turns_timers_and_calls_into_satellite_announcements():
         if ev.type == "announce":
             texts.append(ev.data["text"])
     assert texts == ["Your pasta timer is done, sir.", "Incoming call: Mum on Pixel 9a."]
+
+
+def test_a_spoken_yes_in_the_middle_of_several_parts_carries_on_with_the_rest():
+    agent, bus, ran = setup([call("web_search", query="Pune weather"), say("Pune is clear, sir."),
+                             call("web_search", query="Delhi weather"), say("Delhi is hot, sir.")])
+    first = turn(agent, bus, "search the web for the weather in Pune, then search the web for the weather in Delhi")
+    assert first == "That will search the web for Pune weather. Shall I go ahead, sir?"
+    assert turn(agent, bus, "yes") == "Pune is clear, sir. That will search the web for Delhi weather. Shall I go ahead, sir?"
+    assert turn(agent, bus, "yes") == "Pune is clear, sir. Delhi is hot, sir."
+    assert ran == [{"query": "Pune weather"}, {"query": "Delhi weather"}]

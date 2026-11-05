@@ -16,9 +16,12 @@ from pydantic import BaseModel
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.approval.gate import APPROVER_SOURCES
 from jarvis_hub.config import Source
+from jarvis_hub.kb.graph import LINK, PROP
 from jarvis_hub.kb.tools import _today_title, recent_memory
+from jarvis_hub.tools.cards import family_of
 from jarvis_hub.voice.service import VoiceError
 from jarvis_hub.voice.speakable import for_ear, to_speech
+from jarvis_hub.voice.spoken import symbols
 
 router = APIRouter(prefix="/v1")
 log = logging.getLogger(__name__)
@@ -91,6 +94,17 @@ async def audit(request: Request, limit: int = 50,
     return request.app.state.audit.recent(min(limit, 500))
 
 
+# ---------- traces (audit/traces.py) ----------
+@router.get("/traces")
+async def trace_sessions(request: Request, limit: int = 50, _: Source = Depends(require_approver)) -> list:
+    return request.app.state.traces.sessions(min(limit, 500))
+
+
+@router.get("/traces/{session}")
+async def trace_session(session: str, request: Request, _: Source = Depends(require_approver)) -> list:
+    return request.app.state.traces.session(session)
+
+
 @router.get("/tools/rank")
 async def tools_rank(say: str, request: Request, before: str = "",
                      _: Source = Depends(require_approver)) -> dict:
@@ -109,8 +123,47 @@ async def kb_search(q: str, request: Request, limit: int = 8,
 
 
 @router.get("/kb/graph")
-async def kb_graph(request: Request, _: Source = Depends(require_approver)) -> dict:
-    return request.app.state.kb_index.link_graph()
+async def kb_graph(request: Request, agent: bool = False, _: Source = Depends(require_approver)) -> dict:
+    """The KB's pages and links; agent=true adds what JARVIS can do: its tools (grouped by family) and skills."""
+    g = request.app.state.kb_index.link_graph()
+    return _with_agent(request, g) if agent else g
+
+
+def _with_agent(request: Request, g: dict) -> dict:
+    """Tool nodes ("tool:<name>") under one node per family ("tools/<family>") under "tools"; skill pages marked as
+    skills, with their trigger and state, and linked to the tools their instructions name."""
+    st = request.app.state
+    nodes, edges = {n["id"]: n for n in g["nodes"]}, list(g["edges"])
+    hidden, ask = st.settings.hidden_tools(), st.settings.ask_for()
+    nodes["tools"] = {"id": "tools", "label": "tools", "kind": "family", "blocks": 0, "journal": False, "jarvis": False}
+    tools = [t for t in st.tools.all() if t.name not in hidden]
+    for t in tools:
+        fam = family_of(t.name) or (t.origin if t.origin != "builtin" else "other")
+        fid = f"tools/{fam}"
+        if fid not in nodes:
+            nodes[fid] = {"id": fid, "label": fam, "kind": "family", "blocks": 0, "journal": False, "jarvis": False}
+            edges.append({"source": "tools", "target": fid})
+        tid = f"tool:{t.name}"
+        nodes[tid] = {"id": tid, "label": t.model_name, "kind": "tool", "blocks": 0, "journal": False,
+                      "jarvis": False, "family": fam, "origin": t.origin, "risk": str(t.risk),
+                      "asks": t.risk in ask and not t.self_scoped, "description": t.description[:600],
+                      "params": sorted((t.parameters or {}).get("properties", {}))}
+        edges.append({"source": fid, "target": tid})
+    skills = {s["name"].lower(): s for s in st.skills.skills()}
+    if skills and "skills" in nodes:
+        edges.append({"source": "tools", "target": "skills"})
+    for key, s in skills.items():
+        if key not in nodes:
+            continue
+        nodes[key].update(kind="skill", trigger=s["trigger"] or "manual", schedule=s["schedule"],
+                          enabled=s["enabled"], dry_run=s["dry_run"])
+        said = s["instructions"].lower()
+        for t in tools:
+            if t.model_name.lower() in said or t.name.lower() in said:
+                edges.append({"source": key, "target": f"tool:{t.name}"})
+    if "skills" in nodes:
+        nodes["skills"]["kind"] = "family"
+    return {"nodes": list(nodes.values()), "edges": edges}
 
 
 @router.get("/kb/memory")
@@ -143,15 +196,225 @@ async def kb_memory_edit(body: MemoryEdit, request: Request, _: Source = Depends
     return {"ok": True, "removed": removed}
 
 
+def _said_and_props(text: str) -> tuple[str, dict]:
+    """A block as the reader shows it (without its learned::/via:: lines) and those properties."""
+    said, props = [], {}
+    for line in text.splitlines():
+        if m := PROP.match(line):
+            props[m.group(1).lower()] = LINK.sub(r"\1", m.group(2)).strip()
+        else:
+            said.append(line)
+    return "\n".join(said).strip(), props
+
+
 @router.get("/kb/page")
 async def kb_page(name: str, request: Request, _: Source = Depends(require_approver)) -> dict:
     g = request.app.state.kb_graph
-    page = g.page(name)
+    pages = g.pages()
+    key = name.strip().lower()
+    page = next((p for p in pages if p.name.lower() == key), None)
     if page is None:
         raise HTTPException(404, "no such page")
+    blocks = page.blocks[:400]
+    shown = [_said_and_props(b.text) for b in blocks]
     return {"name": page.name, "journal": page.is_journal, "link": g.deep_link(page.name),
-            "blocks": [b.text for b in page.blocks][:400],
-            "links": sorted({l for b in page.blocks for l in b.links})}
+            "blocks": [b.text for b in blocks],  # as written: sent back to delete, edit or move one
+            "index": [b.index for b in blocks],  # each block's place on the page
+            "shown": [t for t, _ in shown],  # what each says, without its properties
+            "props": [pr for _, pr in shown],  # learned (a day), via (who said it), ...
+            "digest": page.digest,  # the page as read (deleting or renaming it is refused once it changed)
+            "updated": int(page.path.stat().st_mtime),
+            "links": sorted({to for b in page.blocks for to in b.links}),
+            "backlinks": sorted(p.name for p in pages if p is not page and key in p.links)}
+
+
+class BlockDelete(BaseModel):
+    page: str
+    index: int  # from /kb/page "index"
+    text: str  # the block as it was read: a page changed since then is refused
+
+
+@router.post("/kb/block/delete")
+async def kb_block_delete(body: BlockDelete, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """The HUD's knowledge map: delete one point (and what is nested under it) from any page. The page as it
+    was is kept in .trash/, and the deletion is in the audit log."""
+    g = request.app.state.kb_graph
+    try:
+        g.delete_block(body.page, body.index, body.text)
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(409 if "reload" in str(e) else 400, str(e)) from e
+    request.app.state.audit.record(request_id=uuid.uuid4().hex, source=source, tool="kb_block_delete",
+                                   risk="destructive", arguments={"page": body.page, "index": body.index},
+                                   status="ok", approved_by=f"{source} (by hand)", result=body.text[:500])
+    await request.app.state.kb_index.sync()
+    return {"ok": True}
+
+
+class PageDelete(BaseModel):
+    page: str
+    digest: str  # from /kb/page: a page changed since it was read is refused
+
+
+@router.post("/kb/page/delete")
+async def kb_page_delete(body: PageDelete, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """The HUD's knowledge map: delete a whole page (or journal day). It is moved to .trash/, and the deletion
+    is in the audit log."""
+    g = request.app.state.kb_graph
+    page = g.page(body.page)
+    if page is None:
+        raise HTTPException(404, "no such page")
+    if page.digest != body.digest:
+        raise HTTPException(409, "the page changed since it was read; reload it")
+    try:
+        gone = g.trash_page(page.name)
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(400, str(e)) from e
+    request.app.state.audit.record(request_id=uuid.uuid4().hex, source=source, tool="kb_page_delete",
+                                   risk="destructive", arguments={"page": gone}, status="ok",
+                                   approved_by=f"{source} (by hand)", result=f"{len(page.blocks)} points")
+    await request.app.state.kb_index.sync()
+    return {"ok": True, "page": gone}
+
+
+class BlockEdit(BaseModel):
+    page: str
+    index: int
+    text: str  # as read: a page changed since then is refused
+    new: str
+
+
+@router.post("/kb/block/edit")
+async def kb_block_edit(body: BlockEdit, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """The HUD's knowledge map: change what one point says (its learned::/via:: lines stay). The page as it was
+    is kept in .trash/."""
+    g = request.app.state.kb_graph
+    try:
+        g.edit_block(body.page, body.index, body.text, body.new)
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(409 if "reload" in str(e) else 400, str(e)) from e
+    _by_hand(request, source, "kb_block_edit", "write", {"page": body.page, "index": body.index}, body.new)
+    await request.app.state.kb_index.sync()
+    return {"ok": True}
+
+
+class BlockAdd(BaseModel):
+    page: str
+    text: str
+
+
+@router.post("/kb/block/add")
+async def kb_block_add(body: BlockAdd, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """The HUD's knowledge map: a new point at the end of a page (made if it doesn't exist)."""
+    if not body.text.strip():
+        raise HTTPException(400, "say what the point is")
+    try:
+        page = request.app.state.kb_graph.add_block(body.page, body.text.strip())
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(400, str(e)) from e
+    _by_hand(request, source, "kb_block_add", "write", {"page": page}, body.text)
+    await request.app.state.kb_index.sync()
+    return {"ok": True, "page": page}
+
+
+class BlockMove(BaseModel):
+    page: str
+    index: int
+    text: str  # as read: a page changed since then is refused
+    to: str
+
+
+@router.post("/kb/block/move")
+async def kb_block_move(body: BlockMove, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """The HUD's knowledge map: move one point (with what is nested under it) to the end of another page, made
+    if it doesn't exist. The page it left is kept in .trash/ as it was."""
+    g = request.app.state.kb_graph
+    to = body.to.strip()
+    if not to or to.lower() == body.page.strip().lower():
+        raise HTTPException(400, "pick another page to move it to")
+    try:
+        moved = g.take_block(body.page, body.index, body.text)
+        to = g.add_block(to, moved)
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(409 if "reload" in str(e) else 400, str(e)) from e
+    _by_hand(request, source, "kb_block_move", "write", {"page": body.page, "to": to}, body.text)
+    await request.app.state.kb_index.sync()
+    return {"ok": True, "to": to}
+
+
+class PageRename(BaseModel):
+    page: str
+    digest: str  # from /kb/page
+    to: str
+
+
+@router.post("/kb/page/rename")
+async def kb_page_rename(body: PageRename, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """The HUD's knowledge map: rename a page; links to it on other pages follow (each kept in .trash/ as it
+    was)."""
+    g = request.app.state.kb_graph
+    page = g.page(body.page)
+    if page is None:
+        raise HTTPException(404, "no such page")
+    if page.digest != body.digest:
+        raise HTTPException(409, "the page changed since it was read; reload it")
+    try:
+        to, changed = g.rename_page(page.name, body.to)
+    except (KeyError, ValueError, PermissionError) as e:
+        raise HTTPException(400, str(e)) from e
+    _by_hand(request, source, "kb_page_rename", "write", {"page": page.name, "to": to}, f"{changed} pages relinked")
+    await request.app.state.kb_index.sync()
+    return {"ok": True, "page": to, "relinked": changed}
+
+
+@router.get("/kb/trash")
+async def kb_trash(request: Request, limit: int = 100, _: Source = Depends(require_approver)) -> list:
+    return request.app.state.kb_graph.trash()[:min(limit, 500)]
+
+
+class TrashRestore(BaseModel):
+    id: str  # from /kb/trash
+
+
+@router.post("/kb/trash/restore")
+async def kb_trash_restore(body: TrashRestore, request: Request, source: Source = Depends(require_approver)) -> dict:
+    """Put a page back as it was in .trash/; the page as it is now (if any) goes to .trash/ in its place."""
+    try:
+        page = request.app.state.kb_graph.restore(body.id)
+    except KeyError as e:
+        raise HTTPException(404, "no such copy in the trash") from e
+    _by_hand(request, source, "kb_trash_restore", "write", {"id": body.id}, page)
+    await request.app.state.kb_index.sync()
+    return {"ok": True, "page": page}
+
+
+def _by_hand(request: Request, source: Source, tool: str, risk: str, arguments: dict, result: str) -> None:
+    """An edit made by hand in the HUD, in the audit log like a tool's."""
+    request.app.state.audit.record(request_id=uuid.uuid4().hex, source=source, tool=tool, risk=risk,
+                                   arguments=arguments, status="ok", approved_by=f"{source} (by hand)",
+                                   result=result[:500])
+
+
+@router.get("/dream")
+async def dream_state(request: Request, _: Source = Depends(require_approver)) -> dict:
+    d = request.app.state.dreamer
+    return {"running": d.running, "at": d.at, "days": d.days, "last": d.state.get("last"),
+            "context": d.context(), "kept": [{"text": t, **p} for t, p in d.kept()]}
+
+
+class DreamBody(BaseModel):
+    dry_run: bool = False  # only report what it would keep
+    days: int | None = None
+
+
+@router.post("/dream/run")
+async def dream_run(body: DreamBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    """Dream now (the HUD's button): the report, and what it would keep with dry_run."""
+    from jarvis_hub.kb.dreaming import summary
+    d = request.app.state.dreamer
+    if d.running:
+        raise HTTPException(409, "a dream is already running")
+    rep = await d.run(dry_run=body.dry_run, days=body.days, force=True)
+    return {**rep.__dict__, "said": summary(rep)}
 
 
 @router.get("/kb/tasks")
@@ -178,7 +441,7 @@ async def transcribe(file: UploadFile, request: Request,
         heard = await request.app.state.voice.transcribe(data)
     except VoiceError as e:
         raise HTTPException(502, str(e)) from e
-    text = request.app.state.vocab.correct(heard)  # names Whisper misheard
+    text = symbols(request.app.state.vocab.correct(heard))  # names Whisper misheard; "slash" -> "/"
     return {"text": text, **({"heard": heard} if text != heard else {})}
 
 
@@ -381,8 +644,35 @@ async def monitors(request: Request, _: Source = Depends(require_approver)) -> d
               for s in st.skills.skills() if s["trigger"] == "schedule"]
     watch_skills = [{"name": s["name"], "match": s["match"], "enabled": s["enabled"]}
                     for s in st.skills.skills() if s["trigger"] == "watch"]
+    jobs = st.jobs.cards() if st.tools.get("start_job") else []
     return {**st.watch.describe(), "timers": st.timers.list(), "schedules": skills, "watch_skills": watch_skills,
+            # running, not yet dismissed, or ended in the last hours (the HUD shows a card for the first two)
+            "jobs": [j for j in jobs if j["state"] in ("queued", "running") or not j["dismissed"]
+                     or time.time() - (j.get("ended") or 0) < 6 * 3600][:10],
             "now": time.time()}
+
+
+@router.post("/jobs/clear")
+async def jobs_clear(request: Request, _: Source = Depends(require_approver)) -> dict:
+    """Take the finished background jobs off the Monitors list (their reports stay in the notes)."""
+    return {"cleared": request.app.state.jobs.clear()}
+
+
+@router.post("/jobs/{jid}/dismiss")
+async def job_dismiss(jid: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    """Close a finished background job's card in the HUD (its report stays in the notes)."""
+    if not request.app.state.jobs.dismiss(jid):
+        raise HTTPException(400, "no finished job with that id")
+    return {"ok": True}
+
+
+@router.post("/jobs/{jid}/cancel")
+async def job_cancel(jid: str, request: Request, _: Source = Depends(require_approver)) -> dict:
+    """Stop a running background job (the HUD card's stop button)."""
+    ok, data = await request.app.state.jobs.cancel(jid)
+    if not ok:
+        raise HTTPException(400, str(data.get("detail")))
+    return {"ok": True}
 
 
 @router.post("/watchers")

@@ -1,0 +1,620 @@
+{
+ "model": "jarvis-lfm3-gpu",
+ "when": "2026-11-03T12:35",
+ "cases": 42,
+ "passed": 34,
+ "passed_ignoring_style": 36,
+ "failure_kinds": {
+  "reply": 2,
+  "rejected": 1,
+  "wrong tool": 3,
+  "style": 2
+ },
+ "first_words_median_s": 5.4,
+ "by_category": {
+  "notes": "4/6",
+  "general": "2/6",
+  "hard": "28/30"
+ },
+ "rows": [
+  {
+   "id": "tasks",
+   "cat": "notes",
+   "say": "what are my open tasks",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "No open tasks, sir.",
+   "first_s": 0.2,
+   "total_s": 0.2
+  },
+  {
+   "id": "notes-where",
+   "cat": "notes",
+   "say": "where do I live",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "You live in Pune, in the Keshavnagar area, specifically within the society named Unique Legacy Imperia.",
+   "first_s": 15.6,
+   "total_s": 15.6
+  },
+  {
+   "id": "notes-name",
+   "cat": "notes",
+   "say": "what's my name",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "reply: lacks /(?i)pranjal/"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "I have no record of your name in my notes. Could you please tell me?",
+   "first_s": 3.5,
+   "total_s": 3.6
+  },
+  {
+   "id": "notes-society",
+   "cat": "notes",
+   "say": "what is the name of my society",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your society is named Unique Legacy Imperia.",
+   "first_s": 3.1,
+   "total_s": 3.1
+  },
+  {
+   "id": "notes-page",
+   "cat": "notes",
+   "say": "read your people page",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "rejected: kb_read_page: ERROR: you already called read_page with these arguments this turn; its result is above. A"
+   ],
+   "tools": [
+    "kb_read_page"
+   ],
+   "reply": "I have already read the \"people\" page. Here is its content. Name: Pranjal. Location: Pune – Keshavnagar area; society: Unique Legacy Imperia.",
+   "first_s": 5.1,
+   "total_s": 15.3
+  },
+  {
+   "id": "notes-missing",
+   "cat": "notes",
+   "say": "how do I take my coffee",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "I've looked through your notes but couldn't find any entry on how to take your coffee. Sir, may I know if you'd like me to search for a general household routine or make a note for you?",
+   "first_s": 5.3,
+   "total_s": 5.7
+  },
+  {
+   "id": "gk-capital",
+   "cat": "general",
+   "say": "what's the capital of Australia",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "wrong tool: called ['get_time'], expected no tool"
+   ],
+   "tools": [
+    "get_time"
+   ],
+   "reply": "The capital of Australia is Canberra.",
+   "first_s": 4.7,
+   "total_s": 4.7
+  },
+  {
+   "id": "gk-define",
+   "cat": "general",
+   "say": "what does photosynthesis mean, briefly",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [],
+   "reply": "Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, carbon dioxide, and water into organic compounds such as glucose, releasing oxygen as a by-product. It is fundamental to life on Earth. Current date and time (Tuesday, 3 November 2026): 12:30.",
+   "first_s": 4.3,
+   "total_s": 4.7
+  },
+  {
+   "id": "gk-advice",
+   "cat": "general",
+   "say": "give me a tip for sleeping better",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "wrong tool: called ['get_time'], expected no tool"
+   ],
+   "tools": [
+    "get_time"
+   ],
+   "reply": "Sir, to sleep more restoratively I would advise keeping the bedroom cool, dimming the lights an hour before bed, and limiting caffeine after noon; additionally, a short session of gentle stretching or reading can ease the transition to rest.",
+   "first_s": 5.4,
+   "total_s": 5.4
+  },
+  {
+   "id": "chat-hello",
+   "cat": "general",
+   "say": "good morning jarvis",
+   "pass": false,
+   "tool_pass": true,
+   "fails": [
+    "style: offer"
+   ],
+   "tools": [],
+   "reply": "Good morning, sir. How may I assist you today? Current date and time: Tuesday, 3 November 2026, 12:31. Please let me know what you would like me to do.",
+   "first_s": 3.3,
+   "total_s": 4.0
+  },
+  {
+   "id": "chat-joke",
+   "cat": "general",
+   "say": "tell me a short joke",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "wrong tool: called ['kb_search'], expected no tool"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Here's a brief one for you: Why don't scientists trust atoms? Because they make up everything.",
+   "first_s": 4.4,
+   "total_s": 4.5
+  },
+  {
+   "id": "chat-thanks",
+   "cat": "general",
+   "say": "thanks, that's all",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [],
+   "reply": "You're welcome, sir. It was a pleasure. Please do inform me if you require any assistance in the future.",
+   "first_s": 3.2,
+   "total_s": 3.5
+  },
+  {
+   "id": "h-name",
+   "cat": "hard",
+   "say": "remind me what I'm called again",
+   "pass": false,
+   "tool_pass": false,
+   "fails": [
+    "reply: lacks /(?i)pranjal/"
+   ],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "I found no note matching that query. I believe you are asking about how I refer to myself, J.A.R.V.I.S. — I am JARVIS, the home assistant. Sir, I am J.A.R.V.I.S.",
+   "first_s": 3.5,
+   "total_s": 4.5
+  },
+  {
+   "id": "h-about-me",
+   "cat": "hard",
+   "say": "what do you know about me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "I have no notes on file about you, sir. Could you tell me more about your life, preferences or recent plans?",
+   "first_s": 3.5,
+   "total_s": 3.8
+  },
+  {
+   "id": "h-son",
+   "cat": "hard",
+   "say": "when is my son's birthday",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Your son Chiku's birthday is 13 May.",
+   "first_s": 3.6,
+   "total_s": 3.6
+  },
+  {
+   "id": "h-where",
+   "cat": "hard",
+   "say": "which area of Pune do I live in",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_search"
+   ],
+   "reply": "Sir, according to your notes, you reside in the Keshavnagar area of Pune (under the society “Unique Legacy Imperia”).",
+   "first_s": 7.1,
+   "total_s": 7.1
+  },
+  {
+   "id": "h-week",
+   "cat": "hard",
+   "say": "anything coming up this week I should know about",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "No open tasks on your list for this week, sir. If there's anything specific you'd like to keep track of—for example, appointments or deadlines—I'm happy to note it down.",
+   "first_s": 6.5,
+   "total_s": 7.0
+  },
+  {
+   "id": "h-todo",
+   "cat": "hard",
+   "say": "what's left on my plate",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_tasks"
+   ],
+   "reply": "You have no open tasks at the moment, sir.",
+   "first_s": 6.2,
+   "total_s": 6.2
+  },
+  {
+   "id": "h-msgs",
+   "cat": "hard",
+   "say": "did anyone message me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_notifications"
+   ],
+   "reply": "Yes — recent notifications show several incoming messages. For example. WhatsApp from dhinchak — Rajiv dixit, 1 new message. WhatsApp from Family-Closed Loop — 2 messages from Vaini.",
+   "first_s": 11.3,
+   "total_s": 13.9
+  },
+  {
+   "id": "h-texts",
+   "cat": "hard",
+   "say": "read me my latest texts",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_sms_read"
+   ],
+   "reply": "Here are your latest texts, sir. 03 Nov 10:04 (AX-ICICIT-S): Debit of Rs 906.00 for ICICI Bank Acct XX539; Zepto credited. UPI: 805609563310. Call 18002662 for dispute.",
+   "first_s": 20.7,
+   "total_s": 29.8
+  },
+  {
+   "id": "h-calls",
+   "cat": "hard",
+   "say": "who called me today",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_call_log"
+   ],
+   "reply": "On Tuesday, 3 November, the most recent incoming call was from Vikas Kumar at 10:30 am (duration 37 seconds). There was also an earlier incoming call from Milind Shende (Spacewell) at 9:47 am.",
+   "first_s": 9.8,
+   "total_s": 10.8
+  },
+  {
+   "id": "h-phone-batt",
+   "cat": "hard",
+   "say": "is my phone about to die",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_info"
+   ],
+   "reply": "Your Pixel 9a currently shows 69% battery remaining, so it is not about to die. (Note: the foreground app is \"NotificationShade\".)",
+   "first_s": 10.8,
+   "total_s": 11.1
+  },
+  {
+   "id": "h-laptop",
+   "cat": "hard",
+   "say": "how's the laptop holding up",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_info"
+   ],
+   "reply": "Your laptop is in good order: battery is at 87% and currently charging, memory usage is moderate (63% of 31.7 GB), it has been up for 32 minutes, and the active window appears to be Google Chrome. Anything particularly distressing?",
+   "first_s": 9.6,
+   "total_s": 9.7
+  },
+  {
+   "id": "h-disk",
+   "cat": "hard",
+   "say": "am I running out of space on C",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_ps_read"
+   ],
+   "reply": "You have 351.8 GB free on drive C: — well away from running out. Memory usage is at about 63% on that drive now.",
+   "first_s": 29.5,
+   "total_s": 29.7
+  },
+  {
+   "id": "h-files",
+   "cat": "hard",
+   "say": "what's in my downloads folder",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "fs_list"
+   ],
+   "reply": "Your Downloads folder contains a mixed collection of files — documents (PDFs,.xlsx,.json), code and scripts (AutoHotkey, Azure CLI, comets), images and screenshots, archive files (.zip,.7z,.whl) and several sub-folders such as 'bundle_verify', 'drive-download', 'engine', 'platform-tools', and 'gbtra",
+   "first_s": 11.1,
+   "total_s": 12.1
+  },
+  {
+   "id": "h-skip",
+   "cat": "hard",
+   "say": "skip this song",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_media"
+   ],
+   "reply": "I would have gone back a track, sir (dry run).",
+   "first_s": 4.9,
+   "total_s": 4.9
+  },
+  {
+   "id": "h-vol",
+   "cat": "hard",
+   "say": "turn the volume down a bit on the laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_media"
+   ],
+   "reply": "I would have turned the laptop volume down, sir (dry run).",
+   "first_s": 2.7,
+   "total_s": 2.7
+  },
+  {
+   "id": "h-open",
+   "cat": "hard",
+   "say": "open notepad for me",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_open"
+   ],
+   "reply": "I would have opened notepad on the laptop, sir (dry run).",
+   "first_s": 4.8,
+   "total_s": 4.8
+  },
+  {
+   "id": "h-jot",
+   "cat": "hard",
+   "say": "jot down that the plumber comes Friday at 10",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_journal"
+   ],
+   "reply": "Done. I've added \"Plumber comes Friday at 10\" to your journal.",
+   "first_s": 6.7,
+   "total_s": 7.1
+  },
+  {
+   "id": "h-wake",
+   "cat": "hard",
+   "say": "wake me in 25 minutes",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer"
+   ],
+   "reply": "A timer has been set for 25 minutes — you will be awakened then.",
+   "first_s": 6.0,
+   "total_s": 6.0
+  },
+  {
+   "id": "h-left",
+   "cat": "hard",
+   "say": "how long left on the pasta",
+   "pass": false,
+   "tool_pass": true,
+   "fails": [
+    "style: offer"
+   ],
+   "tools": [
+    "list_timers"
+   ],
+   "reply": "There is no active timer named “pasta” on your device. Could you confirm the label or let me know when you’d like to start it?",
+   "first_s": 5.0,
+   "total_s": 5.4
+  },
+  {
+   "id": "h-cancel",
+   "cat": "hard",
+   "say": "never mind the pasta timer",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "cancel_timer"
+   ],
+   "reply": "The pasta timer has been cancelled.",
+   "first_s": 5.6,
+   "total_s": 5.9
+  },
+  {
+   "id": "h-ping",
+   "cat": "hard",
+   "say": "ping my laptop saying stand up",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "notify"
+   ],
+   "reply": "I would have sent the notification \"Stand up\", sir (dry run).",
+   "first_s": 4.4,
+   "total_s": 4.4
+  },
+  {
+   "id": "h-phone-ping",
+   "cat": "hard",
+   "say": "send a notification to my phone saying water the plants",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "notify"
+   ],
+   "reply": "I would have sent the notification \"water the plants\", sir (dry run).",
+   "first_s": 3.9,
+   "total_s": 3.9
+  },
+  {
+   "id": "h-umbrella",
+   "cat": "hard",
+   "say": "should I carry an umbrella today",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "weather"
+   ],
+   "reply": "Rain is unlikely today, sir: light drizzle, 21 to 30 degrees, 22% chance of rain.",
+   "first_s": 2.1,
+   "total_s": 2.1
+  },
+  {
+   "id": "h-f1",
+   "cat": "hard",
+   "say": "look up who won the F1 race last weekend",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "web_search"
+   ],
+   "reply": "I don't have live F1 results for last weekend (Tuesday 3 November 2026) in my current data. Could you please clarify the date or competition (e.g., specific Grand Prix)? I'll look it up as soon as I can.",
+   "first_s": 6.6,
+   "total_s": 7.2
+  },
+  {
+   "id": "h-tell",
+   "cat": "hard",
+   "say": "let Sanika know I'll be home by 8",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "adb_sms_send"
+   ],
+   "reply": "I have sent the text to Sanika: \"I'll be home by 8.\"",
+   "first_s": 6.9,
+   "total_s": 6.9
+  },
+  {
+   "id": "h-shot",
+   "cat": "hard",
+   "say": "grab a screenshot of my laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_screenshot"
+   ],
+   "reply": "Your laptop screenshot has been saved to `data/screenshots/win-20261103-123455.png`.",
+   "first_s": 9.2,
+   "total_s": 9.2
+  },
+  {
+   "id": "h-lock",
+   "cat": "hard",
+   "say": "lock my laptop",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_lock"
+   ],
+   "reply": "I would have locked the laptop, sir (dry run).",
+   "first_s": 5.2,
+   "total_s": 5.2
+  },
+  {
+   "id": "h-both-batt",
+   "cat": "hard",
+   "say": "what's my battery on the laptop and the phone",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "win_info",
+    "adb_info"
+   ],
+   "reply": "Your laptop battery is at 87% (charging) and the phone (Pixel 9a) is at 69%. The laptop's main window is Google Chrome. On your phone, the foreground app is NotificationShade.",
+   "first_s": 13.2,
+   "total_s": 13.6
+  },
+  {
+   "id": "h-follow-add",
+   "cat": "hard",
+   "say": "I need to buy milk / add it to my groceries page",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "kb_append_to_page"
+   ],
+   "reply": "Done — \"milk\" has been added to your Groceries page.",
+   "first_s": 6.2,
+   "total_s": 6.2
+  },
+  {
+   "id": "h-follow-timer",
+   "cat": "hard",
+   "say": "can you set a timer? / 10 minutes for tea",
+   "pass": true,
+   "tool_pass": true,
+   "fails": [],
+   "tools": [
+    "set_timer"
+   ],
+   "reply": "A timer has been set for 10 minutes with the label \"tea\". It will alert you when it's done.",
+   "first_s": 6.4,
+   "total_s": 6.6
+  }
+ ]
+}
