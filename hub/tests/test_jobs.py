@@ -10,7 +10,7 @@ from jarvis_hub.config import Settings
 from jarvis_hub.events.bus import EventBus
 from jarvis_hub.expert import jobs as jobs_mod
 from jarvis_hub.expert.jobs import Jobs, page_name, register_job_tools, report_page, skill_name
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.mcp.registry import ToolRegistry
 
 
@@ -45,9 +45,9 @@ def _setup(monkeypatch, tmp_path):
     bridge = FakeBridge()
     real = httpx.AsyncClient
     monkeypatch.setattr(jobs_mod.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(bridge), **kw))
-    (tmp_path / "pages").mkdir()
+    (tmp_path / "jarvis").mkdir()
     (tmp_path / "journals").mkdir()
-    graph = LogseqGraph(str(tmp_path), "test")
+    graph = ObsidianVault(str(tmp_path), "test")
     bus = EventBus()
     sent = []
 
@@ -110,7 +110,7 @@ def test_cancel_picks_the_running_job(monkeypatch, tmp_path):
     assert not any(p.name.lower().startswith("jarvis/jobs/") for p in graph.pages())  # nothing to save
 
 
-def test_report_page_is_logseq_blocks():
+def test_report_page_is_blocks():
     name, text = report_page({"id": "x1", "skill": "s", "state": "done", "goal": "g", "dir": "d", "ended": 0,
                               "summary": "ok", "report": "a\nb\n\n- c"})
     assert name == "jarvis/jobs/s x1" and text.startswith("- ok\n  goal:: g\n  skill:: s")

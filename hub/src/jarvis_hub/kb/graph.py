@@ -1,41 +1,55 @@
-"""Logseq file-based graph adapter (markdown on disk). Reads everything; writes
-only to the `jarvis/` namespace and the journal unless a caller explicitly
-uses `append_to_user_page`, which the tool layer puts behind approval.
+"""Obsidian vault adapter (markdown on disk). Reads everything; writes only to
+the `jarvis/` namespace and the journal unless a caller explicitly uses
+`append_to_user_page` (a `write` tool: the policy decides, and it asks after the turn read outside text).
 
-Swap this class for a DB-version adapter (Logseq HTTP API) without touching
-the indexer or tools: they only use the public methods below."""
+Layout (the vault root is the graph root):
+  <folder>/<page>.md      page "folder/page"; a namespace is a folder
+  journals/YYYY-MM-DD.md  a daily note (Obsidian's Daily notes: folder "journals", format YYYY-MM-DD)
+  .trash/                 copies of what was deleted or changed (Obsidian hides dot-folders)
+Pages are "- " bullet blocks. Page properties are YAML frontmatter; a block's own properties are
+`key:: value` lines under it (Dataview inline fields). Tasks are `- [ ]` checkboxes with the Tasks
+plugin's dates (⏳ scheduled, 📅 due).
+
+The indexer and tools only use the public methods below, so another store can replace this class."""
 
 import difflib
+import json
 import hashlib
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
-LINK = re.compile(r"\[\[([^\[\]]+)\]\]")
+LINK = re.compile(r"\[\[([^\[\]|#]+)(?:#[^\[\]|]*)?(?:\|[^\[\]]*)?\]\]")  # [[page]], [[page#heading|alias]]
 TAG = re.compile(r"(?<![\w\[])#(?:\[\[([^\]]+)\]\]|([\w\-/.]+))")
 PROP = re.compile(r"^\s*([A-Za-z0-9_\-]+)::\s*(.*)$")
-TASK = re.compile(r"^(TODO|DOING|LATER|NOW|DONE|WAITING|CANCELED|CANCELLED)\s+(.*)", re.S)
-STAMP = re.compile(r"(SCHEDULED|DEADLINE):\s*<(\d{4}-\d{2}-\d{2})[^>]*>")
-JOURNAL_FILE = re.compile(r"^(\d{4})_(\d{2})_(\d{2})\.md$")
+TASK = re.compile(r"^\[([ xX/\-])\]\s+(.*)", re.S)  # "- [ ] text": the block's text starts at "[ ]"
+TASK_STATE = {" ": "TODO", "/": "DOING", "x": "DONE", "X": "DONE", "-": "CANCELLED"}
+STAMP = re.compile(r"(⏳|📅)\uFE0F?\s*(\d{4}-\d{2}-\d{2})")  # Tasks plugin: ⏳ scheduled, 📅 due
+STAMP_KIND = {"⏳": "SCHEDULED", "📅": "DEADLINE"}
+FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
+JOURNAL_FILE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.md$")
+JOURNALS = "journals"
+HIDDEN = {JOURNALS, "logseq", "node_modules"}  # top-level folders that hold no pages (plus any dot-folder)
 JARVIS_NS = "jarvis/"
-TRASH_FILE = re.compile(r"^(\d+)_(.+)\.md$")  # "<seconds>_<file stem>[_n].md"
+TRASH_FILE = re.compile(r"^(\d+)_(.+)\.md$")  # "<seconds>_<path, "/" as "___">[_n].md"
 _MEMORY_TAG = re.compile(r"#jarvis\b|#\[\[jarvis\]\]|\[\[jarvis\]\]", re.I)  # notes the agent wrote
 
 
 def _trashed(name: str) -> tuple[int, str] | None:
-    """(when, the page's file) for a .trash/ copy "<seconds>_<file stem>[_n].md". The "_n" that numbers two copies
-    from the same second is dropped, but a journal day's own "_03" is not."""
+    """(when, the page's path in the vault) for a .trash/ copy "<seconds>_<path with "/" as "___">[_n].md".
+    The "_n" that numbers two copies from the same second is dropped."""
     m = TRASH_FILE.match(name)
     if not m:
         return None
     stem = m[2]
-    if not JOURNAL_FILE.match(stem + ".md") and (n := re.match(r"^(.+)_\d+$", stem)):
+    if n := re.match(r"^(.+)_\d+$", stem):
         stem = n[1]
-    return int(m[1]), stem + ".md"
+    return int(m[1]), stem.replace("___", "/") + ".md"
 
 
 def _is_memory_note(text: str) -> bool:
@@ -73,11 +87,17 @@ class Page:
     is_journal: bool
     blocks: list[Block]
     properties: dict[str, str]
+    prose: list[Block] = field(default_factory=list)  # headings and paragraphs outside the "- " bullets
+
+    @property
+    def searchable(self) -> list[Block]:
+        """What search indexes: the bullets, then the prose sections (a vault is mostly prose)."""
+        return self.blocks + self.prose
 
     @property
     def links(self) -> set[str]:
         out: set[str] = set()
-        for b in self.blocks:
+        for b in self.blocks + self.prose:
             out.update(b.links)
         for v in self.properties.values():
             out.update(_links(v))
@@ -85,7 +105,10 @@ class Page:
 
     @property
     def digest(self) -> str:
-        return hashlib.sha1("\n".join(b.text for b in self.blocks).encode()).hexdigest()
+        # properties and prose count: a changed frontmatter or paragraph must re-index the page
+        parts = [b.text for b in self.blocks] + ["\x00prose"] + [b.text for b in self.prose] + \
+            ["\x00props"] + [f"{k}={v}" for k, v in sorted(self.properties.items())]
+        return hashlib.sha1("\n".join(parts).encode()).hexdigest()
 
 
 def _links(text: str) -> list[str]:
@@ -94,33 +117,69 @@ def _links(text: str) -> list[str]:
     return list(dict.fromkeys(f.lower() for f in found if f))
 
 
-def _file_to_name(stem: str) -> str:
-    # :file/name-format :triple-lowbar  ->  "a___b" is page "a/b"; older graphs use %2F.
-    return unquote(stem.replace("___", "/"))
-
-
-def _name_to_file(name: str) -> str:
-    safe = name.strip().replace("/", "___")
-    safe = re.sub(r'[<>:"\\|?*\x00-\x1f]', "_", safe)
-    if not safe or safe.startswith(".") or ".." in safe:
+def _rel_path(name: str) -> str:
+    """Page name -> its file in the vault: "jarvis/people" -> "jarvis/people.md"."""
+    parts = [re.sub(r'[<>:"\\|?*\x00-\x1f]', "_", seg.strip()) for seg in name.strip().split("/")]
+    if not all(parts) or any(seg.startswith(".") for seg in parts) or parts[0].lower() in HIDDEN:
         raise ValueError(f"bad page name {name!r}")
-    return safe + ".md"
+    return "/".join(parts) + ".md"
 
 
 def journal_title(d: date) -> str:
-    return d.strftime("%b ") + f"{_ordinal(d.day)}, {d.year}"
+    """A day's journal page name, as Obsidian's daily notes name it."""
+    return d.isoformat()
 
 
-def _ordinal(n: int) -> str:
-    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
+def _unquote(v: str) -> str:
+    v = v.strip()
+    return v[1:-1] if len(v) > 1 and v[0] == v[-1] and v[0] in "\"'" else v
+
+
+def _frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """(page properties, the rest) from YAML frontmatter. Values stay strings: quotes dropped, a list's items
+    joined by ", " (enough for what JARVIS reads: a skill's trigger, match and schedule)."""
+    m = FRONTMATTER.match(text)
+    if not m:
+        return {}, text
+    props: dict[str, str] = {}
+    key = None
+    for line in m[1].splitlines():
+        if (item := re.match(r"^\s+-\s*(.*)$", line)) and key:
+            props[key] = ", ".join(x for x in (props[key], _unquote(item[1])) if x)
+        elif kv := re.match(r"^([A-Za-z0-9_\-]+):\s*(.*)$", line):
+            key, v = kv[1].lower(), kv[2].strip()
+            if v.startswith("[") and v.endswith("]"):
+                v = ", ".join(_unquote(x) for x in v[1:-1].split(",") if x.strip())
+            props[key] = _unquote(v)
+    return props, text[m.end():]
+
+
+def frontmatter(props: dict[str, str]) -> str:
+    """YAML frontmatter for page properties; values YAML would read as something else are quoted."""
+    def val(v: str) -> str:
+        plain = re.fullmatch(r"[A-Za-z_][\w .\-/]*", v) and v.lower() not in ("true", "false", "null", "yes", "no")
+        return v if plain else json.dumps(v, ensure_ascii=False)
+    return "---\n" + "".join(f"{k}: {val(str(v))}\n" for k, v in props.items()) + "---\n"
+
+
+PROSE_CHUNK = 900  # characters: a prose section longer than this is split at paragraphs
+HEADING = re.compile(r"^#{1,6}\s+(.*)$")
 
 
 def parse_blocks(page: str, text: str) -> tuple[list[Block], dict[str, str]]:
+    blocks, props, _ = parse_page(page, text)
+    return blocks, props
+
+
+def parse_page(page: str, text: str) -> tuple[list[Block], dict[str, str], list[Block]]:
+    """(bullet blocks, page properties, prose). Bullets are numbered as the edit tools count them; prose (the
+    headings and paragraphs before the first bullet, or a page with no bullets at all) is kept apart, one block
+    per heading section, so search finds it without changing what a block index points at."""
     blocks: list[Block] = []
-    props: dict[str, str] = {}
+    props, text = _frontmatter(text)
     current: list[str] | None = None
     preamble = True
+    prose_lines: list[str] = []
     for raw in text.splitlines():
         line = raw.rstrip()
         stripped = line.lstrip("\t ")
@@ -130,13 +189,53 @@ def parse_blocks(page: str, text: str) -> tuple[list[Block], dict[str, str]]:
                 blocks.append(_block(page, len(blocks), current))
             current = [stripped[2:]]
         elif preamble:
-            if m := PROP.match(line):
-                props[m.group(1).lower()] = m.group(2)
+            if m := PROP.match(line):  # "key:: value" before the first block: a page property as well
+                props.setdefault(m.group(1).lower(), m.group(2))
+            else:
+                prose_lines.append(line)
         elif current is not None and stripped:
             current.append(stripped)
     if current:
         blocks.append(_block(page, len(blocks), current))
-    return [b for b in blocks if b.text], props
+    return [b for b in blocks if b.text], props, _prose(page, prose_lines)
+
+
+def _prose(page: str, lines: list[str]) -> list[Block]:
+    """Heading sections of free text, each starting with its heading so a hit says what it is about."""
+    sections: list[list[str]] = [[]]
+    for line in lines:
+        if HEADING.match(line.strip()) and any(x.strip() for x in sections[-1]):
+            sections.append([])
+        sections[-1].append(line)
+    out: list[Block] = []
+    for sec in sections:
+        heading = ""
+        paras, para = [], []
+        for line in sec:
+            st = line.strip()
+            if h := HEADING.match(st):
+                heading = h[1].strip()
+            elif st:
+                para.append(st)
+            elif para:
+                paras.append(" ".join(para))
+                para = []
+        if para:
+            paras.append(" ".join(para))
+        chunk = ""
+        for p in paras:
+            if chunk and len(chunk) + len(p) > PROSE_CHUNK:
+                out.append(_prose_block(page, len(out), heading, chunk))
+                chunk = ""
+            chunk = f"{chunk}\n{p}" if chunk else p
+        if chunk:
+            out.append(_prose_block(page, len(out), heading, chunk))
+    return [b for b in out if b.text]
+
+
+def _prose_block(page: str, n: int, heading: str, body: str) -> Block:
+    text = f"{heading}\n{body}".strip() if heading else body.strip()
+    return Block(page, -1 - n, text, _links(text))  # negative: not a bullet the edit tools can point at
 
 
 def _block(page: str, index: int, lines: list[str]) -> Block:
@@ -144,37 +243,85 @@ def _block(page: str, index: int, lines: list[str]) -> Block:
     return Block(page, index, text, _links(text))
 
 
-class LogseqGraph:
+class ObsidianVault:
     def __init__(self, root: str, name: str = "") -> None:
         self.root = Path(root)
         self._name = name
-        self.pages_dir = self.root / "pages"
-        self.journals_dir = self.root / "journals"
+        self.pages_dir = self.root
+        self.journals_dir = self.root / JOURNALS
         self._lock = threading.Lock()
+        # parsed pages by file, kept while the file's (mtime, size) is unchanged: pages() runs on every
+        # lookup, fast-path match and schedule tick, and re-parsing the whole vault each time does not scale
+        self._cache: dict[Path, tuple[tuple[int, int], Page]] = {}
 
     @property
     def name(self) -> str:
         return self._name or self.root.resolve().name
 
     def deep_link(self, page: str) -> str:
-        return f"logseq://graph/{quote(self.name)}?page={quote(page)}"
+        """obsidian:// link that opens the page in the vault (the vault's name in Obsidian: KB_GRAPH_NAME)."""
+        p = self.page(page)
+        file = p.path.relative_to(self.root).as_posix()[:-3] if p else page
+        return f"obsidian://open?vault={quote(self.name)}&file={quote(file)}"
 
     # ---------- reading ----------
-    def pages(self) -> list[Page]:
+    def _page_files(self) -> list[tuple[Path, bool]]:
+        if not self.root.is_dir():
+            return []
         out = []
-        for folder, journal in ((self.pages_dir, False), (self.journals_dir, True)):
-            if not folder.is_dir():
+        for path in sorted(self.root.rglob("*.md")):
+            rel = path.relative_to(self.root).parts
+            if any(part.startswith(".") for part in rel):
                 continue
-            for path in sorted(folder.glob("*.md")):
-                out.append(self._load(path, journal))
+            if rel[0] == JOURNALS:
+                if len(rel) == 2 and JOURNAL_FILE.match(rel[1]):
+                    out.append((path, True))
+            elif rel[0].lower() not in HIDDEN:
+                out.append((path, False))
         return out
 
-    def page(self, name: str) -> Page | None:
+    def pages(self) -> list[Page]:
+        files = self._page_files()
+        out = []
+        for path, journal in files:
+            try:
+                st = path.stat()
+            except FileNotFoundError:
+                continue
+            stamp = (st.st_mtime_ns, st.st_size)
+            hit = self._cache.get(path)
+            if hit is None or hit[0] != stamp:
+                hit = (stamp, self._load(path, journal))
+                self._cache[path] = hit
+            out.append(hit[1])
+        if len(self._cache) > len(files):
+            keep = {p for p, _ in files}
+            for p in [p for p in self._cache if p not in keep]:
+                self._cache.pop(p, None)
+        return out
+
+    def page(self, name: str, exact: bool = False) -> Page | None:
+        """The page called `name`, or the one page whose file name is `name` (Obsidian links a page in a folder
+        by its file name alone when that is unique: [[people]] is jarvis/people)."""
         key = name.strip().lower()
-        for p in self.pages():
+        pages = self.pages()
+        for p in pages:
             if p.name.lower() == key:
                 return p
+        if key and "/" not in key and not exact:
+            short = [p for p in pages if not p.is_journal and p.name.lower().rsplit("/", 1)[-1] == key]
+            if len(short) == 1:
+                return short[0]
         return None
+
+    @staticmethod
+    def resolve(link: str, names: set[str]) -> str:
+        """A [[link]] (lowercase) as the page it points at: itself, or the one page in a folder whose file name
+        it is. names: every page name, lowercase."""
+        if link in names or "/" in link:
+            return link
+        short = [n for n in names if n.rsplit("/", 1)[-1] == link]
+        return short[0] if len(short) == 1 else link
 
     def similar_pages(self, name: str, n: int = 3) -> list[str]:
         """Page names close to `name` (typos, singular/plural, a missing namespace)."""
@@ -185,34 +332,30 @@ class LogseqGraph:
         return [names[k] for k in hits[:n]]
 
     def _load(self, path: Path, journal: bool) -> Page:
-        name = _file_to_name(path.stem)
-        if journal and (m := JOURNAL_FILE.match(path.name)):
-            name = journal_title(date(int(m[1]), int(m[2]), int(m[3])))
+        name = path.stem if journal else path.relative_to(self.root).as_posix()[:-3]
         text = path.read_text(encoding="utf-8", errors="replace")
-        blocks, props = parse_blocks(name, text)
-        if title := props.get("title"):
-            name = title.strip()
-            for b in blocks:
-                b.page = name
-        return Page(name, path, journal, blocks, props)
+        blocks, props, prose = parse_page(name, text)
+        return Page(name, path, journal, blocks, props, prose)
 
     def tasks(self, include_done: bool = False) -> list[Task]:
         out = []
         for p in self.pages():
             for b in p.blocks:
                 m = TASK.match(b.text)
-                if not m or (not include_done and m[1] in ("DONE", "CANCELED", "CANCELLED")):
+                if not m:
                     continue
-                stamps = dict(STAMP.findall(b.text))
-                first_line = STAMP.sub("", m[2]).strip().splitlines()[0] if m[2].strip() else ""
-                out.append(Task(p.name, m[1], first_line, stamps.get("SCHEDULED"),
-                                stamps.get("DEADLINE")))
+                status = TASK_STATE[m[1]]
+                if not include_done and status in ("DONE", "CANCELLED"):
+                    continue
+                stamps = {STAMP_KIND[k]: d for k, d in STAMP.findall(b.text)}
+                first_line = STAMP.sub("", m[2]).strip().splitlines()[0].strip() if m[2].strip() else ""
+                out.append(Task(p.name, status, first_line, stamps.get("SCHEDULED"), stamps.get("DEADLINE")))
         return out
 
     # ---------- writing ----------
     def append_journal(self, text: str, day: date | None = None) -> str:
         day = day or date.today()
-        path = self.journals_dir / f"{day:%Y_%m_%d}.md"
+        path = self.journals_dir / f"{day:%Y-%m-%d}.md"
         self._append(path, text)
         return journal_title(day)
 
@@ -236,10 +379,13 @@ class LogseqGraph:
         trash.mkdir(exist_ok=True)
         return trash
 
-    def _trash_path(self, file: str) -> Path:
-        """Where a page goes in .trash/: "<seconds>_<file>", numbered when two land in the same second
-        (deleting two points quickly must keep both copies)."""
-        stem, n = f"{int(time.time())}_{file}", 1
+    def _trash_path(self, file: Path | str) -> Path:
+        """Where a page goes in .trash/: "<seconds>_<its path, "/" as "___">", numbered when two land in the
+        same second (deleting two points quickly must keep both copies). file: the page's file, or its path in
+        the vault."""
+        if isinstance(file, Path):
+            file = file.resolve().relative_to(self.root.resolve()).as_posix()
+        stem, n = f"{int(time.time())}_{file.replace('/', '___')}", 1
         path = self._trash_dir() / stem
         while path.exists():
             n += 1
@@ -250,7 +396,8 @@ class LogseqGraph:
         page = self.page(name.strip())
         if page is None:
             raise ValueError(f"no page called {name!r}")
-        if page.path.parent.resolve() not in (self.pages_dir.resolve(), self.journals_dir.resolve()):
+        rel = page.path.resolve().relative_to(self.root.resolve()).parts
+        if any(part.startswith(".") for part in rel):
             raise ValueError("page is outside the graph")
         return page
 
@@ -263,7 +410,8 @@ class LogseqGraph:
     def trash_page(self, name: str) -> str:
         page = self._owned(name)
         with self._lock:
-            page.path.replace(self._trash_path(page.path.name))
+            page.path.replace(self._trash_path(page.path))
+            self._prune(page.path.parent)
         return page.name
 
     def trash_all_memory(self) -> tuple[list[str], int]:
@@ -272,7 +420,8 @@ class LogseqGraph:
         gone = [p for p in self.pages() if not p.is_journal and p.name.lower().startswith(JARVIS_NS)]
         with self._lock:
             for p in gone:
-                p.path.replace(self._trash_path(p.path.name))
+                p.path.replace(self._trash_path(p.path))
+                self._prune(p.path.parent)
         notes = sum(self._drop_blocks(p, _is_memory_note) for p in self.pages() if p.is_journal)
         return [p.name for p in gone], notes
 
@@ -332,8 +481,8 @@ class LogseqGraph:
 
     def _rewrite(self, page: Page, lines: list[str], out: list[str]) -> None:
         """Write `out` to the page; the page as it was (`lines`) is kept in .trash/."""
-        self._trash_path(page.path.name).write_text("\n".join(lines) + "\n", encoding="utf-8")
-        page.path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+        self._trash_path(page.path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._save(page.path, "\n".join(out) + ("\n" if out else ""))
 
     def delete_block(self, name: str, index: int, text: str) -> None:
         """Remove the block at `index` with what is nested under it, if its text is still `text`. The page as
@@ -341,7 +490,7 @@ class LogseqGraph:
         self.take_block(name, index, text)
 
     def take_block(self, name: str, index: int, text: str) -> str:
-        """delete_block, returning the block (with what is nested under it) as Logseq text for another page."""
+        """delete_block, returning the block (with what is nested under it) as markdown for another page."""
         page = self._owned(name)
         with self._lock:
             lines = page.path.read_text(encoding="utf-8").splitlines()
@@ -367,7 +516,7 @@ class LogseqGraph:
 
     def add_block(self, name: str, text: str) -> str:
         """A new point at the end of a page (an existing journal day included); a new page is made if needed."""
-        page = self.page(name.strip())
+        page = self.page(name.strip(), exact=True)
         if page is None:
             return self._write_page(name.strip(), text, replace=False)
         self._append(self._owned(page.name).path, text)
@@ -381,22 +530,28 @@ class LogseqGraph:
             raise ValueError("journal days are named by their date")
         if not to or to.lower() == page.name.lower():
             raise ValueError("give the page a different name")
-        if self.page(to) is not None:
+        if self.page(to, exact=True) is not None:
             raise ValueError(f"there's already a page called {to!r}")
-        target = (self.pages_dir / _name_to_file(to)).resolve()
-        if target.parent != self.pages_dir.resolve():
-            raise ValueError("page path escapes the graph")
-        old = re.escape(page.name)
-        refs = re.compile(rf"#?\[\[{old}\]\]|(?<![\w\[])#{old}(?![\w\-/.])", re.I)
+        target = self._path(to)
+        names = [re.escape(page.name)]
+        if "/" in page.name and len(self.similar_short(page.name)) == 1:  # [[people]] for jarvis/people
+            names.append(re.escape(page.name.rsplit("/", 1)[-1]))
+        alt = "|".join(names)
+        refs = re.compile(rf"(#?)\[\[(?:{alt})((?:#[^\[\]|]*)?(?:\|[^\[\]]*)?)\]\]"
+                          rf"|(?<![\w\[])#(?:{alt})(?![\w\-/.])", re.I)
+        tag = f"#{to}" if re.fullmatch(r"[\w\-/.]+", to) else f"#[[{to}]]"
         changed = 0
         with self._lock:
+            target.parent.mkdir(parents=True, exist_ok=True)
             page.path.replace(target)
+            self._prune(page.path.parent)
             for p in self.pages():
                 text = p.path.read_text(encoding="utf-8")
-                out = refs.sub(lambda m: ("#" if m[0].startswith("#") else "") + f"[[{to}]]", text)
+                out = refs.sub(lambda m: f"{m[1]}[[{to}{m[2] or ''}]]" if m[0].lstrip("#").startswith("[[")
+                               else tag, text)
                 if out != text:
-                    self._trash_path(p.path.name).write_text(text, encoding="utf-8")
-                    p.path.write_text(out, encoding="utf-8")
+                    self._trash_path(p.path).write_text(text, encoding="utf-8")
+                    self._save(p.path, out)
                     changed += 1
         return to, changed
 
@@ -407,14 +562,14 @@ class LogseqGraph:
         folder = self.root / ".trash"
         if not folder.is_dir():
             return []
-        here = {p.path.name.lower() for p in self.pages()}
+        here = {p.path.relative_to(self.root).as_posix().lower() for p in self.pages()}
         out = []
         for f in folder.glob("*.md"):
             if not (t := _trashed(f.name)):
                 continue
             at, file = t
-            j = JOURNAL_FILE.match(file)
-            name = journal_title(date(int(j[1]), int(j[2]), int(j[3]))) if j else _file_to_name(file[:-3])
+            j = _journal_file(file)
+            name = file.split("/", 1)[1][:-3] if j else file[:-3]
             blocks, _ = parse_blocks(name, f.read_text(encoding="utf-8", errors="replace"))
             out.append({"id": f.name, "page": name, "at": at, "points": len(blocks),
                         "journal": bool(j), "exists": file.lower() in here})
@@ -427,11 +582,12 @@ class LogseqGraph:
         if not t or "/" in trash_id or "\\" in trash_id or trash_id.startswith(".") or not copy.is_file():
             raise KeyError("no such copy in the trash")
         file = t[1]
-        journal = bool(JOURNAL_FILE.match(file))
-        folder = self.journals_dir if journal else self.pages_dir
-        target = folder / file
+        journal = _journal_file(file)
+        target = (self.root / file).resolve()
+        if self.root.resolve() not in target.parents or any(x.startswith(".") for x in file.split("/")):
+            raise KeyError("no such copy in the trash")
         with self._lock:
-            folder.mkdir(parents=True, exist_ok=True)
+            target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 target.replace(self._trash_path(file))
             copy.replace(target)
@@ -439,7 +595,7 @@ class LogseqGraph:
 
     def take_blocks(self, name: str, match: str) -> list[str]:
         """Remove every block containing `match` (with its children) and return each as it was written, as
-        Logseq text to put on another page. The page as it was is kept in .trash/."""
+        markdown to put on another page. The page as it was is kept in .trash/."""
         m, taken = _check_match(match), []
         self._drop_blocks(self._owned(name), lambda t: m in t.lower(), taken)
         out = []
@@ -478,19 +634,36 @@ class LogseqGraph:
                         continue
                 out.append(line)
             if removed:
-                self._trash_path(page.path.name).write_text(
+                self._trash_path(page.path).write_text(
                     "\n".join(lines) + "\n", encoding="utf-8")
-                page.path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+                self._save(page.path, "\n".join(out) + ("\n" if out else ""))
         return removed
 
-    def _write_page(self, name: str, text: str, replace: bool) -> str:
-        path = (self.pages_dir / _name_to_file(name)).resolve()
-        if path.parent != self.pages_dir.resolve():
+    def _path(self, name: str) -> Path:
+        """Where page `name` is (or would be) in the vault."""
+        path = (self.root / _rel_path(name)).resolve()
+        if self.root.resolve() not in path.parents:
             raise ValueError("page path escapes the graph")
+        return path
+
+    def similar_short(self, name: str) -> list[str]:
+        """Pages with the same file name as `name` (a bare [[file name]] link is a page's only when unique)."""
+        short = name.lower().rsplit("/", 1)[-1]
+        return [p.name for p in self.pages() if not p.is_journal and p.name.lower().rsplit("/", 1)[-1] == short]
+
+    def _prune(self, folder: Path) -> None:
+        """Remove folders a page move or delete left empty, up to the vault root."""
+        root, folder = self.root.resolve(), folder.resolve()
+        while folder != root and root in folder.parents and folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+            folder = folder.parent
+
+    def _write_page(self, name: str, text: str, replace: bool) -> str:
+        path = self._path(name)
         if replace:
             with self._lock:
-                self.pages_dir.mkdir(parents=True, exist_ok=True)
-                path.write_text(_as_blocks(text), encoding="utf-8")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._save(path, _as_blocks(text))
         else:
             self._append(path, text)
         return name
@@ -500,12 +673,29 @@ class LogseqGraph:
             path.parent.mkdir(parents=True, exist_ok=True)
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
             sep = "" if not existing or existing.endswith("\n") else "\n"
-            path.write_text(existing + sep + _as_blocks(text), encoding="utf-8")
+            self._save(path, existing + sep + _as_blocks(text))
+
+    def _save(self, path: Path, text: str) -> None:
+        """Write a page atomically (temp file, then replace): Obsidian or Sync reading it mid-write, or a crash,
+        never sees half a file. Callers hold the lock."""
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        self._cache.pop(path, None)
 
 
 def _as_blocks(text: str) -> str:
-    """Make sure free text lands as Logseq blocks ("- " bullets)."""
+    """Make sure free text lands as blocks ("- " bullets); a page that starts with frontmatter stays as it is."""
     lines = [ln for ln in text.strip().splitlines()]
-    if any(ln.lstrip().startswith("- ") for ln in lines):  # already Logseq-formatted
+    if lines[:1] == ["---"] or any(ln.lstrip().startswith("- ") for ln in lines):  # already block-formatted
         return "\n".join(lines) + "\n"
     return "- " + "\n  ".join(lines) + "\n"
+
+
+def _journal_file(rel: str) -> bool:
+    """Is this vault path a daily note ("journals/2026-11-05.md")?"""
+    folder, _, file = rel.partition("/")
+    return folder == JOURNALS and bool(JOURNAL_FILE.match(file))

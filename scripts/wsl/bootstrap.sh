@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../.."
 
 if [[ ! -d data/kb-graph ]]; then
   mkdir -p data && cp -r kb/sample-graph data/kb-graph
-  echo "Seeded data/kb-graph from kb/sample-graph (point KB_GRAPH_PATH at your own graph later)."
+  echo "Seeded data/kb-graph from kb/sample-graph (point KB_GRAPH_PATH at your own Obsidian vault later)."
 fi
 
 if [[ -f .env ]]; then

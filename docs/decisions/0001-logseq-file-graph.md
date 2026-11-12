@@ -1,6 +1,6 @@
 # 0001: Logseq integration starts with the file-based graph
 
-Date: 2026-11-01 · Status: accepted for the POC
+Date: 2026-11-01 · Status: superseded by [0002](0002-obsidian-vault.md) on 2026-11-12
 
 ## Context
 

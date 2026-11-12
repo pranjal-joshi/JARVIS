@@ -14,6 +14,15 @@ claim (the reply says something was done and no tool did it), missed part (a req
 "steps": one list of acceptable tools per part, in order), reply, style.
 
 Writes docs/testing/evals/<date>-<model>.md and .json, and posts the summary to the hub (HUD → Evals).
+
+Trend and gate: each run is compared with the last run of the same model in docs/testing/evals (or --compare
+FILE): cases that passed then and fail now (regressions), cases fixed, and the change in pass count and median
+latency, in the report and its JSON ("trend"). With --gate the script exits 1 when there are more regressions
+than --allow (default 0), so a harness change can be checked before it is committed:
+
+    python scripts/eval/run_eval.py --no-post --gate --allow 2
+    python scripts/eval/run_eval.py --diff OLD.json NEW.json   (compare two saved runs, no hub needed)
+
 Standard library only."""
 
 import argparse
@@ -151,7 +160,16 @@ def main() -> None:
     ap.add_argument("--model", help="run against this model (the hub is switched back afterwards)")
     ap.add_argument("--no-post", action="store_true", help="don't send the summary to the hub")
     ap.add_argument("--cases", help="case file (default: cases.json next to this script)")
+    ap.add_argument("--compare", help="a saved run (.json) to compare with (default: the last run of this model)")
+    ap.add_argument("--gate", action="store_true", help="exit 1 when more cases regressed than --allow")
+    ap.add_argument("--allow", type=int, default=0, help="regressions --gate lets through (sampling noise)")
+    ap.add_argument("--diff", nargs=2, metavar=("OLD", "NEW"), help="compare two saved runs and stop")
     a = ap.parse_args()
+    if a.diff:
+        old, new = (json.loads(Path(f).read_text(encoding="utf-8")) for f in a.diff)
+        t = trend(old, new["rows"], new.get("first_words_median_s"))
+        print("\n".join(trend_lines(t, a.diff[0])))
+        sys.exit(1 if a.gate and len(t["regressed"]) > a.allow else 0)
     e = env()
     hub = Hub({"web": e["HUB_TOKEN_WEB"], "satellite": e["HUB_TOKEN_SATELLITE"]})
     cases = json.loads(Path(a.cases or Path(__file__).parent / "cases.json").read_text(encoding="utf-8"))
@@ -183,10 +201,44 @@ def main() -> None:
     finally:
         if model != before:
             hub.json("/v1/llm", {"model": before})
-    report(model, rows, post=not a.no_post, hub=hub)
+    prev = Path(a.compare) if a.compare else last_run(model)
+    t = report(model, rows, post=not a.no_post, hub=hub, prev=prev)
+    if a.gate and t and len(t["regressed"]) > a.allow:
+        print(f"GATE: {len(t['regressed'])} regressed (allowed {a.allow}): {', '.join(t['regressed'])}",
+              file=sys.stderr)
+        sys.exit(1)
 
 
-def report(model: str, rows: list[dict], post: bool, hub: Hub) -> None:
+def last_run(model: str) -> Path | None:
+    """The newest saved run of this model (the stem starts with its time, so names sort by date)."""
+    runs = sorted((ROOT / "docs" / "testing" / "evals").glob(f"*-{model.replace(':', '_')}.json"))
+    return runs[-1] if runs else None
+
+
+def trend(prev: dict, rows: list[dict], median_s) -> dict:
+    """What changed since a saved run, over the cases both ran."""
+    then = {r["id"]: r for r in prev.get("rows", [])}
+    both = [r for r in rows if r["id"] in then]
+    return {"against": prev.get("when"), "model": prev.get("model"), "common": len(both),
+            "passed_then": sum(then[r["id"]]["pass"] for r in both), "passed_now": sum(r["pass"] for r in both),
+            "regressed": [r["id"] for r in both if then[r["id"]]["pass"] and not r["pass"]],
+            "fixed": [r["id"] for r in both if not then[r["id"]]["pass"] and r["pass"]],
+            "new_cases": [r["id"] for r in rows if r["id"] not in then],
+            "median_s_then": prev.get("first_words_median_s"), "median_s_now": median_s}
+
+
+def trend_lines(t: dict, against: str) -> list[str]:
+    delta = t["passed_now"] - t["passed_then"]
+    lat = (f", median first words {t['median_s_then']} s -> {t['median_s_now']} s"
+           if t["median_s_then"] is not None and t["median_s_now"] is not None else "")
+    return [f"Since {against} ({t['against']}): {t['passed_then']} -> {t['passed_now']} of {t['common']} common "
+            f"cases ({delta:+d}){lat}.",
+            f"Regressed ({len(t['regressed'])}): {', '.join(t['regressed']) or 'none'}",
+            f"Fixed ({len(t['fixed'])}): {', '.join(t['fixed']) or 'none'}"]
+
+
+def report(model: str, rows: list[dict], post: bool, hub: Hub, prev: Path | None = None) -> dict | None:
+    """Writes the report; returns the trend against `prev` (None without one)."""
     n, ok = len(rows), sum(r["pass"] for r in rows)
     cats: dict[str, list] = {}
     for r in rows:
@@ -202,6 +254,10 @@ def report(model: str, rows: list[dict], post: bool, hub: Hub) -> None:
                "first_words_median_s": lat[len(lat) // 2] if lat else None,
                "by_category": {c: f"{sum(r['pass'] for r in rs)}/{len(rs)}" for c, rs in cats.items()},
                "rows": rows}
+    t = None
+    if prev and prev.is_file():
+        t = trend(json.loads(prev.read_text(encoding="utf-8")), rows, summary["first_words_median_s"])
+        summary["trend"] = {**t, "file": prev.name}
     out = ROOT / "docs" / "testing" / "evals"
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{datetime.now():%Y-%m-%d-%H%M}-{model.replace(':', '_')}"
@@ -210,6 +266,7 @@ def report(model: str, rows: list[dict], post: bool, hub: Hub) -> None:
           f"**{ok}/{n} passed** ({summary['passed_ignoring_style']} ignoring style), median time to first words "
           f"{summary['first_words_median_s']} s.", "",
           "Failure kinds: " + (", ".join(f"{k} {v}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])) or "none"), "",
+          *([f"**{x}**" if i == 0 else x for i, x in enumerate(trend_lines(t, prev.name))] + [""] if t else []),
           "| Category | Passed |", "|---|---|", *[f"| {c} | {v} |" for c, v in summary["by_category"].items()], "",
           "| Case | Result | First words | Total | Tools | Notes |", "|---|---|---|---|---|---|"]
     md += [f"| {r['id']} | {'pass' if r['pass'] else 'FAIL'} | {r['first_s']} s | {r['total_s']} s | "
@@ -217,11 +274,14 @@ def report(model: str, rows: list[dict], post: bool, hub: Hub) -> None:
     (out / f"{stem}.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     print(f"\n{ok}/{n} passed ({summary['passed_ignoring_style']} ignoring style); failure kinds {kinds}; "
           f"median first words {summary['first_words_median_s']} s -> {out / stem}.md")
+    if t:
+        print("\n".join(trend_lines(t, prev.name)))
     if post:
         try:
             hub.json("/v1/evals", summary)
         except Exception as ex:
             print(f"(not posted to the hub: {ex})", file=sys.stderr)
+    return t
 
 
 if __name__ == "__main__":

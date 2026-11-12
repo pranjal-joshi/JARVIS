@@ -14,7 +14,7 @@ from jarvis_hub.approval.gate import ApprovalGate, Decision, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import EventBus
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.tools import register_kb_tools
 from jarvis_hub.mcp.registry import Tool, ToolRegistry
 from jarvis_hub.tools.reminders import Reminders, next_time, register_reminder_tools
@@ -246,18 +246,18 @@ class Index:
 
 
 def test_move_note_moves_matching_notes_with_their_children(tmp_path):
-    (tmp_path / "pages").mkdir()
+    (tmp_path / "jarvis").mkdir()
     (tmp_path / "journals").mkdir()
-    (tmp_path / "journals" / "2026_11_03.md").write_text(
+    (tmp_path / "journals" / "2026-11-03.md").write_text(
         "- configure ESP Home modules as voice satellites #jarvis\n  - kitchen first\n- bought milk\n", encoding="utf-8")
-    (tmp_path / "pages" / "Jarvis Project.md").write_text("- harness work\n", encoding="utf-8")
-    g, reg = LogseqGraph(str(tmp_path)), ToolRegistry()
+    (tmp_path / "Jarvis Project.md").write_text("- harness work\n", encoding="utf-8")
+    g, reg = ObsidianVault(str(tmp_path)), ToolRegistry()
     register_kb_tools(reg, g, Index())
     out = asyncio.run(reg.get("kb_move_item").call({"match": "ESP Home", "to_page": "jarvis project"}, None))
     assert "Moved 1 note" in out and "[[Jarvis Project]]" in out
-    assert (tmp_path / "pages" / "Jarvis Project.md").read_text(encoding="utf-8") == \
+    assert (tmp_path / "Jarvis Project.md").read_text(encoding="utf-8") == \
         "- harness work\n- configure ESP Home modules as voice satellites #jarvis\n  - kitchen first\n"
-    assert (tmp_path / "journals" / "2026_11_03.md").read_text(encoding="utf-8") == "- bought milk\n"
+    assert (tmp_path / "journals" / "2026-11-03.md").read_text(encoding="utf-8") == "- bought milk\n"
     assert any((tmp_path / ".trash").iterdir())  # the journal as it was is kept
     assert asyncio.run(reg.get("kb_move_item").call({"match": "nothing like this", "to_page": "Work"}, None)) \
         .startswith("ERROR")

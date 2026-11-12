@@ -31,7 +31,8 @@ class Notifier:
     def __init__(self, bus: EventBus, settings: Settings, announcer=None) -> None:
         self.bus, self.s, self.announcer = bus, settings, announcer
 
-    async def send(self, title: str, text: str, targets: list[str], url: str = "", origin: str = "") -> dict:
+    async def send(self, title: str, text: str, targets: list[str], url: str = "", origin: str = "",
+                   request_id: str = "") -> dict:
         """Shows it on each target; returns {target: "ok" | error}."""
         title, text = (title or "JARVIS").strip()[:120], (text or "").strip()[:400]
         done: dict[str, str] = {}
@@ -49,7 +50,7 @@ class Notifier:
                 done[t] = "ok" if ok else str(res)
             elif t == "hud":
                 for src in (Source.WEB, Source.PHONE):
-                    self.bus.publish(Event("notify", src, "", {"title": title, "text": text, "url": url,
+                    self.bus.publish(Event("notify", src, request_id, {"title": title, "text": text, "url": url,
                                                                 "origin": origin}))
                 done[t] = "ok"
             elif t == "voice":
@@ -67,7 +68,8 @@ def register_notify_tool(reg: ToolRegistry, notifier: Notifier) -> None:
         if not text:
             return "ERROR: text is empty"
         targets = targets_from(args.get("to")) or ["windows", "hud"]
-        done = await notifier.send(str(args.get("title") or "JARVIS"), text, targets, origin="jarvis")
+        done = await notifier.send(str(args.get("title") or "JARVIS"), text, targets, origin="jarvis",
+                                   request_id=ctx.request_id)
         failed = {t: r for t, r in done.items() if r != "ok"}
         if failed and len(failed) == len(done):
             return "ERROR: not shown: " + "; ".join(f"{t}: {r}" for t, r in failed.items())

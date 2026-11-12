@@ -10,7 +10,11 @@ H="Authorization: Bearer $HUB_TOKEN_WEB"
 ## Automated
 
 ```bash
-cd hub && uv run pytest -q        # 19 tests: auth/source routing, events, approvals, audit, KB, tickets
+cd hub && uv run pytest -q        # ~205 tests: routing, harness, approvals, KB and search, skills, webhooks, voice
+
+# evals against the running hub, compared with the last run of the same model; --gate fails on regressions
+python scripts/eval/run_eval.py --no-post --gate --allow 2
+python scripts/eval/run_eval.py --diff docs/testing/evals/OLD.json docs/testing/evals/NEW.json
 ```
 
 ## Phase 1: stack
@@ -53,8 +57,8 @@ HUD prompts: *"What are my open tasks?"*, *"Remember that I like the study at 22
 (→ new `jarvis/memory` block), *"What does my Untrusted Clipping page say?"* (it should report the
 injected instruction, not obey it).
 
-Open `data/kb-graph` as a graph in the Logseq desktop app to see JARVIS's pages and journal entries;
-the memory panel links (`logseq://...`) open them directly.
+Open `data/kb-graph` as a vault in Obsidian ("Open folder as vault") to see JARVIS's pages and daily notes;
+the memory panel links (`obsidian://...`) open them directly.
 
 ## Phase 4: voice
 
@@ -73,6 +77,8 @@ HA Assist pipeline: [ha-setup.md](ha-setup.md) §3–5. Cloned voice: [voice/REA
 - Orb changes colour/motion for listening (cyan), thinking (amber pulse), speaking (reacts to audio).
 - Header chips: link online, LLM up, kb vector, tts engine, tool count.
 - Timeline lists tool calls, results, KB recalls (◈) and past audit rows.
-- Approval cards appear for write actions and disappear after a decision.
-- Memory panel lists `jarvis/` and `#jarvis` journal blocks with Logseq deep links.
+- Approval cards appear for destructive and external actions (and for a write after outside text was read,
+  or a new or changed skill) and disappear after a decision. A satellite never waits for one: it says
+  "I've asked on your phone and the HUD" and announces the result when you decide.
+- Memory panel lists `jarvis/` and `#jarvis` journal blocks with Obsidian links.
 - Narrow the window below 1000 px for the stacked mobile layout; OS "reduce motion" freezes the orb.

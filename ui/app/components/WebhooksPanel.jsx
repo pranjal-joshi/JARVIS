@@ -2,7 +2,7 @@
 
 // Webhooks: outside services (Home Assistant, GitHub, Azure DevOps, IFTTT, a script) POST to a hook and the
 // skills with `trigger:: webhook` and `match:: <hook name>` run. Here: turn it on (make the secret), rotate or
-// turn it off, copy a ready curl, fire a test, and see the last deliveries (accepted or refused).
+// turn it off, give one hook its own secret, copy a ready curl, fire a test, and see the last deliveries.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -11,7 +11,7 @@ const post = (path, body) => api(path, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
 const time = (t) => new Date(t * 1000).toLocaleTimeString();
-const STATUS = { 202: "ok", 401: "bad secret", 404: "off", 413: "too big", 429: "rate limited" };
+const STATUS = { 200: "duplicate", 202: "ok", 401: "bad secret", 404: "off", 413: "too big", 429: "rate limited" };
 
 export default function WebhooksPanel({ version }) {
   const [data, setData] = useState(null);
@@ -20,6 +20,7 @@ export default function WebhooksPanel({ version }) {
   const [body, setBody] = useState('{"message": "hello from a webhook"}');
   const [note, setNote] = useState("");
   const [copied, setCopied] = useState("");
+  const [own, setOwn] = useState({}); // hook -> its own secret, shown once after it is made
 
   const load = useCallback(async () => {
     const r = await api("webhooks").catch(() => null);
@@ -30,7 +31,9 @@ export default function WebhooksPanel({ version }) {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const hook = (name || "test").toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 40);
   const url = `${origin}/api/hub/hooks/${hook}`;
-  const curl = `curl -X POST "${url}" -H "X-Jarvis-Token: ${secret || "<secret>"}" `
+  const ownHint = data?.own_secrets?.[hook]; // "…abcd" when this hook has its own secret
+  const key = ownHint ? (own[hook] || "<this hook's secret>") : (secret || "<secret>");
+  const curl = `curl -X POST "${url}" -H "X-Jarvis-Token: ${key}" `
     + `-H "Content-Type: application/json" -d '${body.replace(/'/g, "'\\''")}'`;
   // trigger and match spelled out: a small model otherwise writes "run on webhook X" into the steps
   const example = `Make a skill called ${hook} alert with trigger webhook and match ${hook}. `
@@ -38,7 +41,7 @@ export default function WebhooksPanel({ version }) {
     + `Then send me a notification with that sentence.`;
   // PowerShell: single-quoted strings are literal ('' is a quote), so the JSON body and secret pass untouched
   const psq = (v) => `'${String(v).replace(/'/g, "''")}'`;
-  const ps = `Invoke-RestMethod -Method Post -Uri ${psq(url)} -Headers @{ 'X-Jarvis-Token' = ${psq(secret || "<secret>")} } `
+  const ps = `Invoke-RestMethod -Method Post -Uri ${psq(url)} -Headers @{ 'X-Jarvis-Token' = ${psq(key)} } `
     + `-ContentType 'application/json' -Body ${psq(body)}`;
 
   const copy = async (what, text) => {
@@ -54,6 +57,17 @@ export default function WebhooksPanel({ version }) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) setNote(d.detail || "failed");
     else { setSecret(d.secret || null); setNote(action === "rotate" ? "New secret: copy it now; it stays hidden after you close this." : "Webhooks are off."); }
+    load();
+  };
+
+  // a hook's own secret: only it opens that hook (the shared one stops working there)
+  const ownAction = async (action) => {
+    if (action === "rotate" && ownHint && !confirm(`Make a new secret for “${hook}”? The old one stops working.`)) return;
+    const r = await post("webhooks/secret", { action, hook });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) setNote(d.detail || "failed");
+    else if (d.secret) { setOwn((o) => ({ ...o, [hook]: d.secret })); setNote(`“${hook}” has its own secret now: copy it; it is shown only this once.`); }
+    else { setOwn((o) => { const n = { ...o }; delete n[hook]; return n; }); setNote(`“${hook}” uses the shared secret again.`); }
     load();
   };
 
@@ -101,6 +115,16 @@ export default function WebhooksPanel({ version }) {
         <datalist id="hook-names">{data.hooks.map((h) => <option key={h} value={h} />)}</datalist>
         <label>body <textarea rows={2} value={body} onChange={(e) => setBody(e.target.value)} spellCheck={false} /></label>
         <div className="hooks-url"><code>POST {url}</code></div>
+        <div className="hooks-row">
+          <span className="hooks-secret">
+            {ownHint ? <>“{hook}” has its own secret {own[hook] ? <code>{own[hook]}</code> : ownHint}</>
+              : <>“{hook}” uses the shared secret</>}
+          </span>
+          {own[hook] && <button type="button" className="gate" onClick={() => copy("own", own[hook])}>{copied === "own" ? "copied" : "copy"}</button>}
+          <button type="button" className="gate" onClick={() => ownAction("rotate")}
+            title="Only this secret will open this hook">{ownHint ? "new own secret" : "give it its own secret"}</button>
+          {ownHint && <button type="button" className="gate" onClick={() => ownAction("disable")}>use shared</button>}
+        </div>
         <div className="hooks-actions">
           <button type="button" className="gate" onClick={test} title="Runs the matching skills now, without the secret">fire test</button>
           <button type="button" className="gate" disabled={!on} onClick={() => copy("curl", curl)}>
@@ -150,7 +174,8 @@ export default function WebhooksPanel({ version }) {
       <p className="tools-note">
         From another container on the stack: <code>http://hub:8700/v1/hooks/&lt;name&gt;</code>. From the internet
         (GitHub), put a tunnel or reverse proxy in front of this HUD; GitHub can sign with the secret instead
-        (X-Hub-Signature-256). Limits: {data.limits.per_hook_per_min}/min per hook, {data.limits.per_min}/min in all,
+        (X-Hub-Signature-256), or with a timestamp against replays (X-Jarvis-Timestamp plus X-Jarvis-Signature,
+        an HMAC of “timestamp.body”). A delivery id seen in the last day runs nothing again. Limits: {data.limits.per_hook_per_min}/min per hook, {data.limits.per_min}/min in all,
         {" "}{Math.round(data.limits.max_body / 1024)} KB body.
       </p>
     </div>

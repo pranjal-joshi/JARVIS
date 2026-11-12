@@ -456,7 +456,7 @@ export default function KbExplorer({ version, context, onAdd, onClose }) {
                       <button type="button" className="kbx-btn primary" disabled={inContext(page.name)} onClick={() => add(page)}>
                         {inContext(page.name) ? "✓ in chat context" : "＋ add to chat"}
                       </button>
-                      <a className="kbx-btn" href={page.link}>open in Logseq</a>
+                      <a className="kbx-btn" href={page.link}>open in Obsidian</a>
                       {page.digest && <PageDelete onDelete={removePage} />}
                     </div>
                     {failed && <p className="kbx-dim kbx-failed" role="alert">{failed}</p>}

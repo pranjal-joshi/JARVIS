@@ -78,6 +78,14 @@ Settings → Voice assistants → **Add assistant**:
 
 Test it from the Assist dialog in HA (the chat bubble, or its microphone button).
 
+**Several satellites.** Knowing which satellite or room is talking is the voice layer's job; the hub keeps one
+conversation per id it is given, so a pending "Shall I go ahead?" in the kitchen can't be answered from the
+bedroom. It takes the first of: a header `X-Satellite-Id` (or `X-HA-Device-Id`, `X-Device-Id`), then
+`metadata.satellite_id` / `device_id` / `conversation_id` in the request body, then OpenAI's `user` field.
+With none, every satellite shares one conversation. The hub logs once what a client sends
+(`satellite request: x-headers ..., metadata keys ..., user field ...`): check that line after the first
+spoken request to see whether the integration passes an id.
+
 ## 6. Voice-only use (satellite with no screen)
 
 The hub already handles these for any client using `HUB_TOKEN_SATELLITE`; the steps below are the HA

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from jarvis_hub.automation.skill_fast import skill_plan
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 
 MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
           "november", "december"]
@@ -26,6 +26,19 @@ _UNIT = r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)"
 HOME_WORDS = r"(?:where i live|at home|my (?:home|city|place)|here|outside)"
 NAMED_DAYS = {"christmas": (12, 25), "christmas day": (12, 25), "new year": (1, 1), "new year's day": (1, 1),
               "new years": (1, 1), "valentine's day": (2, 14), "halloween": (10, 31)}
+
+
+_WIT = r"(?:wit|humou?r|jokes?|joking|sass|banter|personality)"
+WIT_DIAL = re.compile(r"^(?:set|turn|dial|put|crank|tone)?\s*(?:the |your )?" + _WIT +
+                      r"(?: level)?\s*(?:to |at )?(up|down|off|on|more|less|zero|one|two|0|1|2|max|maximum|"
+                      r"minimum|min|normal|default)(?: a (?:bit|notch|little))?$")
+WIT_WORDS = {"serious": "0", "formal": "0", "plain": "0", "professional": "0", "boring": "0", "funny": "2",
+             "playful": "2", "witty": "2", "cheeky": "2", "funnier": "up", "wittier": "up", "more fun": "up",
+             "less funny": "down", "less witty": "down", "more serious": "down", "normal": "1", "yourself": "1",
+             "your usual self": "1", "your normal self": "1", "yourself again": "1", "normal again": "1"}
+WIT_BE = re.compile(r"^(?:be|stay|act|keep it|get) (?:a (?:bit|little) )?(" +
+                    "|".join(sorted(map(re.escape, WIT_WORDS), key=len, reverse=True)) + r")(?: please)?$")
+WIT_NONE = re.compile(r"^(?:no|stop the|stop|less|fewer|enough) (?:more )?" + _WIT + r"$")
 
 
 @dataclass
@@ -106,7 +119,7 @@ def _expression(text: str) -> str | None:
 
 
 class FastPaths:
-    def __init__(self, graph: LogseqGraph, home_place: str = "") -> None:
+    def __init__(self, graph: ObsidianVault, home_place: str = "") -> None:
         self.graph, self.home_place = graph, home_place
 
     def home(self) -> str:
@@ -127,7 +140,7 @@ class FastPaths:
             return None  # several requests in one: the model handles those
         today = today or date.today()
         for fn in (self._time, self._days_until, self._maths, self._weather, self._timers, self._tasks,
-                   self._help):
+                   self._wit, self._help):
             if plan := fn(text, today):
                 return plan
         return None
@@ -235,6 +248,25 @@ class FastPaths:
                             r"|what do i (?:have to|need to) do(?: today)?", text):
             return None
         return Plan("tasks", [("kb_tasks", {})], lambda r: _tasks_reply(_body(r[0])))
+
+    def _wit(self, text: str, today: date) -> Plan | None:
+        """"Be more serious", "dial the humour up", "wit to zero for an hour", "no jokes in here"."""
+        here = bool(re.search(r"\b(?:in here|here|in this room)$", text))
+        text = re.sub(r"\s+(?:in here|here|in this room)$", "", text)
+        minutes = None
+        if m := re.search(r"\s+for (?:the next )?" + _COUNT + r" " + _UNIT + r"$", text):
+            minutes, text = _seconds(m[1], m[2]) / 60, text[:m.start()]
+        level = None
+        if m := WIT_DIAL.match(text):
+            level = m[1]
+        elif m := WIT_BE.match(text):
+            level = WIT_WORDS[m[1]]
+        elif WIT_NONE.match(text):
+            level = "0"
+        if level is None:
+            return None
+        args = {"level": level, "here_only": here} | ({"minutes": minutes} if minutes else {})
+        return Plan("wit", [("set_wit", args)], lambda r: _body(r[0]))
 
     def _help(self, text: str, today: date) -> Plan | None:
         if not re.fullmatch(r"what can you do|what are you able to do|help|what do you do|how can you help(?: me)?",

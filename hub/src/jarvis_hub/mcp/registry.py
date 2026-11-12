@@ -29,6 +29,7 @@ class ToolCtx:
     source: str
     request_id: str
     via: str = ""  # where a saved fact came from ("said by you"...), for the memory's provenance
+    session: str = ""  # the satellite conversation the call came from ("" = HUD, phone, a skill)
 
 
 ToolFn = Callable[[dict, ToolCtx], Awaitable[str]]
@@ -46,6 +47,9 @@ class Tool:
     self_scoped: bool = False
     # The tool's own output is the reply (e.g. an expert answer the small model would only paraphrase badly).
     final_answer: bool = False
+    # Always asks (an approval card), whatever the policy's default says; why, for the card. A rule that denies
+    # still denies, and an "allow for 1 hour" grant from a card still lets it through.
+    confirm: str = ""
 
     @property
     def model_name(self) -> str:
@@ -119,7 +123,7 @@ class ToolRegistry:
 
     def describe(self, ask_for: frozenset = frozenset(), hidden: frozenset = frozenset()) -> list[dict]:
         return [{"name": t.name, "origin": t.origin, "risk": t.risk,
-                 "asks": t.risk in ask_for and not t.self_scoped, "hidden": t.name in hidden,
+                 "asks": bool(t.confirm) or t.risk in ask_for and not t.self_scoped, "hidden": t.name in hidden,
                  "description": t.description.split(". ")[0][:160]} for t in self.all()]
 
     async def load_mcp(self, config_path: str) -> None:

@@ -48,12 +48,13 @@ class Pending:
     created: float = field(default_factory=time.time)
     orphan: bool = False  # left over from before a restart
     future: asyncio.Future | None = None
+    preview: dict | None = None  # the effect, for the card: a diff of a note, the devices touched (preview.py)
 
     def public(self) -> dict:
         return {"approval_id": self.id, "request_id": self.request_id, "requested_by": self.source,
                 "tool": self.tool, "risk": self.risk, "arguments": self.arguments, "created": self.created,
                 "reason": self.reason, "says": self.says, "expires": None if self.orphan else self.created + self.timeout,
-                "orphan": self.orphan}
+                "orphan": self.orphan, "preview": self.preview}
 
 
 @dataclass
@@ -76,23 +77,27 @@ class ApprovalGate:
         for (body,) in rows:  # waiting when the hub stopped: keep the card
             d = json.loads(body)
             p = Pending(d["approval_id"], d["request_id"], Source(d["requested_by"]), d["tool"], Risk(d["risk"]),
-                        d["arguments"], d.get("reason", ""), d.get("says", ""), created=d["created"], orphan=True)
+                        d["arguments"], d.get("reason", ""), d.get("says", ""), created=d["created"], orphan=True,
+                        preview=d.get("preview"))
             self._pending[p.id] = p
 
     def pending(self) -> list[dict]:
         return [p.public() for p in self._pending.values()]
 
     async def request(self, *, request_id: str, source: Source, tool: str, risk: Risk,
-                      arguments: dict, reason: str = "", says: str = "") -> Decision:
-        p = Pending(uuid.uuid4().hex, request_id, source, tool, risk, arguments, reason, says, self._timeout,
-                    future=asyncio.get_running_loop().create_future())
+                      arguments: dict, reason: str = "", says: str = "", timeout: float | None = None,
+                      preview: dict | None = None) -> Decision:
+        """timeout: how long this one waits (an approval asked from a satellite waits longer, in the
+        background); None = the gate's own."""
+        p = Pending(uuid.uuid4().hex, request_id, source, tool, risk, arguments, reason, says, timeout or self._timeout,
+                    future=asyncio.get_running_loop().create_future(), preview=preview)
         self._pending[p.id] = p
         self._store(p)
         # Approval cards go to every approver channel, not only the requester.
         for approver in APPROVER_SOURCES:
             self._bus.publish(Event("approval_request", approver, request_id, p.public()))
         try:
-            return await asyncio.wait_for(asyncio.shield(p.future), self._timeout)
+            return await asyncio.wait_for(asyncio.shield(p.future), p.timeout)
         except TimeoutError:
             return Decision(False, "timeout")
         finally:

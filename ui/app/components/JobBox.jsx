@@ -3,6 +3,8 @@
 // One background job, beside the orb: its goal, how long it has run, and its steps (the job's own to-do list
 // when it keeps one, else the last steps it took). A running card can be stopped; once the job ends the card
 // shows the outcome and stays until it is dismissed. Several run at once as a stack (Hud.jsx).
+// The card grows with the job: a queued job is a slim pill, a running one gets a progress ring (its to-do list
+// done / total, or a sweeping arc when it keeps none), a finished one a result card with where it was saved.
 
 import { useEffect, useState } from "react";
 
@@ -13,6 +15,18 @@ const left = (s) => {
   return `${s}s`;
 };
 const MARK = { completed: "✓", in_progress: "◉", pending: "○" };
+const R = 17, C = 2 * Math.PI * R;
+
+function Ring({ pct, tone }) {
+  return (
+    <svg className={`job-ring${pct == null ? " sweep" : ""}`} viewBox="0 0 44 44" aria-hidden="true">
+      <circle className="bg" cx="22" cy="22" r={R} />
+      <circle className="fg" cx="22" cy="22" r={R} strokeDasharray={C}
+        strokeDashoffset={pct == null ? C * 0.72 : C * (1 - pct / 100)} style={tone ? { stroke: tone } : undefined} />
+      <text x="22" y="26" textAnchor="middle">{pct == null ? "…" : `${pct}`}</text>
+    </svg>
+  );
+}
 
 export default function JobBox({ job, closing, onDismiss, onCancel }) {
   const live = job.state === "running" || job.state === "queued";
@@ -28,6 +42,18 @@ export default function JobBox({ job, closing, onDismiss, onCancel }) {
   const todos = job.todos || [];
   const trail = (job.trail || []).slice(-5);
   const outcome = job.state === "done" ? "done" : job.state === "cancelled" ? "cancelled" : "failed";
+  const pct = todos.length ? Math.round(100 * todos.filter((t) => t.status === "completed").length / todos.length) : null;
+
+  if (job.state === "queued") { // a slim pill until it starts
+    return (
+      <aside className={`job-box job-pill${closing ? " closing" : ""}`} aria-label={`Queued job: ${job.goal}`}>
+        <i className="job-pulse" aria-hidden="true" /><span className="job-kind">QUEUED</span>
+        <span className="job-goal" title={job.goal}>{job.goal}</span>
+        <button type="button" className="job-x" title="Stop this job" aria-label="Stop this job"
+          disabled={stopping} onClick={() => { setStopping(true); onCancel(job.id); }}>■</button>
+      </aside>
+    );
+  }
 
   return (
     <aside className={`job-box ${live ? "live" : `ended ${outcome}`}${closing ? " closing" : ""}`}
@@ -44,6 +70,9 @@ export default function JobBox({ job, closing, onDismiss, onCancel }) {
             aria-label="Dismiss" onClick={() => onDismiss(job.id)}>×</button>
         )}
       </div>
+      <div className="job-body">
+      <Ring pct={live ? pct : 100} tone={live ? null : outcome === "done" ? "#7dffb0" : "var(--red)"} />
+      <div className="job-main">
       <div className="job-goal" title={job.goal}>{job.goal}</div>
       {live ? (
         todos.length > 0 ? (
@@ -68,11 +97,22 @@ export default function JobBox({ job, closing, onDismiss, onCancel }) {
           </ol>
         )
       ) : (
-        <div className="job-outcome">
-          <span className="mark" aria-hidden="true">{outcome === "done" ? "✓" : "✕"}</span>
-          <span>{outcome === "done" ? (job.summary || "Done.") : (job.error || outcome)}</span>
-        </div>
+        <>
+          <div className="job-outcome">
+            <span className="mark" aria-hidden="true">{outcome === "done" ? "✓" : "✕"}</span>
+            <span>{outcome === "done" ? (job.summary || "Done.") : (job.error || outcome)}</span>
+          </div>
+          {outcome === "done" && (
+            <div className="job-chips">
+              <span className="job-chip">saved → {job.page || "jarvis/jobs"}</span>
+              {job.steps ? <span className="job-chip">{job.steps} steps</span> : null}
+              {job.cost_usd != null && <span className="job-chip">${job.cost_usd}</span>}
+            </div>
+          )}
+        </>
       )}
+      </div>
+      </div>
       <div className="job-foot">
         {live ? `cap $${job.budget_usd ?? "?"} · ${Math.round((job.timeout_s || 3600) / 60)} min` :
           `${job.cost_usd != null ? `$${job.cost_usd} · ` : ""}${outcome === "done" ? "saved to notes" : outcome}`}

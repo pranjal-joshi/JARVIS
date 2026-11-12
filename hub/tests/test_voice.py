@@ -9,7 +9,7 @@ from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Settings, Source
 from jarvis_hub.events.bus import Event, EventBus
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.mcp.registry import Tool, ToolRegistry
 from jarvis_hub.voice.announce import Announcer
 from jarvis_hub.voice.session import Sessions, answer
@@ -140,7 +140,7 @@ def test_for_ear():
 
 
 def test_misheard_names_are_put_right(tmp_path):
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.write_jarvis_page("jarvis/vocabulary", "- Chiku\n- Rohan")
     audit = AuditStore(":memory:")
     audit.record(request_id="r", source="web", tool="adb_call", risk="destructive", arguments={"to": "Aaditya"},

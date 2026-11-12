@@ -27,11 +27,12 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event
 from jarvis_hub.guard.validate import best_name, resolver
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.kb.tools import missing_page
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.tools.when import spoken, when
+from jarvis_hub.tools.widget import show as show_widget
 
 log = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ class Timers:
         return None
 
 
-def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex,
+def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex,
                            timers_file: Path | None = None) -> Timers:
     timers = Timers(timers_file)
     weather_cache: dict[str, tuple[float, str]] = {}
@@ -246,20 +247,22 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
             return "ERROR: say which place"
         key = place.lower()
         if (hit := weather_cache.get(key)) and time.time() - hit[0] < WEATHER_TTL_S:
+            show_widget(ctx.bus, ctx.request_id, hit[2])
             return hit[1]
-        out = await _weather(place)
+        out, spec = await _weather(place)
         if not out.startswith("ERROR"):
-            weather_cache[key] = (time.time(), out)
+            weather_cache[key] = (time.time(), out, spec)
+            show_widget(ctx.bus, ctx.request_id, spec)  # the forecast strip beside the spoken answer
         return out
 
-    async def _weather(place: str) -> str:
+    async def _weather(place: str) -> tuple[str, dict]:
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(15, connect=5)) as c:
                 g = await c.get("https://geocoding-api.open-meteo.com/v1/search",
                                 params={"name": place, "count": 1})
                 hits = g.json().get("results") or []
                 if not hits:
-                    return f"ERROR: couldn't find {place!r}"
+                    return f"ERROR: couldn't find {place!r}", {}
                 h = hits[0]
                 f = await c.get("https://api.open-meteo.com/v1/forecast", params={
                     "latitude": h["latitude"], "longitude": h["longitude"], "timezone": "auto",
@@ -267,7 +270,7 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
                     "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
                     "forecast_days": 3})
         except httpx.HTTPError as e:
-            return f"ERROR: weather service unreachable ({type(e).__name__})"
+            return f"ERROR: weather service unreachable ({type(e).__name__})", {}
         d = f.json()
         cur, day = d.get("current") or {}, d.get("daily") or {}
         # Spoken sentences with relative day names: a small model mislabels raw ISO dates ("tomorrow"
@@ -276,13 +279,18 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         lines = [f"In {h['name']} it's {WMO.get(cur.get('weather_code'), 'unknown')} and {r(cur.get('temperature_2m'))} "
                  f"degrees, feeling like {r(cur.get('apparent_temperature'))}, sir."]
         today = datetime.fromisoformat(d["current"]["time"]).date() if cur.get("time") else datetime.now().date()
+        spec = {"widget": "forecast", "title": f"{h['name']} · now {r(cur.get('temperature_2m'))}°", "days": []}
         for i, iso in enumerate(day.get("time") or []):
             dt = datetime.fromisoformat(iso).date()
             label = {0: "Today", 1: "Tomorrow"}.get((dt - today).days, f"{dt:%A}")
+            spec["days"].append({"label": label[:3] if label not in ("Today", "Tomorrow") else label,
+                                 "low": day["temperature_2m_min"][i], "high": day["temperature_2m_max"][i],
+                                 "rain": day["precipitation_probability_max"][i],
+                                 "sky": WMO.get(day["weather_code"][i], "")})
             lines.append(f"{label}: {WMO.get(day['weather_code'][i], '?')}, {r(day['temperature_2m_min'][i])} to "
                          f"{r(day['temperature_2m_max'][i])} degrees, {day['precipitation_probability_max'][i]}% "
                          "chance of rain.")
-        return "\n".join(lines)
+        return "\n".join(lines), spec
 
     async def fetch_page(args: dict, ctx: ToolCtx) -> str:
         url = str(args.get("url", "")).strip()
@@ -339,6 +347,7 @@ def register_utility_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex
         if not 1 <= seconds <= 24 * 3600:
             return "ERROR: timers run from 1 second to 24 hours"
         t = timers.start(seconds, label, ctx)
+        show_widget(ctx.bus, ctx.request_id, {"widget": "countdown", "title": label, "due": t["due"], "seconds": seconds})
         due = datetime.fromtimestamp(t["due"])
         name = "Timer" if label == "timer" else f"Timer '{label}'"
         span = f" for {_span(seconds)}" if not at else ""

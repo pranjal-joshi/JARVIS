@@ -212,9 +212,10 @@ async def kb_page(name: str, request: Request, _: Source = Depends(require_appro
     g = request.app.state.kb_graph
     pages = g.pages()
     key = name.strip().lower()
-    page = next((p for p in pages if p.name.lower() == key), None)
+    page = next((p for p in pages if p.name.lower() == key), None) or g.page(name)
     if page is None:
         raise HTTPException(404, "no such page")
+    key, names = page.name.lower(), {p.name.lower() for p in pages}
     blocks = page.blocks[:400]
     shown = [_said_and_props(b.text) for b in blocks]
     return {"name": page.name, "journal": page.is_journal, "link": g.deep_link(page.name),
@@ -224,8 +225,9 @@ async def kb_page(name: str, request: Request, _: Source = Depends(require_appro
             "props": [pr for _, pr in shown],  # learned (a day), via (who said it), ...
             "digest": page.digest,  # the page as read (deleting or renaming it is refused once it changed)
             "updated": int(page.path.stat().st_mtime),
-            "links": sorted({to for b in page.blocks for to in b.links}),
-            "backlinks": sorted(p.name for p in pages if p is not page and key in p.links)}
+            "links": sorted({g.resolve(to, names) for b in page.blocks for to in b.links}),
+            "backlinks": sorted(p.name for p in pages if p.path != page.path
+                                and key in {g.resolve(t, names) for t in p.links})}
 
 
 class BlockDelete(BaseModel):
@@ -401,6 +403,15 @@ async def dream_state(request: Request, _: Source = Depends(require_approver)) -
             "context": d.context(), "kept": [{"text": t, **p} for t, p in d.kept()]}
 
 
+@router.post("/dream/undo/{index}")
+async def dream_undo(index: int, request: Request, _: Source = Depends(require_approver)) -> dict:
+    """Take back (or put back) one change of the last dream, from the HUD's morning digest."""
+    try:
+        return request.app.state.dreamer.undo(index)
+    except IndexError:
+        raise HTTPException(404, "no such change in the last dream") from None
+
+
 class DreamBody(BaseModel):
     dry_run: bool = False  # only report what it would keep
     days: int | None = None
@@ -536,7 +547,8 @@ class EnableBody(BaseModel):
 async def skills_enable(name: str, body: EnableBody, request: Request,
                         _: Source = Depends(require_approver)) -> dict:
     try:
-        return request.app.state.skills.set_enabled(name, body.enabled)
+        # the HUD is where you approve a skill: enabling pins the page as it is now
+        return request.app.state.skills.set_enabled(name, body.enabled, pin=True)
     except KeyError:
         raise HTTPException(404, "no such skill page") from None
 
@@ -557,8 +569,9 @@ async def skills_run(name: str, request: Request, _: Source = Depends(require_ap
     skill = next((s for s in eng.skills() if s["name"].lower() == name.lower()), None)
     if skill is None:
         raise HTTPException(404, "no such skill page")
-    if not skill["enabled"]:
-        raise HTTPException(409, "enable the skill first")
+    if not eng.live(skill):
+        raise HTTPException(409, "enable the skill first" if not skill["enabled"]
+                            else "the skill changed outside JARVIS: enable it to approve the new version")
     eng._spawn(skill, "a manual run from the HUD")
     return {"ok": True}
 
@@ -810,3 +823,32 @@ async def watcher_draft(body: DraftBody, request: Request, source: Source = Depe
             ok, res = await bridge_call(st.settings, "watch_test", {"watcher": draft}, 120)
     return {"draft": draft, "test": res if ok else None, "test_error": None if ok else str(res), "fixed": fixed,
             "model": data.get("model"), "seconds": round(seconds, 1)}
+
+
+# ---------- wit: how much humour JARVIS allows itself (persona/wit.py) ----------
+class WitBody(BaseModel):
+    level: int | str
+    satellite: str = ""  # a satellite's conversation id ("satellite:kitchen"); "" = the whole house
+    minutes: float | None = None
+
+
+@router.get("/wit")
+async def wit_get(request: Request, _: Source = Depends(require_approver)) -> dict:
+    return request.app.state.wit.state()
+
+
+@router.post("/wit")
+async def wit_set(body: WitBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    from jarvis_hub.persona.wit import parse
+    wit = request.app.state.wit
+    level = parse(body.level, wit.level(body.satellite))
+    if level is None:
+        raise HTTPException(400, "level: 0 plain, 1 dry, 2 playful, or up / down")
+    wit.set(level, body.satellite.strip(), body.minutes)
+    return wit.state()
+
+
+@router.delete("/wit")
+async def wit_clear(request: Request, satellite: str = "", _: Source = Depends(require_approver)) -> dict:
+    request.app.state.wit.clear(satellite)
+    return request.app.state.wit.state()

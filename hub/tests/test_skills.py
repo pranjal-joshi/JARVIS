@@ -6,7 +6,7 @@ import asyncio
 from jarvis_hub.automation.skills import SKILL_TOOLS, SkillEngine
 from jarvis_hub.config import Settings
 from jarvis_hub.events.bus import Event, EventBus
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 
 
 class FakeAgent:
@@ -22,7 +22,7 @@ class FakeAgent:
 
 
 def test_a_skill_is_on_as_soon_as_it_exists_until_switched_off(tmp_path):
-    g = LogseqGraph(str(tmp_path / "kb"))
+    g = ObsidianVault(str(tmp_path / "kb"))
     g.append_to_user_page("skills/Phone joined", "trigger:: device_joined\nmatch:: Pixel\n\n- Say hello to the phone.")
     agent = FakeAgent()
     eng = SkillEngine(g, EventBus(), agent, Settings(_env_file=None), tmp_path / "skills.json")
@@ -47,7 +47,7 @@ def test_a_skill_is_on_as_soon_as_it_exists_until_switched_off(tmp_path):
 
 
 def test_timer_event_triggers_timer_skill(tmp_path):
-    g = LogseqGraph(str(tmp_path / "kb"))
+    g = ObsidianVault(str(tmp_path / "kb"))
     g.append_to_user_page("skills/Tea", "trigger:: timer_done\nmatch:: tea\n\n- Remind me the tea is ready.")
     agent, bus = FakeAgent(), EventBus()
     eng = SkillEngine(g, bus, agent, Settings(device_bridge_token="", _env_file=None), tmp_path / "skills.json")
@@ -63,7 +63,7 @@ def test_timer_event_triggers_timer_skill(tmp_path):
 
 
 def test_new_phone_notification_and_ringing_become_events(tmp_path):
-    g = LogseqGraph(str(tmp_path / "kb"))
+    g = ObsidianVault(str(tmp_path / "kb"))
     eng = SkillEngine(g, EventBus(), FakeAgent(), Settings(), tmp_path / "skills.json")
     seen = []
     eng.emit = lambda kind, text, data=None: seen.append((kind, text))
@@ -99,7 +99,7 @@ def test_skills_are_made_changed_run_and_deleted_by_tools(tmp_path):
     from jarvis_hub.automation.skill_tools import register_skill_tools
     from jarvis_hub.mcp.registry import ToolCtx, ToolRegistry
 
-    g = LogseqGraph(str(tmp_path / "kb"))
+    g = ObsidianVault(str(tmp_path / "kb"))
     agent = FakeAgent("Hello world, sir. It is 09:00.")
     bus = EventBus()
     eng = SkillEngine(g, bus, agent, Settings(_env_file=None), tmp_path / "skills.json")
@@ -116,8 +116,8 @@ def test_skills_are_made_changed_run_and_deleted_by_tools(tmp_path):
         assert "no skills" in await call("list_skills")
         made = await call("create_skill", name="hello world", instructions="1. Say hello world.\n- Then tell me the time.")
         assert "'Hello world'" in made and "is on" in made and "(2) Then tell me the time." in made
-        page = (tmp_path / "kb" / "pages" / "skills___Hello world.md").read_text(encoding="utf-8")
-        assert page == "trigger:: manual\n\n- Say hello world.\n- Then tell me the time.\n"
+        page = (tmp_path / "kb" / "skills" / "Hello world.md").read_text(encoding="utf-8")
+        assert page == "---\ntrigger: manual\n---\n\n- Say hello world.\n- Then tell me the time.\n"
         assert "already" in await call("create_skill", name="Hello world", instructions="x")
         assert "schedule" in await call("create_skill", name="morning", trigger="schedule", instructions="x")
         assert "trigger must be" in await call("create_skill", name="odd", trigger="sometimes", instructions="x")
@@ -178,7 +178,7 @@ def test_note_tools_cannot_write_a_skill_page(client):
 def test_the_knowledge_map_shows_tools_by_family_and_skills(client, graph_dir):
     from conftest import auth
 
-    (graph_dir / "pages" / "skills___Hello world.md").write_text(
+    (graph_dir / "skills" / "Hello world.md").write_text(
         "trigger:: manual\n\n- Say hello world and use get_time.\n", encoding="utf-8")
     plain = client.get("/v1/kb/graph", headers=auth("web-token")).json()
     assert not any(n["id"].startswith("tool:") for n in plain["nodes"])
@@ -235,11 +235,11 @@ def test_skill_requests_in_looser_words():
 def test_a_short_request_naming_a_skill_runs_it(graph_dir):
     from jarvis_hub.agent.fastpath import FastPaths
 
-    (graph_dir / "pages" / "skills___Fun fact.md").write_text("trigger:: manual\n\n- Share a science fact.\n",
+    (graph_dir / "skills" / "Fun fact.md").write_text("trigger:: manual\n\n- Share a science fact.\n",
                                                               encoding="utf-8")
-    plan = FastPaths(LogseqGraph(str(graph_dir))).match("fun fact, go")
+    plan = FastPaths(ObsidianVault(str(graph_dir))).match("fun fact, go")
     assert plan and plan.steps == [("run_skill", {"name": "Fun fact"})]
-    assert FastPaths(LogseqGraph(str(graph_dir))).match("what time is it").intent == "time"  # others unchanged
+    assert FastPaths(ObsidianVault(str(graph_dir))).match("what time is it").intent == "time"  # others unchanged
 
 
 def test_a_webhook_named_in_the_steps_becomes_the_trigger(tmp_path):
@@ -247,7 +247,7 @@ def test_a_webhook_named_in_the_steps_becomes_the_trigger(tmp_path):
     from jarvis_hub.automation.skill_tools import WEBHOOK_STEP, register_skill_tools
     from jarvis_hub.mcp.registry import ToolCtx, ToolRegistry
 
-    g = LogseqGraph(str(tmp_path / "kb"))
+    g = ObsidianVault(str(tmp_path / "kb"))
     bus = EventBus()
     eng = SkillEngine(g, bus, FakeAgent(), Settings(_env_file=None), tmp_path / "skills.json")
     reg = ToolRegistry()
@@ -262,8 +262,8 @@ def test_a_webhook_named_in_the_steps_becomes_the_trigger(tmp_path):
             "Run on webhook doorbell.\nSteps: tell me in one short sentence what the webhook says.\n"
             "Then send me a notification with that sentence."))
         assert "runs on webhook matching doorbell" in out
-        page = (tmp_path / "kb" / "pages" / "skills___Doorbell alert.md").read_text(encoding="utf-8")
-        assert page == ("trigger:: webhook\nmatch:: doorbell\n\n- tell me in one short sentence what the webhook says.\n"
+        page = (tmp_path / "kb" / "skills" / "Doorbell alert.md").read_text(encoding="utf-8")
+        assert page == ("---\ntrigger: webhook\nmatch: doorbell\n---\n\n- tell me in one short sentence what the webhook says.\n"
                         "- Then send me a notification with that sentence.\n")
         # an existing manual skill fixed the same way by update_skill
         await call("create_skill", name="washer", instructions="Runs when the webhook washer fires.\nSay the laundry is done.")
@@ -278,3 +278,39 @@ def test_a_webhook_named_in_the_steps_becomes_the_trigger(tmp_path):
         assert WEBHOOK_STEP.match(ok), ok
     for no in ("Tell me what the webhook says.", "Say the webhook doorbell rang", "run the doorbell skill"):
         assert not WEBHOOK_STEP.match(no), no
+
+
+def test_a_webhook_run_quotes_only_the_message(tmp_path):
+    g = ObsidianVault(str(tmp_path / "kb"))
+    g.append_to_user_page("skills/Door", "trigger:: webhook\nmatch:: doorbell\n\n- Tell me what it says.")
+    agent = FakeAgent()
+    eng = SkillEngine(g, EventBus(), agent, Settings(_env_file=None), tmp_path / "skills.json")
+
+    async def scenario():
+        assert eng.emit("webhook", "doorbell: Amazon person at the door") == ["skills/Door"]
+        await asyncio.sleep(0.05)
+        assert "webhook doorbell said: «Amazon person at the door»" in agent.prompts[-1]
+
+    asyncio.run(scenario())
+
+
+def test_events_that_come_while_a_skill_runs_wait_their_turn(tmp_path):
+    g = ObsidianVault(str(tmp_path / "kb"))
+    g.append_to_user_page("skills/Door", "trigger:: webhook\nmatch:: doorbell\n\n- Tell me what it says.")
+
+    class SlowAgent(FakeAgent):
+        async def run(self, **kw):
+            await asyncio.sleep(0.05)
+            return await super().run(**kw)
+
+    agent = SlowAgent()
+    eng = SkillEngine(g, EventBus(), agent, Settings(_env_file=None), tmp_path / "skills.json")
+
+    async def scenario():
+        assert eng.emit("webhook", "doorbell: first ring") == ["skills/Door"]
+        assert eng.emit("webhook", "doorbell: second ring") == ["skills/Door"]  # waits, not dropped
+        await asyncio.sleep(0.3)
+        assert len(agent.prompts) == 2
+        assert "first ring" in agent.prompts[0] and "second ring" in agent.prompts[1]
+
+    asyncio.run(scenario())

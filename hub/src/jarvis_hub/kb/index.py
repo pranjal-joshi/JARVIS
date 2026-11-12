@@ -1,19 +1,21 @@
-"""Search index over the Logseq graph: block embeddings in Qdrant plus a link
-graph. Logseq stays the source of truth; this index can be dropped and rebuilt.
+"""Search index over the Obsidian vault: block embeddings in Qdrant plus a link
+graph. The markdown files stay the source of truth; this index can be dropped and rebuilt.
 If Qdrant or the embedding model is unavailable, search falls back to keywords."""
 
 import asyncio
 import logging
+import math
 import re
 import uuid
+from collections import Counter
 
 import httpx
 
-from jarvis_hub.kb.graph import Block, LogseqGraph, Page
+from jarvis_hub.kb.graph import Block, ObsidianVault, Page
 from jarvis_hub.llm.client import LLMClient, LLMError
 
 log = logging.getLogger(__name__)
-COLLECTION = "logseq_blocks"
+COLLECTION = "kb_blocks"
 UNSEARCHED = {"jarvis/dreams/diary"}  # indexed for the map, but never a search answer
 NS = uuid.UUID("8f5b0c2e-6a0b-4d55-9b5f-6a7c1e2d3f40")
 WORD = re.compile(r"[a-z0-9]+")
@@ -38,8 +40,50 @@ def _content_words(query: str) -> list[str]:
     return [w for w in WORD.findall(query.lower()) if w not in _FILLER]
 
 
+RRF_K = 60  # reciprocal-rank fusion constant: rank matters, raw scores from the two lists don't compare
+
+
+def _fuse(dense: list[dict], lexical: list[dict], limit: int) -> list[dict]:
+    """Merge the meaning hits and the word hits by reciprocal rank. A note in both lists rises; each hit keeps
+    the score it came with (cosine for meaning, BM25 for words)."""
+    fused: dict[tuple[str, str], tuple[float, dict]] = {}
+    for hits in (dense, lexical):
+        for rank, h in enumerate(hits):
+            key = (h["page"], h["text"])
+            prev = fused.get(key)
+            fused[key] = ((prev[0] if prev else 0.0) + 1 / (RRF_K + rank + 1), prev[1] if prev else h)
+    return [h for _, h in sorted(fused.values(), key=lambda x: -x[0])][:limit]
+
+
+class _BM25:
+    """Okapi BM25 over blocks, held in memory (a personal vault is thousands of blocks, not millions)."""
+    K1, B = 1.2, 0.75
+
+    def __init__(self, key: tuple, docs: list[tuple[Block, list[str]]]) -> None:
+        self.key = key
+        self.docs = [(b, Counter(words), len(words)) for b, words in docs]
+        self.avg = sum(n for *_, n in self.docs) / len(self.docs) if self.docs else 1.0
+        df: Counter = Counter()
+        for _, tf, _ in self.docs:
+            df.update(tf.keys())
+        n = len(self.docs)
+        self.idf = {w: math.log(1 + (n - d + 0.5) / (d + 0.5)) for w, d in df.items()}
+
+    def top(self, terms: list[str], limit: int, min_cover: float) -> list[tuple[float, Block]]:
+        out = []
+        for b, tf, n in self.docs:
+            hit = [t for t in terms if t in tf]
+            if not hit or len(hit) / len(terms) < min_cover:
+                continue
+            s = sum(self.idf[t] * tf[t] * (self.K1 + 1) / (tf[t] + self.K1 * (1 - self.B + self.B * n / self.avg))
+                    for t in hit)
+            out.append((s, b))
+        out.sort(key=lambda x: -x[0])
+        return out[:limit]
+
+
 class KBIndex:
-    def __init__(self, graph: LogseqGraph, embedder: LLMClient | None, embed_model: str,
+    def __init__(self, graph: ObsidianVault, embedder: LLMClient | None, embed_model: str,
                  qdrant_url: str, min_score: float = 0.6) -> None:
         self.graph = graph
         # nomic scores unrelated notes up to ~0.6 on a small graph: below this (or well below the
@@ -51,6 +95,7 @@ class KBIndex:
         self._digests: dict[str, str] = {}
         self._dim: int | None = None
         self._sync_lock = asyncio.Lock()
+        self._bm25: _BM25 | None = None
         self.vector_ready = False
         self.last_sync: dict = {}
 
@@ -116,7 +161,7 @@ class KBIndex:
 
     async def _index_page(self, page: Page) -> None:
         await self._delete_page(page.name)
-        blocks = page.blocks
+        blocks = page.searchable  # bullets and prose sections (prose has a negative index)
         for i in range(0, len(blocks), 32):
             chunk = blocks[i:i + 32]
             vectors = await self._embed([f"{page.name}: {b.text}" for b in chunk], "document")
@@ -139,28 +184,35 @@ class KBIndex:
 
     # ---------- query ----------
     async def search(self, query: str, limit: int = 6) -> list[dict]:
-        """Memory pages the query names first ("family" -> jarvis/family), then the closest notes by
-        meaning, then (if those found nothing) a plain word match. A short note scores low against a
-        one-word query by meaning alone, so "who is in my family" found nothing on a page called family."""
+        """Memory pages the query names first ("family" -> jarvis/family), then notes found by meaning and
+        by words, fused. A short note scores low against a one-word query by meaning alone, so "who is in my
+        family" found nothing on a page called family; and a name the embedder has not seen ("Ghidra", "AC
+        servicing") is found by its words even when a vaguer note is closer by meaning."""
         topical = self._topic_hits(query, limit)
         seen = {(h["page"], h["text"]) for h in topical}
-        found = [h for h in await self._search(query, limit) if (h["page"], h["text"]) not in seen]
-        if not found and not topical:
-            found = self._keyword_search(" ".join(_content_words(query)), limit)
+        words = _content_words(query)
+        dense = await self._search(query, limit) if self.vector_ready else []
+        lexical = self._keyword_search(" ".join(words), limit + 4, min_cover=0.5 if dense or topical else 0.0)
+        found = [h for h in _fuse(dense, lexical, limit) if (h["page"], h["text"]) not in seen]
         return (topical + found)[:max(limit, len(topical))]
 
     def _topic_hits(self, query: str, limit: int) -> list[dict]:
+        """A memory page the query names: its blocks that share the most words with the query first."""
         pages = {p.name.lower(): p for p in self.graph.pages()
                  if not p.is_journal and p.name.lower().startswith("jarvis/")}
+        terms = set(_content_words(query))
         out = []
         for word in _content_words(query):
             for topic in {word, word.rstrip("s"), *TOPIC_WORDS.get(word, ())}:
                 page = pages.pop(f"jarvis/{topic}", None)
                 if page:
-                    out += [{"page": page.name, "text": b.text, "score": 1.0} for b in page.blocks[:limit]]
+                    ranked = sorted(page.searchable, key=lambda b: (-len(terms & set(WORD.findall(b.text.lower()))),
+                                                                   b.index < 0, abs(b.index)))
+                    out += [{"page": page.name, "text": b.text, "score": 1.0} for b in ranked[:limit]]
         return out
 
     async def _search(self, query: str, limit: int) -> list[dict]:
+        """Closest notes by meaning (empty when the vector index is down)."""
         if self.vector_ready:
             try:
                 vec = (await self._embed([query], "query"))[0]
@@ -177,21 +229,27 @@ class KBIndex:
                 return [h for h in hits if h["score"] >= self.min_score and h["score"] >= top - 0.08][:limit]
             except (httpx.HTTPError, LLMError, KeyError) as e:
                 log.warning("vector search failed, using keywords: %s", e)
-        return self._keyword_search(" ".join(_content_words(query)), limit)
+        return []
 
-    def _keyword_search(self, query: str, limit: int) -> list[dict]:
-        terms = set(WORD.findall(query.lower()))
+    def _bm25_corpus(self) -> "_BM25":
+        """The word index over every searchable block, rebuilt when a page changes (pages are cached, so this
+        is cheap to check)."""
+        pages = [p for p in self.graph.pages() if p.name not in UNSEARCHED]
+        key = tuple((p.name, p.digest) for p in pages)
+        if self._bm25 is None or self._bm25.key != key:
+            docs = [(b, WORD.findall(f"{p.name} {b.text}".lower())) for p in pages for b in p.searchable
+                    if not b.text.startswith(("Learned: ", "Corrected: "))]
+            self._bm25 = _BM25(key, docs)
+        return self._bm25
+
+    def _keyword_search(self, query: str, limit: int, min_cover: float = 0.0) -> list[dict]:
+        """BM25 over block words. min_cover: the share of the query's distinct words a block must contain,
+        so one common word alone ("lights") does not pull in every note that mentions it."""
+        terms = list(dict.fromkeys(WORD.findall(query.lower())))
         if not terms:
             return []
-        scored: list[tuple[float, Block]] = []
-        for page in self.graph.pages():
-            for b in page.blocks:
-                words = set(WORD.findall(f"{page.name} {b.text}".lower()))
-                hit = len(terms & words)
-                if hit:
-                    scored.append((hit / len(terms), b))
-        scored.sort(key=lambda s: -s[0])
-        return [{"page": b.page, "text": b.text, "score": round(s, 3)} for s, b in scored[:limit]]
+        return [{"page": b.page, "text": b.text, "score": round(s, 3)}
+                for s, b in self._bm25_corpus().top(terms, limit, min_cover)]
 
     def link_graph(self) -> dict:
         pages = self.graph.pages()
@@ -203,7 +261,7 @@ class KBIndex:
             nodes[key] = {"id": key, "label": p.name, "journal": p.is_journal,
                           "jarvis": key.startswith("jarvis/"), "blocks": len(p.blocks),
                           "updated": int(p.path.stat().st_mtime)}  # seconds: how fresh the page is
-            for target in p.links:
+            for target in {self.graph.resolve(t, set(names)) for t in p.links}:  # [[people]] -> jarvis/people
                 if target not in names and target not in nodes:
                     nodes[target] = {"id": target, "label": target, "journal": False,
                                      "jarvis": target.startswith("jarvis/"), "blocks": 0}

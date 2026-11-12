@@ -22,6 +22,21 @@ _OFFER = re.compile(
     r"let me know|feel free|if you(?:'d| would)? like|is there anything else|anything else|i can also|"
     r"happy to help|hope (?:this|that) helps|just say the word|should you need)", re.I)
 _SIGNOFF = re.compile(r"^(?:—|-)?\s*(?:J\.?A\.?R\.?V\.?I\.?S\.?|your (?:faithful )?assistant)\W*$", re.I)
+_SIR_MID = re.compile(r",\s*sir(?=[\s.,;:?!…]|$)")  # "Very good, sir." "Done, sir: ..." (lower case: not "Sir Walter")
+_SIR_LEAD = re.compile(r"(^\W*|[.!?…]\s+)Sir,\s*")
+
+
+def limit(source: Source, wit: int = 1) -> int:
+    """Sentences a reply may keep: one more at the playful wit level (persona/wit.py), room for the quip."""
+    return MAX_SENTENCES[source] + (wit >= 2)
+
+
+def address(text: str, word: str = "sir") -> str:
+    """Swap the hub's own "sir" for the configured form of address ("" drops it). The model is told the same."""
+    if word == "sir" or "sir" not in text.lower():
+        return text
+    text = _SIR_MID.sub(f", {word}" if word else "", text)
+    return _SIR_LEAD.sub(lambda m: m[1] + (f"{word[:1].upper()}{word[1:]}, " if word else ""), text)
 
 
 def _clean(sentence: str) -> str:
@@ -50,14 +65,14 @@ def split(text: str) -> tuple[list[str], str]:
     return [p for p in parts if p], text[last:]
 
 
-def tidy(text: str, source: Source) -> str:
+def tidy(text: str, source: Source, wit: int = 1) -> str:
     if "```" in text:  # code on the HUD stays exactly as written
         return text.strip()
     done, rest = split(text)
     out: list[str] = []
     for s in [*done, rest]:
         s = _clean(s)
-        if len(out) < MAX_SENTENCES[source] and _keep(s, len(out)):
+        if len(out) < limit(source, wit) and _keep(s, len(out)):
             out.append(s)
     return " ".join(out)
 
@@ -65,8 +80,8 @@ def tidy(text: str, source: Source) -> str:
 class SentenceGate:
     """Wraps a stream sink: passes on whole, cleaned sentences, drops offers, stops at the cap."""
 
-    def __init__(self, emit: Callable[[str], None], source: Source) -> None:
-        self.emit, self.source = emit, source
+    def __init__(self, emit: Callable[[str], None], source: Source, wit: int = 1, word: str = "sir") -> None:
+        self.emit, self.source, self.max, self.word = emit, source, limit(source, wit), word
         self.buf, self.kept, self.raw = "", 0, False
 
     def feed(self, piece: str) -> None:
@@ -91,7 +106,7 @@ class SentenceGate:
         self.buf, self.kept, self.raw = "", 0, False
 
     def _say(self, sentence: str) -> None:
-        s = _clean(sentence)
-        if self.kept < MAX_SENTENCES[self.source] and _keep(s, self.kept):
+        s = address(_clean(sentence), self.word)
+        if self.kept < self.max and _keep(s, self.kept):
             self.emit(("" if self.kept == 0 else " ") + s)
             self.kept += 1

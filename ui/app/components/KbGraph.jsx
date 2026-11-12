@@ -1,6 +1,6 @@
 "use client";
 
-// 3D knowledge-graph of the Logseq KB. Loaded client-only (next/dynamic, ssr: false)
+// 3D knowledge-graph of the Obsidian vault (the KB). Loaded client-only (next/dynamic, ssr: false)
 // from Hud.jsx. Pages touched by JARVIS light up by tool kind: reads cyan, tasks green, writes amber,
 // erases red, blocked/failed pink. In the explorer a picked page keeps its neighbourhood bright and dims the rest,
 // search matches stand out, and pages changed lately glow brighter than ones untouched for a month. With `agent`,
@@ -110,6 +110,9 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
     const narrow = window.matchMedia("(max-width: 1000px)").matches;
     const lit = new Map(); // id -> { kind, at }
     const adj = new Map(); // id -> Set of linked ids
+    // The HUD's small map names only its strongest pages (most links, then most blocks); the rest stay unnamed
+    // unless lit. The explorer names everything. null = name every page.
+    let named = null;
     let stopped = false;
 
     // Page names as real DOM text (CSS2D) so they render sharp at any zoom.
@@ -261,6 +264,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
         n.__tag?.classList.toggle("match", hit === true);
         n.__tag?.classList.toggle("fresh", fresh > 1);
         n.__tag?.classList.toggle("lit", !!L);
+        n.__tag?.classList.toggle("quiet", !!named && !named.has(n.id) && !L);
         for (const k of RANK) n.__tag?.classList.toggle(k, L?.kind === k);
         if (L) {
           const t = (now - L.at) / 1000;
@@ -317,6 +321,11 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
           if (!adj.has(e.target)) adj.set(e.target, new Set());
           adj.get(e.source).add(e.target);
           adj.get(e.target).add(e.source);
+        }
+        if (!interactive) {
+          // journal (date) pages only when there aren't five other pages to name
+          const score = (n) => (adj.get(n.id)?.size || 0) * 4 + Math.sqrt(n.blocks || 0) - (n.journal ? 1000 : 0);
+          named = new Set([...nodes].sort((a, b) => score(b) - score(a)).slice(0, 5).map((n) => n.id));
         }
         focusOn(live.current.selected);
         onStats?.({ pages: nodes.length, links: edges.length });

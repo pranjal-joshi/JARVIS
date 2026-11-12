@@ -116,6 +116,8 @@ class Policy:
                 d = Decision("allow", "", "self-scoped")  # JARVIS's own notes and journal
             else:
                 d = Decision(self.defaults.get(tool.risk.value, "ask"), "", f"default {tool.risk.value}")
+        if d.action == "allow" and d.rule != "grant" and getattr(tool, "confirm", ""):
+            d = Decision("ask", tool.confirm, "confirm")  # the tool always asks (registry.Tool.confirm)
         if d.action == "allow" and audit is not None and (over := self._over_budget(tool, audit)):
             return Decision("deny", over, "budget")
         return d

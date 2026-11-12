@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.events.bus import Event
 from jarvis_hub.guard.validate import best_name, resolver
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
@@ -38,7 +38,7 @@ def _obj(props: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": props, "required": required}
 
 
-def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> None:
+def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -> None:
 
     async def kb_search(args: dict, ctx: ToolCtx) -> str:
         hits = await index.search(str(args.get("query", "")), int(args.get("limit", 6)))
@@ -54,7 +54,8 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
         page = graph.page(str(args.get("page", "")))
         if page is None:
             return missing_page(graph, str(args.get("page", "")), "read_page")
-        body = "\n".join(f"- {b.text}" for b in page.blocks)
+        prose = "\n\n".join(b.text for b in page.prose)  # headings and paragraphs, then the bullets
+        body = "\n".join(([prose] if prose else []) + [f"- {b.text}" for b in page.blocks])
         return UNTRUSTED + f"# {page.name}\n{body}"[:6000]
 
     async def kb_tasks(args: dict, ctx: ToolCtx) -> str:
@@ -228,7 +229,7 @@ def register_kb_tools(reg: ToolRegistry, graph: LogseqGraph, index: KBIndex) -> 
                        "from_page": {"type": "string", "description": "optional: only from this page"}},
                       ["match", "to_page"]), Risk.WRITE, kb_move_item))
 
-def missing_page(graph: LogseqGraph, name: str, tool: str) -> str:
+def missing_page(graph: ObsidianVault, name: str, tool: str) -> str:
     """An error a small model can act on: the closest page names, or where to look instead."""
     near = graph.similar_pages(name)
     if near:
@@ -285,7 +286,7 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9']+", text.split("\n")[0].lower()))
 
 
-def same_memory(graph: LogseqGraph, fact: str) -> tuple[str, str] | None:
+def same_memory(graph: ObsidianVault, fact: str) -> tuple[str, str] | None:
     """(first line, page) of a memory that says the same as `fact`: one has nearly all the other's words."""
     new = _words(fact)
     if len(new) < 3:
@@ -300,12 +301,12 @@ def same_memory(graph: LogseqGraph, fact: str) -> tuple[str, str] | None:
     return None
 
 
-def _today_title(graph: LogseqGraph) -> str:
+def _today_title(graph: ObsidianVault) -> str:
     from jarvis_hub.kb.graph import journal_title
     return journal_title(date.today())
 
 
-def recent_memory(graph: LogseqGraph, limit: int = 20) -> list[dict]:
+def recent_memory(graph: ObsidianVault, limit: int = 20) -> list[dict]:
     """Recent jarvis/ blocks and #jarvis journal entries, newest files first, for the UI."""
     pages = [p for p in graph.pages()
              if p.name.lower().startswith("jarvis/") or p.is_journal]

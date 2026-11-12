@@ -161,12 +161,12 @@ class NoIndex:
 
 
 def test_correct_memory_replaces_the_wrong_fact_and_keeps_the_rest(tmp_path):
-    from jarvis_hub.kb.graph import LogseqGraph
+    from jarvis_hub.kb.graph import ObsidianVault
     from jarvis_hub.kb.tools import register_kb_tools
     from jarvis_hub.mcp.registry import ToolCtx
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     for fact in ("The user's wife's name is Tanika.", "Wife's name is Zanika.", "My name is Pranjal"):
-        g.write_jarvis_page("jarvis/people", f"{fact}\n  learned:: [[Nov 3rd, 2026]]")
+        g.write_jarvis_page("jarvis/people", f"{fact}\n  learned:: [[2026-11-03]]")
         g.append_journal(f"Learned: {fact} (see [[jarvis/people]]) #jarvis")
     reg = ToolRegistry()
     register_kb_tools(reg, g, NoIndex())
@@ -189,9 +189,9 @@ def test_a_correction_is_not_captured_as_a_new_fact():
 
 
 def test_search_returns_the_memory_page_a_question_names(tmp_path):
-    from jarvis_hub.kb.graph import LogseqGraph
+    from jarvis_hub.kb.graph import ObsidianVault
     from jarvis_hub.kb.index import KBIndex
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.write_jarvis_page("jarvis/family", "Today is Pranav's birthday - he's my nephew")
     g.write_jarvis_page("jarvis/dates", "The user's son Chiku's birthday is 13 May.")
     g.write_jarvis_page("jarvis/events", "Diwali is on 8th Nov.")
@@ -208,10 +208,10 @@ def test_search_returns_the_memory_page_a_question_names(tmp_path):
 
 # ---------- memory that stays right ----------
 def kb(tmp_path):
-    from jarvis_hub.kb.graph import LogseqGraph
+    from jarvis_hub.kb.graph import ObsidianVault
     from jarvis_hub.kb.tools import register_kb_tools
     from jarvis_hub.mcp.registry import ToolCtx
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     reg = ToolRegistry()
     register_kb_tools(reg, g, NoIndex())
     ctx = ToolCtx(EventBus(), Source.WEB, "r")

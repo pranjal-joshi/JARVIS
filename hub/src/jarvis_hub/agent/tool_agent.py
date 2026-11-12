@@ -15,7 +15,7 @@ from jarvis_hub.agent.claims import ACTION_CLAIM, KINDS, claimed_kind, kind_of
 from jarvis_hub.agent.fastpath import FastPaths
 from jarvis_hub.agent.fastpath import Plan as FastPlan
 from jarvis_hub.agent.plan import plan_steps
-from jarvis_hub.agent.style import SentenceGate, tidy
+from jarvis_hub.agent.style import SentenceGate, address, tidy
 from jarvis_hub.agent.tool_select import Ranking, ToolSelector
 from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
@@ -28,7 +28,7 @@ from jarvis_hub.guard.policy import Decision as PolicyDecision
 from jarvis_hub.guard.policy import Policy
 from jarvis_hub.llm.client import LLMClient, LLMError, RateLimited
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
-from jarvis_hub.persona.jarvis import SYSTEM_PROMPT, source_hint
+from jarvis_hub.persona.jarvis import source_hint, system_prompt
 from jarvis_hub.voice.session import PendingTool, Sessions, answer
 
 log = logging.getLogger(__name__)
@@ -186,6 +186,14 @@ class ToolAgent:
         self.selector = selector  # narrows the tools offered to local models; None = offer them all
         self.sessions = sessions  # satellite conversations; None = no spoken confirmations
         self.voice_confirm = voice_confirm  # approval risks a satellite user may confirm by saying yes
+        # seconds a satellite's HUD/phone approval may take, in the background; 0 = the request waits for it
+        self.async_approval_s: float = 0
+        # LLM_ESCALATE_MODEL: the bigger model a stuck turn (or one tool selection is unsure about) goes to
+        self.escalate: str = ""
+        self.wit = None  # persona/wit.py: the humour level, per satellite; None = always the default (dry)
+        self.address = "sir"  # how JARVIS addresses the user ("" = no form of address)
+        self.preview = None  # (tool, args) -> what an approval card shows of the effect (approval/preview.py)
+        self.escalate_below: float = 0.0
         self._tasks: set[asyncio.Task] = set()  # background expert answers
         self.context_tokens = context_tokens  # the model's window; 0 = don't trim
         self.fast = fast  # requests answered by code, no model call (agent/fastpath.py)
@@ -263,7 +271,8 @@ class ToolAgent:
         if states and not self._is_claude() and (reply := await self._capture(said, turn)):
             return reply
         hint = CORRECT_HINT if corrects else FACT_HINT if states else ""
-        convo = [{"role": "system", "content": SYSTEM_PROMPT + "\n" + source_hint(source) + self._known()}]
+        convo = [{"role": "system", "content": system_prompt(self._wit(turn), self.address) + "\n"
+                  + source_hint(source) + self._known()}]
         convo += [dict(m) for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
         for m in reversed(convo):
             if m["role"] == "user":
@@ -316,6 +325,11 @@ class ToolAgent:
                 bare = i > 0 and bool(BARE_SAVE.match(steps[i]))  # "...then save it to my notes"
                 outcome = await self._loop(convo or _part_convo(base, steps, i, t.parts, carry), t, part=steps[i],
                                            budget=PART_STEPS, only=NOTE_WRITES if bare else None)
+                # a part an earlier one already did ("tell me X, then notify me with it": the model notified in
+                # the first part) calls nothing and restates that outcome; saying it twice reads as two actions
+                if not t.halt and not any(c["tool_calls"] for c in t.loops[-1]["calls"]) and _restates(outcome, t.parts):
+                    log.info("part %d only restated an earlier part: %.80s", i + 1, outcome)
+                    outcome = ""
                 # what this part's tools returned goes to the parts after it ("search X, then save it")
                 carry += [m for m in t.loops[-1]["convo"][len(base):] if m.get("tool_calls") or m["role"] == "tool"]
             convo, t.changed, t.done = None, t.changed or before, t.done | kinds
@@ -341,6 +355,10 @@ class ToolAgent:
             t.ranking = await self.ranked([{"role": "user", "content": part}] if part else convo)
         if t.hide:
             t.ranking.tools = [x for x in t.ranking.tools if x.name not in t.hide]
+        start = list(convo)  # as it came in: a turn sent to the bigger model starts from here
+        if self._can_escalate(t) and self.escalate_below and t.ranking.scores \
+                and t.ranking.best[1] < self.escalate_below:
+            self._escalate(t, f"tool selection unsure (best {t.ranking.best[0]} {t.ranking.best[1]:.2f})")
         offered = t.ranking.tools
         schemas = [tool.openai_schema() for tool in offered]
         # for the trace: convo is kept by reference, so it ends as the model last saw it
@@ -356,7 +374,8 @@ class ToolAgent:
             t.must = "a note write"
         for step in range(budget):
             streamed = []
-            gate = SentenceGate(lambda x: (streamed.append(x), t.on_text(x)), t.source) \
+            gate = SentenceGate(lambda x: (streamed.append(x), t.on_text(x)), t.source, self._wit(t),
+                                self.address) \
                 if t.on_text and not part else None
             _fit(convo, schemas, self._context())
             try:
@@ -412,6 +431,10 @@ class ToolAgent:
                     # Small models sometimes write a tool call or result as text instead of calling
                     # the tool. Nothing ran, so never pass that on as if it had: ask once more.
                     log.warning("model wrote tool markup as text: %.200s", text)
+                    if faked and self._can_escalate(t) and not t.changed:  # twice: the bigger model tries afresh
+                        self._escalate(t, "the model wrote tool calls as text")
+                        t.calls_made, t.repeats = set(), 0
+                        return await self._loop(start, t, part, budget, only)
                     if faked:
                         t.halt = "fail"
                         return self._reply(t, "My apologies, sir, I couldn't carry that out. Nothing was changed.")
@@ -440,7 +463,7 @@ class ToolAgent:
                     return self._reply(t, "Done, sir." if t.changed else
                                        "I looked into it, sir, but couldn't put an answer together. Shall I try again?"
                                        if t.called else "Sorry, sir, I didn't catch that.")
-                return self._reply(t, tidy(text, t.source))
+                return self._reply(t, tidy(text, t.source, self._wit(t)))
             asked = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": [],
                      **({"_claude": msg["_claude"]} if msg.get("_claude") else {})}
             answers, final, done = [], None, []
@@ -477,7 +500,8 @@ class ToolAgent:
                         prompt, tool.name, args, call.get("id", ""), [*convo, asked, *answers],
                         time.time() + self.sessions.window_s,
                         {**t.chain, "done": list(t.parts), "said": t.said, "heard": t.heard,
-                         "tainted": list(t.tainted)} if t.chain and t.parts is not None else None))
+                         "tainted": list(t.tainted), "read_outside": list(t.read_outside)}
+                        if t.chain and t.parts is not None else None))
                     t.halt = "ask"  # the rest of a request with several parts waits for the answer
                     return self._reply(t, prompt)
                 if not isinstance(prep, str) and prep[0].origin in SLOW_ORIGINS and t.source is Source.SATELLITE:
@@ -490,6 +514,12 @@ class ToolAgent:
                     else:
                         self._background(tool, args, approved_by, t)
                         return self._reply(t, "Working on it, sir. I'll tell you when the answer is in.")
+                if not isinstance(prep, str) and self._approve_later(prep[0], prep[1], t, hold):
+                    # A satellite can't approve and Home Assistant won't wait minutes for the HUD: the card
+                    # goes to the phone and HUD, this turn ends, and the result is announced when decided.
+                    t.halt = "ask"
+                    return self._reply(t, f"I've asked on your phone and the HUD before I {_describe(*prep)}, "
+                                          "sir. I'll tell you once it's done.")
                 result = prep if isinstance(prep, str) else await self._approve_and_run(*prep, t, hold)
                 asked["tool_calls"].append(call)
                 answers.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
@@ -511,7 +541,11 @@ class ToolAgent:
             if final is not None:
                 return self._reply(t, final)
             t.bus.publish(Event("thinking", t.source, t.request_id, {"step": step + 1}))
-        # no automatic hand-off to a bigger model: Claude only when the user asks for it
+        if self._can_escalate(t) and not t.changed:  # nothing was done yet: the bigger model tries it afresh
+            self._escalate(t, "the model went in circles")
+            t.calls_made, t.repeats = set(), 0
+            return await self._loop(start, t, part, budget, only)
+        # Claude only when the user asks for it
         claude = " Or say \"ask Claude\" and I'll put it to Claude." if any(
             x.name == "ask_claude" for x in self.visible()) else ""
         t.halt = "fail"
@@ -536,6 +570,7 @@ class ToolAgent:
             c = p.chain
             t.said, t.heard = c["said"], c["heard"]  # what the checks on the later parts go by
             t.tainted.extend(c["tainted"])  # outside text read before the pause still counts
+            t.read_outside.extend(c.get("read_outside", []))
             return await self._chain(c["base"], c["steps"], t, start=c["i"], done=c["done"], convo=convo)
         return await self._loop(convo, t)
 
@@ -595,11 +630,32 @@ class ToolAgent:
         return [{"role": "assistant", "content": "", "tool_calls": [call]},
                 {"role": "tool", "tool_call_id": "look-1", "content": result}]
 
+    def _can_escalate(self, t: "_Turn") -> bool:
+        return bool(self.escalate) and not t.use_model and not t.escalated and \
+            self.escalate != getattr(self.llm, "model", "") and not t.dry_run
+
+    def _escalate(self, t: "_Turn", why: str) -> None:
+        """Send the rest of this turn to the bigger model (LLM_ESCALATE_MODEL); the picker stays put."""
+        log.info("escalating to %s: %s", self.escalate, why)
+        t.use_model, t.escalated, t.model = self.escalate, True, self.escalate
+        t.trace.append({"tool": "", "decision": "escalate", "rule": why, "why": f"sent to {self.escalate}"})
+        t.bus.publish(Event("llm_escalated", t.source, t.request_id, {"to": self.escalate, "why": why}))
+
     async def _chat(self, convo: list[dict], schemas: list[dict], gate, t: "_Turn") -> dict:
         """One model call. Rate limited: switch to the fallback model (the HUD's picker follows, with an
-        alert in the chat) and make the same call there, once."""
-        ask = lambda: (self.llm.chat(convo, schemas, on_text=_speakable_stream(gate.feed))  # noqa: E731
-                       if gate else self.llm.chat(convo, schemas))
+        alert in the chat) and make the same call there, once. A turn sent to the bigger model that can't reach
+        it carries on with the selected one."""
+        def ask():
+            extra = {"model": t.use_model} if t.use_model else {}
+            return (self.llm.chat(convo, schemas, on_text=_speakable_stream(gate.feed), **extra)
+                    if gate else self.llm.chat(convo, schemas, **extra))
+        if t.use_model:
+            try:
+                return await ask()
+            except (RateLimited, LLMError) as e:
+                log.warning("escalation model unavailable, back to %s: %s", getattr(self.llm, "model", ""), e)
+                t.use_model, t.model = "", str(getattr(self.llm, "model", ""))
+                t.trace.append({"tool": "", "decision": "escalate-failed", "rule": str(e)[:120], "why": ""})
         try:
             return await ask()
         except RateLimited as e:
@@ -740,6 +796,10 @@ class ToolAgent:
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0, "route": "fast", "intent": plan.intent}))
         results = []
         for tool, args in tools:
+            if self._approve_later(tool, args, t):  # a satellite never waits on the HUD (a new skill, say)
+                t.route, t.intent, t.halt = "fast", plan.intent, "ask"
+                return self._reply(t, f"I've sent that to your phone and the HUD to approve, sir: "
+                                      f"{_describe(tool, args)}. I'll tell you once it's done.")
             result = await self._approve_and_run(tool, args, t)
             body = _unfence(result)
             if body is None or body.startswith("ERROR"):
@@ -764,16 +824,43 @@ class ToolAgent:
 
     def _background(self, tool: Tool, args: dict, approved_by: str, t: "_Turn") -> None:
         async def work() -> None:
-            result = await self._run(tool, args, approved_by, t)
-            body = _unfence(result) or result
-            text = body if not body.startswith("ERROR") else \
-                f"I'm afraid {tool.model_name.replace('_', ' ')} failed, sir. {body[6:].strip()}"
-            if self.sessions and t.session:
-                self.sessions.record(t.session, "", text)
-            t.bus.publish(Event("announce", Source.SATELLITE, t.request_id, {"text": text, "kind": "answer"}))
-        task = asyncio.get_running_loop().create_task(work())
+            self._announce(tool, await self._run(tool, args, approved_by, t), t)
+        self._spawn(work())
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.get_running_loop().create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _announce(self, tool: Tool, result: str, t: "_Turn", done: str = "") -> None:
+        """Say a background result on the satellite. done: the line for an action whose output is no answer."""
+        body = _unfence(result) or result
+        text = (f"I'm afraid {tool.model_name.replace('_', ' ')} failed, sir. {body[6:].strip()}"
+                if body.startswith("ERROR") else done or body)
+        text = address(text, self.address)
+        if self.sessions and t.session:
+            self.sessions.record(t.session, "", text)
+        t.bus.publish(Event("announce", Source.SATELLITE, t.request_id, {"text": text, "kind": "answer"}))
+
+    def _approve_later(self, tool: Tool, args: dict, t: "_Turn", hold: str = "") -> bool:
+        """A satellite request that needs a HUD/phone approval: ask in the background and return True (the turn
+        ends now); the action runs and is announced once approved. False: decide inline as usual."""
+        if t.source is not Source.SATELLITE or not self.async_approval_s or t.dry_run:
+            return False
+        d = self.policy.decide(tool, args, t.source, self.audit)
+        if not (d.action == "ask" or hold and d.action in ("allow", "dry-run")):
+            return False
+
+        async def work() -> None:
+            approved_by = await self._approve(tool, args, t, hold, timeout=self.async_approval_s, quiet=True)
+            if approved_by.startswith("ERROR"):
+                why = "the approval timed out" if "(timeout)" in approved_by else "you turned it down"
+                self._announce(tool, "", t, f"I've left it, sir: {why} ({_describe(tool, args)}).")
+                return
+            result = await self._run(tool, args, approved_by, t)
+            self._announce(tool, result, t, "" if tool.risk is Risk.READ else f"Done, sir: {_describe(tool, args)}.")
+        self._spawn(work())
+        return True
 
     def _prepare(self, call: dict) -> tuple[Tool, dict] | str:
         """The tool and its arguments, or an ERROR that tells the model what to do instead."""
@@ -809,7 +896,8 @@ class ToolAgent:
             return approved_by
         return await self._run(tool, args, approved_by, t)
 
-    async def _approve(self, tool: Tool, args: dict, t: "_Turn", hold: str = "") -> str:
+    async def _approve(self, tool: Tool, args: dict, t: "_Turn", hold: str = "", timeout: float | None = None,
+                       quiet: bool = False) -> str:
         """Who let this run ("policy", "web", "phone", "grant"...), or an ERROR when nobody did.
         hold: why a hook wants a human to decide (e.g. outside text in the arguments)."""
         name = tool.name  # audit, events and approvals use the internal name
@@ -833,10 +921,11 @@ class ToolAgent:
         if d.action == "allow":
             return {"default": "policy", "self-scoped": "policy:self-scoped", "grant": "grant"}.get(
                 d.rule.split(" ")[0], f"policy:{d.rule}")
-        if t.source is Source.SATELLITE:  # a satellite can't approve: say where to, and read it back
+        if t.source is Source.SATELLITE and not quiet:  # a satellite can't approve: say where to, read it back
             t.on_event({"say": f"Please approve on your phone or the HUD: {_describe(tool, args)}."})
         decision = await self.gate.request(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk,
-                                           arguments=args, reason=d.why, says=_describe(tool, args))
+                                           arguments=args, reason=d.why, says=_describe(tool, args),
+                                           timeout=timeout, preview=self.preview(tool, args) if self.preview else None)
         if decision.approved:
             return decision.by
         status = "timeout" if decision.by == "timeout" else "denied"
@@ -856,7 +945,7 @@ class ToolAgent:
                               "dry-run")
         else:
             try:
-                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id, via=t.via))
+                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id, via=t.via, session=t.session or ""))
                 status = "error" if output.startswith("ERROR") else "ok"
             except Exception as e:
                 log.exception("tool %s failed", name)
@@ -884,9 +973,13 @@ class ToolAgent:
         hint = f" Did you mean: {', '.join(near)}?" if near else " Answer without it, or say you can't do that."
         return f"ERROR: there is no tool called {name!r}.{hint}"
 
+    def _wit(self, t: "_Turn") -> int:
+        return self.wit.level(t.session or "") if self.wit else 1
+
     def _reply(self, t: "_Turn", text: str) -> str:
         if t.parts is not None:  # one part's outcome: _chain replies once, for every part
             return text
+        text = address(text, self.address)
         if t.trace_session:  # for "remember it" next turn
             self._last.pop(t.trace_session, None)
             self._last[t.trace_session] = {"seen": [o[:2500] for o in t.seen[-3:]],
@@ -944,6 +1037,7 @@ class _Turn:
     heard: str = ""  # the user's words this conversation (slot checks)
     seen: list[str] = field(default_factory=list)  # tool outputs this turn
     tainted: list[str] = field(default_factory=list)  # outside text this turn (web, messages, files)
+    read_outside: list[str] = field(default_factory=list)  # what outside text was read ("your note X", "a web page")
     trace: list[dict] = field(default_factory=list)  # policy decisions, for the HUD's "why" panel
     via: str = ""  # provenance for memories saved this turn
     route: str = "model"  # fast | memory | confirm | model
@@ -955,6 +1049,8 @@ class _Turn:
     ranking: Ranking | None = None  # which tools the request matched, and how closely
     called: bool = False  # some tool ran this turn
     calls_made: set = field(default_factory=set)  # (name, arguments) already called: no repeats
+    use_model: str = ""  # this turn's model when it was sent to the bigger one (LLM_ESCALATE_MODEL)
+    escalated: bool = False  # sent once already: never twice
     repeats: int = 0
     parts: list[str] | None = None  # outcomes of the parts done so far, while a request with several runs
     chain: dict | None = None  # the part running now: {"base", "steps", "i"} (kept with a spoken confirmation)
@@ -1048,6 +1144,20 @@ _DONE = {
     "adb_key": lambda a: f"pressed {str(a.get('key', '')).replace('_', ' ')} on your phone",
     "notify": lambda a: f"sent the notification \"{a.get('text')}\"",
 }
+
+
+def _restates(outcome: str, earlier: list[str]) -> bool:
+    """outcome says again what an earlier part's outcome said: most of its words are in them, or it repeats
+    most of one of them (and adds a remark of its own)."""
+    def words(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in ("sir", "the", "and", "with")}
+    mine = words(outcome)
+    if not mine:
+        return False
+    if any((theirs := words(e)) and len(mine & theirs) / len(theirs) >= 0.8 for e in earlier):
+        return True
+    seen = words(" ".join(earlier))
+    return bool(seen) and len(mine & seen) / len(mine) >= 0.6
 
 
 def _part_convo(base: list[dict], steps: list[str], i: int, done: list[str],

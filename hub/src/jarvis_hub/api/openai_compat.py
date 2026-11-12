@@ -4,6 +4,7 @@ the hub acts only through its own allow-listed tools and approval gate."""
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
@@ -18,6 +19,7 @@ from jarvis_hub.config import Source
 from jarvis_hub.voice.speakable import for_ear, to_speech
 from jarvis_hub.voice.spoken import symbols
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1")
 MODEL_ID = "jarvis"
 SESSION_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")  # X-Jarvis-Session: the HUD's id for a conversation
@@ -32,6 +34,36 @@ class ChatRequest(BaseModel):
     model: str = MODEL_ID
     messages: list[ChatMessage]
     stream: bool = False
+    user: str | None = None  # OpenAI's end-user field: a satellite layer may put the device or room here
+    metadata: dict | None = None
+
+
+# Which satellite (or room) is talking is the voice layer's job (Home Assistant, Wyoming); the hub only keeps
+# one conversation per id it is given, so a pending "Shall I go ahead?" in one room can't be answered in another.
+# Checked in this order; nothing = one shared conversation ("default").
+ID_HEADERS = ("x-satellite-id", "x-ha-device-id", "x-device-id")
+ID_FIELDS = ("satellite_id", "device_id", "conversation_id")
+_seen_shapes: set[tuple] = set()
+
+
+def satellite_id(request: Request, body: ChatRequest) -> str:
+    for h in ID_HEADERS:
+        if v := request.headers.get(h, "").strip():
+            return v
+    meta = body.metadata or {}
+    for f in ID_FIELDS:
+        if isinstance(meta.get(f), str | int) and str(meta[f]).strip():
+            return str(meta[f]).strip()
+    return (body.user or "").strip()
+
+
+def _log_shape(request: Request, body: ChatRequest) -> None:
+    """Once per shape: what identifying fields a voice client sends (names only), so the right one can be used."""
+    shape = (tuple(sorted(h for h in request.headers if h.startswith("x-"))),
+             tuple(sorted((body.metadata or {}).keys())), body.user is not None)
+    if shape not in _seen_shapes:
+        _seen_shapes.add(shape)
+        log.info("satellite request: x-headers %s, metadata keys %s, user field %s", *shape)
 
 
 def _text(content) -> str:
@@ -55,7 +87,9 @@ async def chat(body: ChatRequest, request: Request,
     trace = request.headers.get("x-jarvis-session", "")
     trace = f"{source}-{trace}" if SESSION_ID.match(trace) else None
     if source is Source.SATELLITE:  # one conversation per satellite, kept by the hub (see voice/session.py)
-        session = "satellite:" + (request.headers.get("x-satellite-id") or "default")[:64]
+        _log_shape(request, body)
+        sid = re.sub(r"[^A-Za-z0-9_.:-]", "_", satellite_id(request, body))[:64]
+        session = "satellite:" + (sid or "default")
         if messages and messages[-1]["role"] == "user":  # spoken: "work slash AI Studio" -> "work/AI Studio"
             messages[-1]["content"] = symbols(messages[-1]["content"])
         messages = request.app.state.sessions.merge(session, messages)

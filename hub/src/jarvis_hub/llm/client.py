@@ -79,51 +79,55 @@ class LLMClient:
         """The selected model is on another server (LLM_ENDPOINTS), often a rate-limited cloud one."""
         return self.model in self._remote
 
-    def _route(self) -> tuple[httpx.AsyncClient, str]:
-        """The server and model id for the selected model."""
-        return self._remote.get(self.model, (self._http, self.model))
+    def _route(self, model: str | None = None) -> tuple[httpx.AsyncClient, str]:
+        """The server and model id for the selected model (or `model`, a picker name)."""
+        model = model or self.model
+        return self._remote.get(model, (self._http, model))
 
     async def chat(self, messages: list[dict], tools: list[dict] | None = None,
-                   on_text: Callable[[str], None] | None = None) -> dict:
+                   on_text: Callable[[str], None] | None = None, model: str | None = None) -> dict:
         """Return the assistant message dict (content and/or tool_calls).
-        With on_text, the reply is streamed and on_text gets the content so far as it grows."""
-        if self.model.startswith("claude-"):
+        With on_text, the reply is streamed and on_text gets the content so far as it grows.
+        model: a picker name to use for this call only (a turn sent to a bigger model); None = the selected one."""
+        name = model or self.model
+        if name.startswith("claude-"):
             if self._claude is None:
                 raise LLMError("a Claude model is selected but ANTHROPIC_API_KEY is not set")
             try:
-                return await self._claude.chat(self.model, messages, tools, on_text)
+                return await self._claude.chat(name, messages, tools, on_text)
             except anthropic.APIError as e:
                 raise LLMError(f"Claude request failed: {type(e).__name__}: {getattr(e, 'message', e)}") from e
-        http, model_id = self._route()
+        http, model_id = self._route(name)
+        remote = name in self._remote
         body = {"model": model_id, "messages": messages, **sampling(model_id), **self._extra,
-                **self._per_model.get(self.model, {})}
+                **self._per_model.get(name, {})}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
         if on_text is not None:
             try:
-                return await self._stream(body, on_text)
+                return await self._stream(body, on_text, name)
             except LLMError as e:
                 # a cloud server (Groq) answers 400 when the model's tool call doesn't parse: it's sampled, so ask
                 # once more; Ollama answers 500. Then answer without tools.
-                cloud = "400" in str(e) and self.remote
+                cloud = "400" in str(e) and remote
                 if not tools or not ("500" in str(e) or cloud):
                     raise
                 if cloud:
                     log.warning("the model's tool call didn't parse (%s); asking again", e)
                     try:
-                        return await self._stream(body, on_text)
+                        return await self._stream(body, on_text, name)
                     except LLMError as again:
                         if "400" not in str(again):
                             raise
                 log.warning("tool call unparseable; retrying without tools")
                 return await self._stream({k: v for k, v in body.items() if k not in ("tools", "tool_choice")},
-                                          on_text)
+                                          on_text, name)
         try:
             r = await http.post("/chat/completions", json=body)
             if r.status_code == 429:
-                raise RateLimited(self.model, _retry_s(r.headers))
-            if r.status_code == 400 and tools and self.remote and "tool_use_failed" in r.text:
+                raise RateLimited(name, _retry_s(r.headers))
+            if r.status_code == 400 and tools and remote and "tool_use_failed" in r.text:
                 log.warning("the model's tool call didn't parse (%s); asking again", r.text[:200])
                 r = await http.post("/chat/completions", json=body)  # sampled again; a 400 again falls through
                 if r.status_code == 400 and "tool_use_failed" in r.text:
@@ -161,12 +165,12 @@ class LLMClient:
         except (httpx.HTTPError, ValueError, KeyError) as e:
             raise LLMError(f"JSON request failed: {e}") from e
 
-    async def _stream(self, body: dict, on_text: Callable[[str], None]) -> dict:
+    async def _stream(self, body: dict, on_text: Callable[[str], None], model: str | None = None) -> dict:
         content, calls = "", {}  # tool calls arrive in pieces keyed by index
         try:
-            async with self._route()[0].stream("POST", "/chat/completions", json={**body, "stream": True}) as r:
+            async with self._route(model)[0].stream("POST", "/chat/completions", json={**body, "stream": True}) as r:
                 if r.status_code == 429:
-                    raise RateLimited(self.model, _retry_s(r.headers))
+                    raise RateLimited(model or self.model, _retry_s(r.headers))
                 r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line.startswith("data:") or line.strip() == "data: [DONE]":

@@ -21,7 +21,7 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.automation.notify import Notifier
 from jarvis_hub.config import Settings, Source
 from jarvis_hub.events.bus import Event, EventBus
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
 log = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ def report_page(j: dict) -> tuple[str, str]:
 
 
 class Jobs:
-    def __init__(self, s: Settings, graph: LogseqGraph, notifier: Notifier | None, bus: EventBus,
+    def __init__(self, s: Settings, graph: ObsidianVault, notifier: Notifier | None, bus: EventBus,
                  seen_file: Path | None = None) -> None:
         self.s, self.graph, self.notifier, self.bus = s, graph, notifier, bus
         self.skills: list[str] = []  # skills a job may use, as the bridge reports them

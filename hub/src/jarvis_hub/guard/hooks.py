@@ -7,7 +7,13 @@ place with one shape, so new ones are a function, not a change to the loop.
 
 Taint: text from outside (web pages, notifications, messages, files) is recorded as it arrives. A
 write or send whose arguments carry that text needs a human, so a web page or a message can't
-quietly become an action or a memory: the one thing that makes wider read access safe."""
+quietly become an action or a memory: the one thing that makes wider read access safe.
+
+Outside text also covers your notes outside jarvis/ and Home Assistant's data (a clipped page or a calendar
+invite can say "turn off every light"). Once a turn has read any, a change whose arguments the user's own words
+don't account for (a name, a room, a number they never said) needs a human too, even when it quotes nothing.
+"Turn off the study lamp" after a look at the house is the user's own request and runs; "all lights" after
+reading a clipping nobody asked to act on is held. Voice stays usable and the page can't pick the target."""
 
 import re
 from collections.abc import Callable
@@ -216,13 +222,99 @@ def taint(tool, args, t) -> Verdict | None:
     return None
 
 
+_ARG_FILLER = set("""a an the and or of to in on at for by with from my me i it its this that these those all
+every any some please now then off up down out over into is are be set turn switch""".split())
+
+
+def _stem(w: str) -> str:
+    return w[:-1] if len(w) > 3 and w.endswith("s") else w
+
+
+def ungrounded(tool, args: dict, heard: str) -> list[str]:
+    """Words and numbers in a change's arguments the user never said ("all lights" when they asked what a page
+    says). Values a schema lists (enum: media keys, on/off) are choices, not text, and are skipped."""
+    said = {_stem(w) for w in _WORDS.findall(heard.lower())}
+    said |= {d for w, d in _NUMBER_WORDS.items() if w in said}
+    props = (tool.parameters or {}).get("properties", {})
+    out: list[str] = []
+
+    def look(key, value):
+        spec = props.get(key, {})
+        if isinstance(value, bool) or value is None or "enum" in spec or "enum" in (spec.get("items") or {}):
+            return
+        if isinstance(value, list | tuple):
+            for v in value:
+                look(key, v)
+            return
+        if isinstance(value, int | float):
+            value = str(int(value)) if float(value).is_integer() else str(value)
+        if isinstance(value, str):
+            for w in _WORDS.findall(value.lower().replace("_", " ")):
+                if w not in _ARG_FILLER and _stem(w) not in said and w.lstrip("0") not in said:
+                    out.append(w)
+    for k, v in args.items():
+        look(k, v)
+    return list(dict.fromkeys(out))
+
+
+def after_outside_text(tool, args, t) -> Verdict | None:
+    """A change made after this turn read outside text (a note of yours, Home Assistant's data, a web page, a
+    message), with something in its arguments the user didn't say: a human decides. JARVIS's own notes and
+    journal and a notification to you stay free."""
+    read = getattr(t, "read_outside", None)
+    # changes only: a search or a question to Claude (external) already asks under the default policy, and the
+    # taint check above holds one that would carry the outside text off this machine
+    if not read or tool.risk not in (Risk.WRITE, Risk.DESTRUCTIVE) or tool.self_scoped or tool.name == "notify":
+        return None
+    if not (extra := ungrounded(tool, args, getattr(t, "heard", "") or getattr(t, "said", ""))):
+        return None  # everything it acts on, the user said: their request, not the page's
+    what = ", ".join(dict.fromkeys(read))
+    return Verdict("ask", f'"{" ".join(extra[:4])}" wasn\'t in your request, and this comes after reading '
+                          f"{what[:100]}, which may carry instructions that aren't yours")
+
+
+NOTE_LINE = re.compile(r"^\[([^\]\n]+)\] .*$", re.M)  # kb_search: "[page] text"
+TASK_PAGE = re.compile(r" \[([^\]\n]+)\]$", re.M)  # kb_tasks: "TODO text [page]"
+PAGE_HEAD = re.compile(r"^# (.+)$", re.M)  # kb_read_page: "# page"
+SOURCE_LABEL = {"web_search": "a web search", "fetch_page": "a web page", "adb_notifications": "phone notifications",
+                "adb_sms_read": "text messages", "adb_call_log": "the call log", "fs_read": "a file",
+                "fs_list": "a folder listing", "win_ps_read": "PowerShell output", "win_ps_run": "PowerShell output"}
+
+
+def _outside(page: str) -> bool:
+    return not page.strip().lower().startswith("jarvis/")
+
+
+def _note_text(tool, output: str) -> tuple[list[str], str]:
+    """(pages outside jarvis/ this note read showed, their text) for the note tools; ([], "") otherwise."""
+    if tool.name == "kb_search":
+        lines = [(m[1], m[0]) for m in NOTE_LINE.finditer(output) if _outside(m[1])]
+        return [p for p, _ in lines], "\n".join(text for _, text in lines)
+    if tool.name == "kb_read_page" and (m := PAGE_HEAD.search(output)) and _outside(m[1]):
+        return [m[1].strip()], output
+    if tool.name == "kb_tasks":
+        pages = [p for p in TASK_PAGE.findall(output) if _outside(p)]
+        return pages, output if pages else ""
+    return [], ""
+
+
 def record_taint(tool, args, output: str, t) -> str:
-    if tool.name in TAINT_SOURCES or "__" in tool.name and tool.risk is Risk.READ and len(output) > 200:  # MCP reads
+    read = getattr(t, "read_outside", None)
+    pages, text = _note_text(tool, output)
+    if pages:
+        t.tainted.append(text)
+        if read is not None:
+            read.extend(f"your note {p}" for p in dict.fromkeys(pages))
+    elif tool.name in TAINT_SOURCES or "__" in tool.name and tool.risk is Risk.READ and len(output) > 200:  # MCP reads
         t.tainted.append(output)
+        if read is not None:
+            read.append(SOURCE_LABEL.get(tool.name, "Home Assistant's data" if tool.origin == "homeassistant"
+                                         else tool.model_name))
     return output
 
 
-PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, clock_time, keep_links, own_words, slots, taint]
+PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, clock_time, keep_links, own_words, slots, taint,
+                            after_outside_text]
 POST_TOOL: list[Callable] = [record_taint]
 
 

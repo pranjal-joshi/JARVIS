@@ -32,7 +32,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from jarvis_hub.approval.gate import Risk
-from jarvis_hub.kb.graph import JARVIS_NS, JOURNAL_FILE, LINK, PROP, LogseqGraph, journal_title
+from jarvis_hub.kb.graph import JARVIS_NS, JOURNAL_FILE, LINK, PROP, ObsidianVault, journal_title
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
 log = logging.getLogger(__name__)
@@ -135,13 +135,16 @@ def _clean(text: str) -> str:
 
 
 def _day_of(name: str) -> date | None:
-    try:
-        return datetime.strptime(re.sub(r"(\d+)(st|nd|rd|th)", r"\1", name), "%b %d, %Y").date()
-    except ValueError:
-        return None
+    """The day a journal page name stands for: "2026-11-05" (older notes: "Nov 5th, 2026")."""
+    for text, fmt in ((name.strip(), "%Y-%m-%d"), (re.sub(r"(\d+)(st|nd|rd|th)", r"\1", name), "%b %d, %Y")):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+    return None
 
 
-def gather(graph: LogseqGraph, traces, since: date, until: date) -> list[Bit]:
+def gather(graph: ObsidianVault, traces, since: date, until: date) -> list[Bit]:
     """Journal lines and saved memories from the days since..until, and the user's own statements to JARVIS."""
     bits: list[Bit] = []
     for page in graph.pages():
@@ -309,10 +312,12 @@ class Report:
     woke: bool = True  # false: nothing new, no model was asked
     seconds: float = 0.0
     error: str = ""
+    # each change on its own, for the morning digest's undo: {op: added|merged|updated|dropped, text, was}
+    changes: list[dict] = field(default_factory=list)
 
 
 class Dreamer:
-    def __init__(self, graph: LogseqGraph, traces, llm, state_file: Path, at: str = "03:00", days: int = 3,
+    def __init__(self, graph: ObsidianVault, traces, llm, state_file: Path, at: str = "03:00", days: int = 3,
                  bus=None, on_change=None, model: str = "") -> None:
         self.graph, self.traces, self.llm, self.state_file = graph, traces, llm, state_file
         self.model = model  # the model a dream asks ("" = the chat model of the moment)
@@ -496,6 +501,8 @@ class Dreamer:
             if e_i is not None and op in ("supersede", "merge"):
                 old = entries[e_i][1]
                 props["score"] = f"{max(float(old.get('score', 0) or 0), float(props['score'])):.2f}"
+                rep.changes.append({"op": "updated" if op == "supersede" else "merged", "text": text,
+                                    "was": entries[e_i][0], "was_props": dict(old)})
                 entries[e_i] = (text, props)
                 (rep.updated if op == "supersede" else rep.merged).append(text)
             else:
@@ -506,9 +513,11 @@ class Dreamer:
                 entries.append((text, props))
                 new += 1
                 (rep.merged if op == "merge" and len(cites) > 1 else rep.added).append(text)
+                rep.changes.append({"op": "merged" if op == "merge" and len(cites) > 1 else "added", "text": text})
             used.update(cites)
             changes += 1
         entries.sort(key=lambda e: -float(e[1].get("score", 0) or 0))
+        rep.changes += [{"op": "dropped", "text": t, "was_props": p} for t, p in entries[MAX_KEPT:]]
         return entries[:MAX_KEPT]
 
     def _write(self, entries: list[tuple[str, dict]]) -> None:
@@ -541,6 +550,37 @@ class Dreamer:
         self._save()
         if self.on_change and (rep.added or rep.merged or rep.updated):
             self.on_change()
+
+    def undo(self, i: int) -> dict:
+        """Take back one change of the last dream (the morning digest): an added fact goes, an updated or merged
+        one gets its old wording back, a dropped one returns. Undoing it again redoes it."""
+        changes = (self.state.get("last") or {}).get("changes") or []
+        if not 0 <= i < len(changes):
+            raise IndexError("no such change")
+        c = changes[i]
+        entries = self.kept()
+        at = next((n for n, (t, _) in enumerate(entries) if t == c["text"]), None)
+        was = next((n for n, (t, _) in enumerate(entries) if t == c.get("was")), None)
+        if not c.get("undone"):
+            if c["op"] == "dropped":
+                entries.append((c["text"], c.get("was_props") or {}))
+            elif c.get("was") and at is not None:
+                entries[at] = (c["was"], c.get("was_props") or entries[at][1])
+            elif at is not None:
+                entries.pop(at)
+        else:
+            if c["op"] == "dropped" and at is not None:
+                entries.pop(at)
+            elif c.get("was") and was is not None:
+                entries[was] = (c["text"], entries[was][1])
+            elif c["op"] != "dropped" and at is None:
+                entries.append((c["text"], {}))
+        c["undone"] = not c.get("undone")
+        self._write(entries)
+        self._save()
+        if self.on_change:
+            self.on_change()
+        return c
 
     # ---------- schedule ----------
     def due(self, now: datetime | None = None) -> bool:

@@ -11,7 +11,7 @@ from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import EventBus
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.mcp.registry import Tool, ToolRegistry
 from jarvis_hub.tools.utility import zone_for
 
@@ -19,7 +19,7 @@ TODAY = date(2026, 11, 2)
 
 
 def fp(tmp_path, home=""):
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.write_jarvis_page("jarvis/location", "- User lives in Pune, Keshavnagar area.")
     return FastPaths(g, home)
 

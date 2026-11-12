@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.tools.utility import _public_host, safe_eval
 
 
@@ -23,7 +23,7 @@ def test_private_addresses_are_refused():
 
 
 def test_forget_only_touches_jarvis_pages(tmp_path):
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.write_jarvis_page("jarvis/prefs", "likes tea")
     g.append_to_user_page("Groceries", "milk")
     with pytest.raises(ValueError):
@@ -34,7 +34,7 @@ def test_forget_only_touches_jarvis_pages(tmp_path):
 
 
 def test_delete_items_and_clear_memory(tmp_path):
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.append_to_user_page("Groceries", "- milk\n  - semi-skimmed\n- eggs\n- TODO buy bread")
     g.write_jarvis_page("jarvis/a", "x")
     g.write_jarvis_page("jarvis/b", "y")
@@ -53,7 +53,7 @@ def test_delete_items_and_clear_memory(tmp_path):
 
 
 def test_delete_memory_items_without_a_page(tmp_path):
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.write_jarvis_page("jarvis/people", "- Chivu's wife is Chinu\n- Rohan likes cricket")
     g.append_journal("Learned: Chivu has a son (see [[jarvis/people]]) #jarvis")
     g.append_journal("Chivu called me today")  # the user's own line, not a memory

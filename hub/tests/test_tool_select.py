@@ -9,7 +9,7 @@ from jarvis_hub.approval.gate import ApprovalGate, Risk
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import EventBus
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.tools import missing_page
 from jarvis_hub.llm.client import LLMError
 from jarvis_hub.mcp.registry import Tool, ToolRegistry
@@ -126,7 +126,7 @@ def test_errors_say_what_to_do_next():
 
 
 def test_missing_page_names_the_closest_pages(tmp_path):
-    g = LogseqGraph(str(tmp_path))
+    g = ObsidianVault(str(tmp_path))
     g.append_to_user_page("Groceries", "milk")
     g.write_jarvis_page("jarvis/preferences", "tea")
     assert "Closest: Groceries" in missing_page(g, "Grocery", "read_page")

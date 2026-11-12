@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from jarvis_hub import __version__
 from jarvis_hub.agent.base import EchoAgent
 from jarvis_hub.agent.fastpath import FastPaths
+from jarvis_hub.persona.wit import Wit, register_wit_tool
 from jarvis_hub.agent.tool_select import ToolSelector
 from jarvis_hub.agent.tool_agent import ToolAgent
 from jarvis_hub.api import control, events_ws, hooks, openai_compat
@@ -20,7 +21,7 @@ from jarvis_hub.audit.traces import TraceStore
 from jarvis_hub.config import get_settings
 from jarvis_hub.events.bus import EventBus
 from jarvis_hub.guard.policy import Policy
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.automation.skill_tools import register_skill_tools
 from jarvis_hub.automation.skills import SkillEngine
@@ -34,6 +35,8 @@ from jarvis_hub.automation.notify import Notifier, register_notify_tool
 from jarvis_hub.automation.watchers import WatchEngine
 from jarvis_hub.tools.reminders import Reminders, register_reminder_tools
 from jarvis_hub.tools.utility import register_utility_tools
+from jarvis_hub.tools.widget import register_widget_tool
+from jarvis_hub.approval.preview import preview as approval_preview
 from jarvis_hub.llm.client import LLMClient
 from jarvis_hub.mcp.registry import ToolRegistry
 from jarvis_hub.voice.announce import Announcer
@@ -88,11 +91,12 @@ async def lifespan(app: FastAPI):
         if saved in s.llm_choices():
             st.llm.model = saved
     embedder = LLMClient(s.embed_base_url, s.llm_api_key.get_secret_value(), s.embed_model)
-    st.kb_graph = LogseqGraph(s.kb_graph_dir, s.kb_graph_name)
+    st.kb_graph = ObsidianVault(s.kb_graph_dir, s.kb_graph_name)
     st.kb_index = KBIndex(st.kb_graph, embedder, s.embed_model, s.qdrant_url, s.kb_min_score)
     register_kb_tools(st.tools, st.kb_graph, st.kb_index)
     st.timers = register_utility_tools(st.tools, st.kb_graph, st.kb_index,
                                        Path(s.hub_db_path).with_name("timers.json"))
+    register_widget_tool(st.tools)
     if register_expert_tool(st.tools, s):
         log.info("ask_claude/ask_opencode enabled via %s", s.expert_bridge_url)
     if register_device_tools(st.tools, s):
@@ -127,8 +131,18 @@ async def lifespan(app: FastAPI):
         fast=FastPaths(st.kb_graph, s.home_place) if s.fast_paths else None, policy=st.policy,
         traces=st.traces, fallback=s.llm_fallback_model if s.llm_fallback_model in s.llm_choices() else "",
         on_switch=st.llm_choice_file.write_text, remote_context_tokens=s.llm_remote_context_tokens)
+    st.wit = Wit(Path(s.hub_db_path).with_name("wit.json"), s.jarvis_wit)
+    register_wit_tool(st.tools, st.wit)
     if isinstance(st.agent, ToolAgent):
         st.agent._bus = st.bus
+        st.agent.wit, st.agent.address = st.wit, s.jarvis_address.strip()
+        st.agent.preview = lambda tool, args: approval_preview(tool, args, st.kb_graph)
+        st.agent.async_approval_s = s.voice_async_approval_s  # satellite approvals finish in the background
+        if s.llm_escalate_model in s.llm_choices():  # a stuck or unsure turn goes to the bigger model
+            st.agent.escalate, st.agent.escalate_below = s.llm_escalate_model, s.llm_escalate_below
+        elif s.llm_escalate_model:
+            log.warning("LLM_ESCALATE_MODEL %r is not a model choice (LLM_MODEL, LLM_MODELS, LLM_ENDPOINTS)",
+                        s.llm_escalate_model)
         st.gate.on_orphan = st.agent.run_orphan  # approvals left over from before a restart
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))

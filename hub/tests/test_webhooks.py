@@ -12,6 +12,9 @@ from jarvis_hub.api.hooks import Limiter, PER_HOOK, summarize
 def _skill(client, name="skills/Deploy done", match="github"):
     g = client.app.state.kb_graph
     g.append_to_user_page(name, f"trigger:: webhook\nmatch:: {match}\n\n- Tell me what was deployed.")
+    # written outside the skill tools: it waits as "changed" until approved in the HUD
+    assert client.app.state.skills.skills()[0]["changed"]
+    assert client.post(f"/v1/skills/{name}/enable", json={"enabled": True}, headers=auth("web-token")).status_code == 200
 
 
 def test_off_until_a_secret_exists(client):
@@ -90,5 +93,8 @@ def test_limits_and_summary():
     assert lim.allow("a", now=61)
     assert summarize("  hello\n world ") == "hello world"
     assert summarize({"zzz": 1}) == '{"zzz":1}'
+    # a lone message is the whole news: no "message=" for the model to copy into a notification
+    assert summarize({"message": "Amazon person at the door"}) == "Amazon person at the door"
+    assert summarize({"message": "hi", "status": "ok"}) == "message=hi; status=ok"
     assert summarize({"eventType": "build.complete", "resource": {"status": "succeeded"}}) == \
         "eventType=build.complete; resource.status=succeeded"

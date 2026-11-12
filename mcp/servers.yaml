@@ -4,7 +4,9 @@
 # First match wins. Tools that match nothing are never shown to the model.
 # MCP tool annotations may raise a tool's risk, never lower it.
 #   read        -> runs without asking
-#   write       -> needs approval from the web UI or phone
+#   write       -> runs and is audited under the default policy (policy/policy.yaml); asks when the turn read
+#                  outside text (a web page, a message, HA's data, a note of yours outside jarvis/) and its
+#                  arguments hold something you didn't say
 #   destructive -> needs approval from the web UI or phone (never from voice)
 
 servers:

@@ -217,3 +217,16 @@ def test_stated_facts_get_a_remember_hint(parts):
         asyncio.run(run(ToolAgent(llm, reg, gate, audit), bus, text=text))
         assert ("call remember" in llm.seen[0][-1]["content"]) is hinted, text  # rides on the user turn
         assert "call remember" not in llm.seen[0][0]["content"]  # the system prompt never changes
+
+
+def test_a_part_that_only_restates_an_earlier_one_is_dropped():
+    from jarvis_hub.agent.tool_agent import _restates
+    first = 'I\'ve sent the notification "Amazon person at the door", sir.'
+    assert _restates('Notification sent: "Amazon person at the door".', [first])
+    assert not _restates("The living room lights are on, sir.", [first])
+    assert not _restates("Done, sir.", [])
+    # the doorbell run: part 2 repeated part 1 and added a remark of its own
+    part1 = 'I\'ve sent the notification "The webhook says: Amazon person at the door", sir.'
+    part2 = ('Notification sent: "The webhook says: Amazon person at the door". Note: the HUD pop-up had a '
+             'connectivity error (device bridge unreachable), so it was delivered to the HUD rather than your laptop.')
+    assert _restates(part2, [part1])

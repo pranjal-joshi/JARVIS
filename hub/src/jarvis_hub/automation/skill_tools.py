@@ -12,9 +12,12 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.automation.skills import DAILY, EVERY, NS, RUN_SOURCE, TRIGGERS, SkillEngine
 from jarvis_hub.events.bus import Event
 from jarvis_hub.guard.validate import best_name, resolver
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault, frontmatter
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
+# making or changing a skill always asks: it runs later on its own, so text that steered the model into
+# writing one (a web page, a clipped note) would otherwise get a lasting foothold
+SKILL_CONFIRM = "a new or changed skill runs on its own later, so you approve its steps first"
 RUN_WAIT_S = 90  # run_skill waits this long for the answer; a longer run's answer shows on the HUD
 TRIGGER_HELP = ("manual (only when asked: 'run the X skill'), schedule (with schedule like 07:30 or every 2h), "
                 "device_joined, device_left, timer_done, notification, call_incoming, watch, "
@@ -41,10 +44,9 @@ def _steps(instructions: str) -> list[str]:
 
 
 def _text(trigger: str, match: str, schedule: str, steps: list[str]) -> str:
-    """A skill page: its properties, then each step as a block."""
-    props = [f"trigger:: {trigger}"] + ([f"match:: {match}"] if match else []) + \
-        ([f"schedule:: {schedule}"] if schedule else [])
-    return "\n".join(props) + "\n\n" + "\n".join(f"- {s}" for s in steps) + "\n"
+    """A skill page: its properties as frontmatter (Obsidian's Properties), then each step as a block."""
+    props = {"trigger": trigger, **({"match": match} if match else {}), **({"schedule": schedule} if schedule else {})}
+    return frontmatter(props) + "\n" + "\n".join(f"- {s}" for s in steps) + "\n"
 
 
 def _listed(steps: list[str]) -> str:
@@ -78,6 +80,8 @@ def _check(trigger: str, schedule: str, steps: list[str]) -> str | None:
 
 
 def _state(s: dict) -> str:
+    if s["enabled"] and s.get("changed"):
+        return "changed outside JARVIS, waiting for your approval in the HUD"
     return "on" if s["enabled"] else "switched off"
 
 
@@ -89,7 +93,7 @@ def _when(s: dict) -> str:
     return f"runs on {s['trigger']}" + (f" matching {s['match']}" if s["match"] else "")
 
 
-def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGraph) -> None:
+def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: ObsidianVault) -> None:
     def find(name: str) -> dict | None:
         skills = engine.skills()
         names = [s["name"] for s in skills]
@@ -129,7 +133,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         if graph.page(page) is not None:
             return f"ERROR: there's already a skill called {page[len(NS):]!r}; change it with update_skill"
         graph.replace_page(page, _text(trigger, match, schedule, steps))
-        engine.set_enabled(page, True)  # a name switched off before and made again starts on
+        engine.set_enabled(page, True, pin=True)  # JARVIS wrote it: pinned and on (even a name once switched off)
         when = _when({"trigger": trigger, "schedule": schedule, "match": match})
         return f"Made the skill '{page[len(NS):]}', sir; it {when} and is on. Steps: {_listed(steps)}"
 
@@ -155,6 +159,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         if err := _check(trigger, schedule, steps):
             return err
         graph.replace_page(s["name"], _text(trigger, match, schedule, steps))
+        engine.pin(s["name"])  # JARVIS wrote this version
         when = _when({"trigger": trigger, "schedule": schedule, "match": match})
         return f"Changed the skill '{s['name'][len(NS):]}', sir; it {when}. Steps now: {_listed(steps)}"
 
@@ -163,6 +168,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         if s is None:
             return missing(str(args.get("name", "")))
         graph.trash_page(s["name"])
+        engine.pins.pop(s["name"].lower(), None)
         if s["name"].lower() in engine.disabled:  # a skill made again under this name starts on
             engine.disabled.discard(s["name"].lower())
             engine._save()
@@ -173,6 +179,9 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         if s is None:
             return missing(str(args.get("name", "")))
         on = args.get("enabled", True) not in (False, "false", "no", "off")
+        if on and s["changed"]:  # edited outside JARVIS: only the HUD can approve the new version
+            return (f"The skill '{s['name'][len(NS):]}' was changed outside JARVIS, sir, so it stays off until you "
+                    "approve the new version in the HUD (Skills, enable).")
         engine.set_enabled(s["name"], on)
         return f"Switched the skill '{s['name'][len(NS):]}' {'on' if on else 'off'}, sir."
 
@@ -181,6 +190,9 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
         if s is None:
             return missing(str(args.get("name", "")))
         name = s["name"][len(NS):]
+        if s["enabled"] and s["changed"]:
+            return (f"The skill '{name}' was changed outside JARVIS, sir; approve the new version in the HUD "
+                    "(Skills, enable) before it runs.")
         if not s["enabled"]:
             return f"The skill '{name}' is switched off, sir; say 'turn the {name} skill back on' first."
         if s["name"].lower() in engine._running:
@@ -218,14 +230,14 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: LogseqGr
     reg.add(Tool("create_skill", "builtin",
                  "Make a new skill: steps JARVIS carries out when asked (run_skill) or on a trigger. It is on at once.",
                  {"type": "object", "properties": {**named, **shape}, "required": ["name", "instructions"]},
-                 Risk.WRITE, create_skill, final_answer=True))
+                 Risk.WRITE, create_skill, final_answer=True, confirm=SKILL_CONFIRM))
     reg.add(Tool("update_skill", "builtin",
                  "Change a skill: add_steps adds steps at the end; instructions replaces all its steps; or a new "
                  "trigger or schedule. Give only what changes.",
                  {"type": "object", "properties": {**named, **shape,
                   "add_steps": {"type": "string", "description": "steps to add at the end, one per line"}},
                   "required": ["name"]},
-                 Risk.WRITE, update_skill, final_answer=True))
+                 Risk.WRITE, update_skill, final_answer=True, confirm=SKILL_CONFIRM))
     reg.add(Tool("delete_skill", "builtin", "Delete a skill (a copy is kept in the trash).",
                  {"type": "object", "properties": named, "required": ["name"]}, Risk.DESTRUCTIVE, delete_skill,
                  final_answer=True))

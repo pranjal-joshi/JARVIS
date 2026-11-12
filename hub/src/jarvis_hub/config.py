@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # where requests go when the selected model is rate limited (HTTP 429): the picker switches to it and
     # the HUD shows an alert; empty = no fallback (the user is told to try again)
     llm_fallback_model: str = ""
+    # a bigger model (a picker name: e.g. the fine-tuned LFM3 on the DGX) a turn is sent to when the selected
+    # small model goes in circles, or when tool selection is unsure (best match below LLM_ESCALATE_BELOW, 0 = only
+    # on failure). Only that turn: the picker stays where it is. Empty = never.
+    llm_escalate_model: str = ""
+    llm_escalate_below: float = 0.0
     # a model on another server (LLM_ENDPOINTS) gets at most this much context per request: a cloud free tier
     # counts tokens per minute (Groq about 8,000), so a smaller request means fewer rate limits; 0 = no cap
     llm_remote_context_tokens: int = 4000
@@ -79,6 +84,11 @@ class Settings(BaseSettings):
     home_place: str = ""
     # requests like "what time is it" or "set a timer" answered by code without the model
     fast_paths: bool = True
+    # JARVIS's humour: 0 plain, 1 dry (the usual), 2 playful. Changed by voice ("be more serious") or the HUD;
+    # this is the level it starts from and goes back to (persona/wit.py)
+    jarvis_wit: int = 1
+    # how JARVIS addresses the user: "sir", "ma'am", a name, or empty for none
+    jarvis_address: str = "sir"
 
     mcp_config: str = "../mcp/servers.yaml"
     # what may run without a human: rules, budgets, grants (guard/policy.py). Missing = APPROVAL_RISKS only.
@@ -116,6 +126,10 @@ class Settings(BaseSettings):
     voice_followup_s: float = 120  # a satellite's last turns are kept this long for follow-ups
     # approval risks a satellite user may give by saying "yes" (the rest wait for the HUD or phone)
     voice_confirm_risks: str = "external"
+    # an approval a satellite asks for (the HUD or phone decides): the turn ends at once ("I've asked on your
+    # phone") and the action runs, and is announced, when approved within this many seconds. 0 = the satellite
+    # request waits for the decision (up to APPROVAL_TIMEOUT_S), which Home Assistant may time out on
+    voice_async_approval_s: float = 600
     # what satellites announce unasked: timer, skill, call (background answers are always announced)
     voice_announce: str = "timer,skill,call"
     # Home Assistant REST (optional): HA_URL defaults to HA_MCP_URL without /api/mcp

@@ -11,6 +11,7 @@ import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import MonitorsPanel from "./MonitorsPanel";
 import JobBox from "./JobBox";
+import { Constellation, DreamDigest, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
 import { askToNotify, chime, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
 
@@ -211,6 +212,7 @@ export default function Hud() {
   const [state, setState] = useState("idle");
   const [analyser, setAnalyser] = useState(null);
   const [messages, setMessages] = useState([]);
+  const feed = useRef(new Set()); // the live parts (Live.jsx) listen to the one event stream through this
   const [input, setInput] = useState("");
   const [timeline, setTimeline] = useState([]);
   const [approvals, setApprovals] = useState([]);
@@ -306,6 +308,7 @@ export default function Hud() {
   const [settingsTab, setSettingsTab] = useState("webhooks");
   const [llmInfo, setLlmInfo] = useState(null); // { loaded, median_s }: the model badge
   const [hookSeq, setHookSeq] = useState(0); // bumps on hook events so open panels refresh
+  const notifiedRuns = useRef(new Set()); // skill runs whose notification is already in the chat
   const openOnly = (which) => { // one header dropdown at a time
     setSkillOpen(which === "skill"); setWatchOpen(which === "watch"); setSettingsOpen(which === "settings");
   };
@@ -467,6 +470,8 @@ export default function Hud() {
         ws.onmessage = (e) => {
           const ev = JSON.parse(e.data);
           if (ev.type === "subscribed") return setLink("online");
+          feed.current.forEach((f) => { try { f(ev); } catch (err) { console.error(err); } });
+          if (ev.type === "widget") setMessages((m) => [...m, { role: "widget", spec: ev.data }]); // drawn from the kit
           if (ev.type === "thinking") setState("thinking");
           if (ev.type === "llm_fallback") { // the model was rate limited: the hub moved to the fallback
             const d = ev.data || {};
@@ -495,7 +500,10 @@ export default function Hud() {
               note({ kind: "info", text: `⚙ dry run of "${ev.data.skill}" would have: ${(ev.data.would || []).join("; ") || "done nothing"}` });
             } else {
               const line = ev.data.text || "Done.";
-              setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.skill }]);
+              // a run that notified already has its 🔔 card in the chat: its reply only restates it, so it's
+              // spoken but not shown a second time
+              if (!notifiedRuns.current.delete(ev.request_id))
+                setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.skill }]);
               if (speakRef.current) speakRef.current(line);
             }
           }
@@ -519,6 +527,7 @@ export default function Hud() {
           }
           if (ev.type === "notify") {
             const line = `🔔 ${ev.data.title}: ${ev.data.text}`;
+            if (ev.request_id) notifiedRuns.current.add(ev.request_id);
             note({ kind: "info", text: line });
             setMessages((m) => [...m, { role: "assistant", text: line, skill: ev.data.origin || "notify" }]);
             notifySystem(ev.data.title, ev.data.text, ev.data.origin);
@@ -620,7 +629,7 @@ export default function Hud() {
         body: JSON.stringify({
           model: "jarvis",
           stream: true,
-          messages: history.filter((m) => m.role !== "alert").slice(-12)
+          messages: history.filter((m) => m.role !== "alert" && m.role !== "widget").slice(-12)
             .map((m) => ({ role: m.role, content: m.sent || m.text })),
         }),
       });
@@ -794,6 +803,7 @@ export default function Hud() {
         { label: "Knowledge graph", state: boot.graph },
       ]} />
     )}
+    <Toasts feed={feed} />
     {kbView === "max" && <KbExplorer version={kbVersion} context={context} onAdd={addContext} onClose={closeKb} />}
     <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
@@ -852,12 +862,13 @@ export default function Hud() {
                 <div className="tools-list wide" role="dialog" aria-label="Settings">
                   <div className="set-tabs" role="tablist">
                     {[["webhooks", "webhooks"], ["guard", "guard"], ["dev", `devices${devCount != null ? ` ${devCount}` : ""}`],
-                      ["tools", `tools ${status.tools?.length ?? ""}`]].map(([id, label]) => (
+                      ["wit", "wit"], ["tools", `tools ${status.tools?.length ?? ""}`]].map(([id, label]) => (
                       <button key={id} type="button" role="tab" aria-selected={settingsTab === id}
                         className={settingsTab === id ? "on" : ""} onClick={() => setSettingsTab(id)}>{label}</button>
                     ))}
                   </div>
                   {settingsTab === "webhooks" && <WebhooksPanel version={hookSeq} />}
+                  {settingsTab === "wit" && <WitPanel />}
                   {settingsTab === "guard" && <GuardPanel version={hookSeq} />}
                   {settingsTab === "dev" && <DevicesPanel onCount={setDevCount} version={hookSeq} />}
                   {settingsTab === "tools" && (
@@ -915,6 +926,7 @@ export default function Hud() {
       </section>
       <SystemConsole lines={consoleLines} active={shown.con} focused={shown.focus === "console"}
         pinned={pinned === "console"} onToggle={() => togglePin("console")} />
+      <LiveNote feed={feed} />
       </div>
 
       <section className="core reveal" style={{ "--i": 1 }}>
@@ -922,6 +934,7 @@ export default function Hud() {
           <div className="orb-wrap" {...(pinned ? { role: "button", tabIndex: 0, title: "Back to JARVIS (Esc)",
             onClick: () => setPinned(null), onKeyDown: (e) => e.key === "Enter" && setPinned(null) } : {})}>
             <Orb state={state} analyser={analyser} accent={accent} alert={approvals.length > 0} />
+            <Constellation feed={feed} />
           </div>
           <div className="state" data-state={state}>
             <span aria-hidden="true">{stateLabel}</span>
@@ -938,6 +951,7 @@ export default function Hud() {
             </div>
           )}
         </div>
+        <DreamDigest />
         <div className="approvals">
           {approvals.map((a) => {
             const out = leaving.has(a.approval_id);
@@ -947,6 +961,7 @@ export default function Hud() {
                 <div className="title">APPROVAL REQUIRED · {a.risk.toUpperCase()}</div>
                 <div className="tool">{a.says ? <>{a.says.charAt(0).toUpperCase() + a.says.slice(1)}</> : a.tool}</div>
                 {a.reason && <div className="reason">⚠ Held because it {a.reason}.</div>}
+                <Preview p={a.preview} />
                 <details>
                   <summary>{a.tool} · details</summary>
                   <pre>{JSON.stringify(a.arguments, null, 1)}</pre>
@@ -969,7 +984,9 @@ export default function Hud() {
           })}
         </div>
         <div className="chat" ref={chatRef}>
-          {messages.map((m, i) => <Message key={i} m={m} latest={i === messages.length - 1} />)}
+          {messages.map((m, i) => (m.role === "widget"
+            ? <Widget key={i} spec={m.spec} />
+            : <Message key={i} m={m} latest={i === messages.findLastIndex((x) => x.role !== "widget")} />))}
         </div>
         {/* the beam animates its own wrapper, so the entrance animation sits on the form */}
         {context.length > 0 && (

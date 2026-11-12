@@ -11,13 +11,13 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
 | Stack | hub, qdrant, ollama, ui, whisper, piper all up; hub healthy; all ports loopback-only | `docker compose ps`, curl |
 | Auth / routing | per-client tokens decide the source; events reach only that source; one-time WS tickets keep the token out of the browser | 19 hub tests |
 | Agent | real tool calling with qwen3.5:4b (thinking off), persona, KB lookups | chat via API and HUD |
-| Approval gate | `write` waits for HUD Approve/Deny; denied/timed-out calls never run; satellite token gets 403 on approvals | API run (deny → nothing written, approve → line written) and HUD click-through |
+| Approval gate | what policy.yaml holds (destructive, external; skills; writes after outside text) waits for HUD Approve/Deny; denied/timed-out calls never run; satellite token gets 403 on approvals | API run (deny → nothing written, approve → line written) and HUD click-through |
 | Audit | every call logged with source, risk, status, approver | `/v1/audit`, HUD timeline |
-| Logseq KB | file-graph read, tasks with SCHEDULED/DEADLINE, `jarvis/` memory + journal writes, user-page edits gated | tests + live |
+| Obsidian KB | vault read (folders = namespaces, daily notes in journals/), `- [ ]` tasks with ⏳/📅 dates, `jarvis/` memory + journal writes, user-page edits gated | tests + live |
 | Qdrant | nomic-embed-text embeddings, semantic search ("evening drink" → tea preference) | `/v1/kb/search` |
 | Prompt injection | "Untrusted Clipping" page: JARVIS reports the injected command and does not act | HUD |
 | Voice (hub path) | Piper TTS (4 s) → Whisper STT (3 s) round trip, exact transcript | curl |
-| HUD | orb, chat with typewriter, timeline (calls/results/recalls/audit), approval cards, memory panel with `logseq://` links, voice toggle, mic button, mobile layout, reduced motion | built-in browser |
+| HUD | orb, chat with typewriter, timeline (calls/results/recalls/audit), approval cards, memory panel with `obsidian://` links, voice toggle, mic button, mobile layout, reduced motion | built-in browser |
 | HA side | **not connected**, as you asked: no HA files or containers touched. Guide ready: [ha-setup.md](ha-setup.md) | `compose.ha.yaml` validates |
 
 ## Needs you (in this order)
@@ -32,8 +32,9 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
    (CC-BY-NC, non-commercial) in Model Catalogue so the ~2.4 GB weights download, and make the profile's
    consent/attestation choice if VoiceStudio asks. Until then the hub speaks with Piper ([voice/README.md](../voice/README.md)).
 4. **Mic in the HUD**: not tested overnight (no microphone in the automated browser). Try ◉ → speak → ■.
-5. **Your real Logseq graph**: set `KB_GRAPH_PATH` (and `KB_GRAPH_NAME`) in `.env` to your graph folder.
-   It must be a file-based graph ([decision 0001](decisions/0001-logseq-file-graph.md)).
+5. **Your Obsidian vault**: open `data/kb-graph` as a vault in Obsidian (*Open folder as vault*); set
+   `KB_GRAPH_NAME` to the vault name Obsidian shows so the HUD's *open in Obsidian* links work. A Logseq
+   graph converts with `scripts/kb/logseq_to_obsidian.py` ([decision 0002](decisions/0002-obsidian-vault.md)).
 
 ## Known issues / limits
 
@@ -42,13 +43,12 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
 - **Small-model judgement**: qwen3.5:2b is weaker than 4b. Seen once in testing: it wrote a fake
   `<tool_result>` claiming success instead of calling the tool. The hub now detects that, asks the model
   again once, and otherwise says nothing was changed. Expect occasional odd phrasing ("I drink tea…").
-- **Approvals from voice** block the HA request for up to 90 s while waiting for the HUD; HA may time out
-  first and speak an error even though the action then runs when approved. Phase 6 should return
-  "awaiting approval" immediately and confirm afterwards.
+- **Approvals from voice** no longer block the HA request: the satellite says "I've asked on your phone and
+  the HUD" at once, and announces the result when you decide (`VOICE_ASYNC_APPROVAL_S`, default 10 min). The
+  rest of a request with several parts doesn't run after such a pause.
 - **Hugging Face downloads were flaky** on this network: the Piper voice first arrived truncated
   (16 of 63 MB) and had to be re-fetched. If a Wyoming container logs `INVALID_PROTOBUF`,
   delete the file in its volume and restart it.
-- **Approval gate is in-memory**: pending approvals are lost if the hub restarts.
 - Image tags are pinned, but digests aren't locked yet: run `scripts/wsl/pin-digests.sh`.
 - Your existing ha-docker stack uses unpinned `:rc` / `:latest` tags (outside this repo; just flagging).
 
@@ -56,8 +56,8 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
 
 | Phase | Scope |
 |---|---|
-| 6 | Async approvals for voice; filesystem MCP (read-only, scoped folders), Desktop Commander (destructive-gated), SSH/Docker MCP for homelab (read-only first); approvals persisted in SQLite |
+| 6 | Filesystem MCP (read-only, scoped folders), Desktop Commander (destructive-gated), SSH/Docker MCP for homelab (read-only first); approvals persisted in SQLite |
 | 7 | Music Assistant + Sendspin BT bridge (usbipd dongle; check WSL BT reliability), ESP32-S3 satellite YAML with `hey_jarvis`, `on_tts_end` → `music_assistant.play_announcement` |
 | 8 | 3D knowledge graph panel (3d-force-graph) from `/v1/kb/graph`, lighting up `kb_retrieved` pages |
 | 9 | Phone tools (HA Companion notifications, later ADB MCP); R3F/GLSL orb, bloom, tool-call beams, passkey auth, Tailscale |
-| 10 | Proxmox migration guide (LXC vs VM, GPU passthrough, headless Logseq graph sync) |
+| 10 | Proxmox migration guide (LXC vs VM, GPU passthrough, headless Obsidian vault sync) |

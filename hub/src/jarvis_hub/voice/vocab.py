@@ -11,7 +11,7 @@ import re
 import time
 
 from jarvis_hub.audit.store import AuditStore
-from jarvis_hub.kb.graph import LogseqGraph
+from jarvis_hub.kb.graph import ObsidianVault
 
 VOCAB_PAGE = "jarvis/vocabulary"
 PEOPLE_TOOLS = ("adb_sms_send", "adb_whatsapp_send", "adb_call", "adb_contacts")
@@ -24,7 +24,7 @@ What's Jarvis Sir Monday Tuesday Wednesday Thursday Friday Saturday Sunday Today
 
 
 class Vocabulary:
-    def __init__(self, graph: LogseqGraph, audit: AuditStore, ttl_s: float = 60) -> None:
+    def __init__(self, graph: ObsidianVault, audit: AuditStore, ttl_s: float = 60) -> None:
         self.graph, self.audit, self.ttl_s = graph, audit, ttl_s
         self._names: list[str] = []
         self._at = 0.0
