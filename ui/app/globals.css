@@ -1596,9 +1596,28 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .wit-room.lv2 { color: var(--violet); }
 .wit-room button { background: none; border: 0; color: inherit; cursor: pointer; }
 
-@media (max-width: 700px) {
-  .widget { margin-left: 0; }
+/* a step's long text ellipsises inside the card instead of widening the grid it sits in */
+.job-main .job-steps { grid-template-columns: minmax(0, 1fr); }
+
+/* phones: the chat keeps its room, pop-ups span the screen under the header, and every control is a thumb target */
+@media (max-width: 720px) {
+  .widget { margin-left: 0; max-width: none; }
   .constellation { inset: -4% -4%; }
+  .c-node { min-height: 28px; }
+  .c-node span { max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
+  .toasts { left: 12px; right: 12px; width: auto; top: calc(max(10px, env(safe-area-inset-top)) + 48px); }
+  .toast { padding: 10px 40px 10px 12px; }
+  .toast > button { top: 2px; right: 2px; width: 36px; height: 36px; font-size: 16px; }
+  .away-chip { min-height: 36px; }
+  .away-list { max-height: 50dvh; }
+  .digest { flex: none; max-height: 30dvh; overflow: auto; }
+  .digest-cols { grid-template-columns: minmax(0, 1fr); }
+  .digest-head button { width: 36px; height: 36px; }
+  .digest .fact button, .wit-room button { min-height: 32px; min-width: 44px; }
+  .ln-body { grid-template-columns: minmax(0, 1fr); }
+  .ln-rail { flex-direction: row; flex-wrap: wrap; border-left: 0; border-top: 1px solid var(--panel-edge); padding: 6px 0 0; }
+  .wit-dial input { min-height: 32px; }
+  .pv-target { min-height: 26px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .widget, .toast, .c-node, .ln-lines li, .digest, .job-chip, .job-pill { animation: none !important; }
