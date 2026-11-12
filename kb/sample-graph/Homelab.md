@@ -1,0 +1,3 @@
+- Plan: move JARVIS to a [[Proxmox]] box later this year.
+- Services planned: [[Home Assistant]], [[Obsidian]] sync, Qdrant, Ollama.
+- [ ] Order a second NVMe drive for the [[Proxmox]] box 📅 2026-11-15

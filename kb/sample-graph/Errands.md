@@ -1,0 +1,3 @@
+- [ ] Renew car insurance ⏳ 2026-11-03
+- [ ] Replace the bedroom smoke detector battery
+- [x] Book AC servicing
