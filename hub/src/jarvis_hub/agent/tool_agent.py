@@ -76,7 +76,10 @@ BARE_SAVE = re.compile(
     r"(?:remember|save|note|store|keep|jot|record|log|add|put|write)"
     r"(?:\s+(?:it|that|this|those|these|them|all|everything|down|again|what you (?:got|found|said|have|read)"
     r"(?: earlier| before| above| there)?|the (?:url|link|key points|details|summary|above|results?|answer|"
-    r"info(?:rmation)?|page|article|facts?|gist)s?))*"
+    r"info(?:rmation)?|page|article|facts?|gist)s?"
+    # "these company information", "the web extracted info", "all these details": a few words, then what they are
+    r"|(?:all\s+)?(?:these|those|the|that|this)\s+(?:[\w-]+\s+){0,3}?(?:info(?:rmation)?|details?|results?|points?|"
+    r"facts?|summary|summaries|data|findings|list|answers?|notes?|records?)))*"
     r"(?:\s+(?:in|to|into|on)\s+(?:my |the |your )?\w+(?:\s+(?:page|notes?))?)?"
     r"(?:\s+(?:please|now|too|as well|for me|sir))*\W*$", re.I)
 NOTE_WRITES = frozenset({"kb_remember", "kb_journal", "kb_append_to_page"})

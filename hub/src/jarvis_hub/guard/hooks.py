@@ -45,7 +45,10 @@ TEXTBOOK = re.compile(
 # and journaled the conversation unasked.
 NOTE_WRITES = {"kb_journal", "kb_append_to_page"}
 NOTE_TOOLS = NOTE_WRITES | {"kb_remember"}
-ASKS_TO_SAVE = re.compile(r"\b(?:save|note|jot|journal|log|add|put|write|remember|record|keep|store|track)\b", re.I)
+# any form of the word: "I don't see it saved in notes" asks for the write as much as "save it" (it was refused)
+ASKS_TO_SAVE = re.compile(r"\b(?:sav(?:e[ds]?|ing)|notes?|noted|jot(?:ted)?|journal(?:ed)?|log(?:ged)?|add(?:ed)?|put|"
+                          r"writ(?:e|ten|ing)|remember(?:ed)?|record(?:ed)?|keep|kept|stor(?:e[ds]?|ing)|track(?:ed)?|"
+                          r"update[ds]?)\b", re.I)
 _PLAIN = set("""about after again also been before being from have here into just like more much only over said
 some than that their them then there these they this those very what when where which while will with would your
 user user's today sir jarvis""".split())
@@ -192,6 +195,11 @@ def keep_links(tool, args, t) -> Verdict | None:
     return Verdict("fix", "", fixed)
 
 
+def _root(w: str) -> str:
+    """The word without its ending, so "worked" is the "work" the user said and "companies" their "companys"."""
+    return re.sub(r"(?:ies|ys|ing|ed|es|s|ly)$", "", w) if len(w) > 4 else w
+
+
 def own_words(tool, args, t) -> Verdict | None:
     if tool.name not in NOTE_TOOLS:
         return None
@@ -199,10 +207,11 @@ def own_words(tool, args, t) -> Verdict | None:
     if tool.name in NOTE_WRITES and not ASKS_TO_SAVE.search(said):
         return Verdict("error", "ERROR: the user didn't ask you to write anything down. Answer them without it.")
     text = " ".join(str(v) for k, v in args.items() if k in ("text", "fact") and isinstance(v, str))
-    words = [w for w in _WORDS.findall(text.lower()) if len(w) > 3 and w not in _PLAIN]
-    known = set(_WORDS.findall((t.heard + " " + " ".join(t.seen)).lower()))
+    words = [_root(w) for w in _WORDS.findall(text.lower()) if len(w) > 3 and w not in _PLAIN]
+    known = {_root(w) for w in _WORDS.findall((t.heard + " " + " ".join(t.seen)).lower())}
     new = [w for w in words if w not in known]
-    if words and len(new) > max(2, len(words) // 3):
+    # a few new words are a fair rewording ("used to work" -> "formerly worked"); most of it new is made up
+    if words and len(new) > max(3, len(words) // 3):
         return Verdict("error", f"ERROR: {tool.model_name} would save words nobody said ({', '.join(new[:5])}). "
                                 "Save only what the user said or a tool returned; never your own knowledge.")
     return None

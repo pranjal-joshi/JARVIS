@@ -540,3 +540,23 @@ def test_a_save_part_that_only_talks_is_made_to_pick_a_note_write():
 async def _ran(ran, name, args):
     ran.append((name, args))
     return f"{name} ok"
+
+
+def test_notes_accept_other_words_for_saving_and_a_fair_rewording():
+    # 2026-11-13: these were refused, and the model went round in circles
+    from jarvis_hub.agent.tool_agent import BARE_SAVE
+    from jarvis_hub.guard.hooks import own_words
+    for said in ("save these company information", "save the web extracted info into relevant notes",
+                 "save all these details"):
+        assert BARE_SAVE.match(said), said
+    page = Tool("kb_append_to_page", "kb", "", {}, Risk.WRITE, None)
+
+    class T:
+        heard = "remember she used to work in couple of companys including xoriant, bridgenext and one2n all from pune"
+        said = "I dont see this company info already saved in notes"
+        seen = []
+
+    assert own_words(page, {"page": "Sanika", "text": "Sanika formerly worked at Xoriant, Bridgenext, and One2N, "
+                                                      "all based in Pune."}, T) is None
+    made_up = {"page": "Sanika", "text": "Xoriant is a Silicon Valley product engineering firm founded in 1990."}
+    assert "nobody said" in own_words(page, made_up, T).message  # still not the model's own knowledge
