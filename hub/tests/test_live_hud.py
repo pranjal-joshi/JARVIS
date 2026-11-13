@@ -76,20 +76,25 @@ def test_the_preview_rides_on_the_approval_card():
 # ---------- dream undo ----------
 def test_each_dream_change_can_be_undone_and_put_back(tmp_path):
     g = ObsidianVault(str(tmp_path))
+    g.write_jarvis_page("jarvis/family", "The user's wife is Tanika.\n  via:: said by you")
+    g.write_jarvis_page("jarvis/work", "My nephew Pranav lives in Bavdhan.")
     d = Dreamer(g, None, None, tmp_path / "dreams.json")
-    d._write([("The user's boiler is serviced on Saturdays.", {"score": "0.9"}),
-              ("The user's wife is Sanika.", {"score": "0.8"})])
+    kept = {t: (t, p) for t, p in d.kept()}
     d.state["last"] = {"started": time.time(), "changes": [
-        {"op": "added", "text": "The user's boiler is serviced on Saturdays."},
-        {"op": "updated", "text": "The user's wife is Sanika.", "was": "The user's wife is Tanika.", "was_props": {}},
-        {"op": "dropped", "text": "An old wifi hint.", "was_props": {"score": "0.1"}}]}
-    texts = lambda: [t for t, _ in d.kept()]  # noqa: E731
+        d._change("added", "The user's boiler is serviced on Saturdays.", "jarvis/home",
+                  "The user's boiler is serviced on Saturdays.", [], False),
+        d._change("updated", "The user's wife is Sanika.", "jarvis/family", "The user's wife is Sanika.",
+                  [kept["The user's wife is Tanika."]], False),
+        d._change("moved", "My nephew Pranav lives in Bavdhan.", "jarvis/family", "My nephew Pranav lives in Bavdhan.",
+                  [kept["My nephew Pranav lives in Bavdhan."]], False)]}
+    texts = lambda: {(p["page"], t) for t, p in d.kept()}  # noqa: E731
+    assert ("jarvis/family", "My nephew Pranav lives in Bavdhan.") in texts()
     d.undo(0)
-    assert "The user's boiler is serviced on Saturdays." not in texts()
+    assert not any("boiler" in t for _, t in texts())
     d.undo(1)
-    assert "The user's wife is Tanika." in texts() and "The user's wife is Sanika." not in texts()
+    assert ("jarvis/family", "The user's wife is Tanika.") in texts() and not any("Sanika" in t for _, t in texts())
     d.undo(2)
-    assert "An old wifi hint." in texts()
+    assert ("jarvis/work", "My nephew Pranav lives in Bavdhan.") in texts()
     d.undo(0)  # put back
-    assert "The user's boiler is serviced on Saturdays." in texts()
+    assert ("jarvis/home", "The user's boiler is serviced on Saturdays.") in texts()
     assert json.loads((tmp_path / "dreams.json").read_text())["last"]["changes"][0]["undone"] is False

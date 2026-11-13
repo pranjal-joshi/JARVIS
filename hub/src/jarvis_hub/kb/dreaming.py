@@ -17,16 +17,21 @@ The shape follows three systems that do this:
   relative dates absolute, replaces what was contradicted), a lock so two runs can't overlap, and a short
   index loaded into every session.
 
-Everything goes to jarvis/dreams (what is kept) and jarvis/dreams/diary (each night's report). Other pages
-are only read. Each rewrite of jarvis/dreams keeps the old page in .trash/."""
+What is kept are the facts on the memory pages (jarvis/people, family, work...): a dream adds to them, merges
+duplicates, replaces what was corrected and moves what is misfiled, each change undoable from the morning digest.
+There is no second copy: what rides in every conversation is read from those pages (context()), so a correction is
+never out of date there. Disagreements become questions, asked once and answered in the digest. Each night's
+report goes to jarvis/dreams/diary. (Before 14 Nov 2026 a separate jarvis/dreams page held the kept facts.)"""
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import math
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -46,11 +51,14 @@ WEIGHTS = {"relevance": 0.30, "frequency": 0.24, "diversity": 0.15, "recency": 0
 MIN_SCORE = 0.35  # a candidate below this isn't put to the model
 MAX_CANDIDATES = 12
 MAX_CHANGES, MAX_NEW = 6, 3  # per night (Hermes)
-MAX_KEPT = 40  # jarvis/dreams holds at most this many memories; the lowest-scored go first
-CONTEXT_CHARS = 700  # what rides in every conversation
+MAX_ENTRIES = 80  # shortcut: the model sees at most this many kept facts a night; page through them past that
+MAX_QUESTIONS = 50  # questions remembered (asked, answered, dismissed) so none is asked twice
+CONTEXT_CHARS = 1300  # what rides in every conversation (about 300 tokens): enough for every CORE page
+# who the user is: these pages ride in every conversation first, in this order; the newest of the rest after
+CORE = ("jarvis/people", "jarvis/family", "jarvis/location", "jarvis/home", "jarvis/work")
 HALF_LIFE_DAYS = 7
 SAME = 0.6  # share of words two texts must have in common to be the same thing
-TRUSTED_VIA = ("said by you", "corrected by you", "edited by you")
+TRUSTED_VIA = ("said by you", "corrected by you", "edited by you", "answered by you")
 SECRET = re.compile(r"\b(?:password|passcode|pin|otp|api[ _-]?key|token|secret|cvv|card number)\b\s*(?:is|:|=)", re.I)
 INSTRUCTION = re.compile(r"\b(?:ignore (?:all |the )?(?:previous|above)|system prompt|you are now|disregard)\b", re.I)
 STOP = set("""a an the and or but if then so to of in on at by for from with about as is are was were be been being
@@ -68,25 +76,33 @@ COMMAND = re.compile(r"(?i)^\W*(?:(?:hey |ok |okay |please |jarvis\W+)*)(?:remem
                      r"move|schedule|give me|list)\b")
 _DECORATION = re.compile(r"\s*\(see \[\[[^\]]+\]\]\)|\s*#jarvis\b|^(?:Learned|Corrected|Noted|Today):\s*", re.I)
 
-DEEP_PROMPT = """You consolidate a home assistant's memory of its user. You get what is kept now (E1, E2...) and
-new candidates from the last days (C1, C2...), each with where it came from. Decide what to keep:
-- add: a candidate worth keeping that nothing kept says yet. text: one plain sentence.
-- merge: candidates that say the same thing (and maybe a kept entry): one sentence for all of them.
-- supersede: a candidate that corrects or updates a kept entry: the corrected sentence replaces it.
+DEEP_PROMPT = """You tidy a home assistant's memory of its user. The memory is kept on topic pages: people, family,
+work, home, location, dates, preferences, projects, tools, terms, memory. You get the facts kept now (E1, E2...,
+each with its page) and new candidates from the last days that aren't kept yet (C1, C2...). Decide:
+- add: a candidate worth keeping that no fact says yet. text: one plain sentence; topic: its page.
+- merge: facts and/or candidates that say the same thing: one sentence replaces every one cited.
+- supersede: a candidate that corrects or updates a fact: entry: that fact (E3); text: the corrected sentence.
+- move: a fact on the wrong page (a relative on work, a job on family): entry: that fact; topic: the right page.
 - skip: chit-chat, one-off questions, things only true for a moment, guesses, and requests to the assistant
   (reminders, timers, messages, "remember to remind me..."): those are handled elsewhere, not memories.
 Keep what will still matter in a month: people and their names, dates, preferences, plans, projects, places.
 Write each text as a fact about the user ("The user's wife is Sanika."), with full dates that include the year
 ("on 3 November 2026"; never "today", "tomorrow" or a date without its year: each candidate shows the day it
 was said). Birthdays and anniversaries recur every year: give them without a year ("born on 13 May"). Use only names, numbers and dates that are in the cited candidates or entry; never add any.
-Every decision cites the candidates it rests on. themes: one or two sentences on what the user has been
-occupied with. questions: things that contradict each other or look wrong, as short questions to the user."""
+Every decision cites the facts and candidates it rests on (E and C ids). Change only what is duplicated, wrong,
+out of date or misfiled; leave a good fact alone. themes: one or two sentences on what the user has been
+occupied with. conflicts: pairs of ids (E or C) that cannot both be true: two names for one person, two dates
+for one birthday, two cities for one home. Facts that follow each other (an old job and a new one, a plan and its
+delay) or only say more are not conflicts. questions: only something unclear you can't settle from the facts, as a
+short question to the user; usually none."""
 DEEP_SCHEMA = {"type": "object", "properties": {
     "decisions": {"type": "array", "items": {"type": "object", "properties": {
-        "op": {"type": "string", "enum": ["add", "merge", "supersede", "skip"]},
+        "op": {"type": "string", "enum": ["add", "merge", "supersede", "move", "skip"]},
         "cites": {"type": "array", "items": {"type": "string"}},
         "entry": {"type": "string"},
+        "topic": {"type": "string"},
         "text": {"type": "string"}}, "required": ["op", "cites"]}},
+    "conflicts": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
     "themes": {"type": "string"},
     "questions": {"type": "array", "items": {"type": "string"}}},
     "required": ["decisions"]}
@@ -162,15 +178,7 @@ def gather(graph: ObsidianVault, traces, since: date, until: date) -> list[Bit]:
                 ours = "#jarvis" in b.text.lower() or "jarvis" in b.links
                 if (text := _clean(b.text)) and not COMMAND.match(text):
                     bits.append(Bit(text, day, "journal", not ours, page.name))
-        elif low.startswith(JARVIS_NS):
-            for b in page.blocks:
-                props = {m[1].lower(): m[2] for line in b.text.splitlines() if (m := PROP.match(line))}
-                day = _day_of(LINK.sub(lambda m: m[1], props.get("learned", "")).strip())
-                if not day or not since <= day <= until:
-                    continue
-                via = props.get("via", "").lower()
-                if (text := _clean(b.text)) and not COMMAND.match(text):
-                    bits.append(Bit(text, day, "memory", via.startswith(TRUSTED_VIA), page.name))
+        # the memory pages aren't candidates: they are what is kept (E1, E2...), tidied in place
     for said, ts in _said(traces, since, until):
         bits.append(Bit(said, datetime.fromtimestamp(ts).date(), "said", True, "conversation"))
     return [b for b in bits if not SECRET.search(b.text) and not INSTRUCTION.search(b.text) and len(b.text) >= 8]
@@ -305,17 +313,28 @@ class Report:
     added: list[str] = field(default_factory=list)
     merged: list[str] = field(default_factory=list)
     updated: list[str] = field(default_factory=list)
+    moved: list[str] = field(default_factory=list)
     skipped: int = 0
-    questions: list[str] = field(default_factory=list)
+    questions: list[str] = field(default_factory=list)  # new this night (one already asked isn't asked again)
     themes: str = ""
     model: str = ""
     fallback: bool = False
     dry_run: bool = False
-    woke: bool = True  # false: nothing new, no model was asked
+    woke: bool = True  # false: nothing new and the memory pages unchanged, so no model was asked
     seconds: float = 0.0
     error: str = ""
-    # each change on its own, for the morning digest's undo: {op: added|merged|updated|dropped, text, was}
+    # each change on its own, for the morning digest's undo:
+    # {op: added|merged|updated|moved, text, page, raw, was: [{page, text, raw}], undone}
     changes: list[dict] = field(default_factory=list)
+
+
+def _raw(text: str, props: dict) -> str:
+    """A memory as its page holds it: the fact, then its properties."""
+    return text + "".join(f"\n  {k}:: {v}" for k, v in props.items() if k != "page")
+
+
+def _learned(props: dict) -> date:
+    return _day_of(LINK.sub(lambda m: m[1], props.get("learned", "")).strip()) or date.min
 
 
 class Dreamer:
@@ -341,25 +360,35 @@ class Dreamer:
     def running(self) -> bool:
         return self._lock.locked()
 
-    # what is kept: [(text, props)] from jarvis/dreams
+    # what is kept: the facts on the memory pages, [(text, props with "page")]
     def kept(self) -> list[tuple[str, dict]]:
-        page = self.graph.page(PAGE)
         out = []
-        for b in page.blocks if page else []:
-            lines = b.text.splitlines()
-            props = {m[1].lower(): m[2] for line in lines[1:] if (m := PROP.match(line))}
-            out.append((lines[0].strip(), props))
+        for p in self.graph.pages():
+            low = p.name.lower()
+            if p.is_journal or not low.startswith(JARVIS_NS) or low == PAGE or low.startswith(PAGE + "/"):
+                continue
+            for b in p.blocks:
+                lines = b.text.splitlines()
+                if lines and lines[0].strip():
+                    props = {m[1].lower(): m[2] for line in lines[1:] if (m := PROP.match(line))}
+                    out.append((lines[0].strip(), {**props, "page": p.name}))
         return out
 
+    def _digest(self) -> str:
+        return hashlib.sha1("\n".join(sorted(f"{p['page']}|{t}" for t, p in self.kept())).encode()).hexdigest()
+
     def context(self, limit: int = CONTEXT_CHARS) -> str:
-        """The short version for the system prompt: the best-kept memories, most corroborated first."""
-        kept = sorted(self.kept(), key=lambda e: -float(e[1].get("score", "0") or 0))
+        """The short version for the system prompt, read from the memory pages each time (a correction there is
+        never out of date here): who the user is (CORE pages, in that order), then the newest of the rest."""
+        items = self.kept()
+        core = [e for c in CORE for e in items if e[1]["page"].lower() == c]
+        rest = sorted((e for e in items if e[1]["page"].lower() not in CORE), key=lambda e: _learned(e[1]),
+                      reverse=True)
         lines, size = [], 0
-        for text, _ in kept:
-            if size + len(text) + 3 > limit:
-                break
-            lines.append(f"- {text}")
-            size += len(text) + 3
+        for text, _ in core + rest:
+            if size + len(text) + 3 <= limit:
+                lines.append(f"- {text}")
+                size += len(text) + 3
         return "\n".join(lines)
 
     async def run(self, *, dry_run: bool = False, days: int | None = None, today: date | None = None,
@@ -394,34 +423,41 @@ class Dreamer:
         clash = conflicts(cands, [t for t, _ in kept])  # among all of them, not only the best
         cands = sorted((c for c in cands if c.score >= MIN_SCORE), key=lambda c: -c.score)[:MAX_CANDIDATES]
         rep.candidates = len(cands)
-        if not cands and not force:  # wake gate: a quiet night asks no model
+        # wake gate: nothing new said and the memory pages as they were last night asks no model
+        if not cands and self.state.get("memory") == self._digest() and not force:
             rep.woke, rep.seconds = False, round(time.time() - t0, 2)
             self._finish(rep, dry_run, today)
             return rep
         recurring = themes(bits)
         try:
-            out = await self._deep(cands, kept, clash)
+            out = await self._deep(cands, kept[:MAX_ENTRIES], clash)
         except Exception as e:  # the model failed: keep the best as they were said (append-only, as OpenClaw does)
             log.warning("dreaming: the model failed (%s); adding the best candidates as said", e)
             out, rep.fallback = {"decisions": [{"op": "add", "cites": [f"C{i + 1}"], "text": c.text}
                                                for i, c in enumerate(cands[:MAX_NEW])]}, True
         rep.model = getattr(self, "asked_model", rep.model)
-        entries = self._apply(out, cands, kept, rep, today, {t for pair in clash for t in pair})
+        # a conflict is asked about only when the model confirms the pair can't both be true: the word match
+        # alone asked whether "cloudcover 2022 to 2024" or "Energy Exemplar since 2024" was right (2026-11-14)
+        ids = {**{f"C{i + 1}": c.text for i, c in enumerate(cands)},
+               **{f"E{i + 1}": t for i, (t, _) in enumerate(kept[:MAX_ENTRIES])}}
+        pairs = list(dict.fromkeys((ids[a], ids[b]) for p in out.get("conflicts") or [] if isinstance(p, list)
+                                   and len(p) == 2 and (a := str(p[0]).strip().upper()) in ids
+                                   and (b := str(p[1]).strip().upper()) in ids and a != b))[:2]
+        disputed = {t for pair in (clash if rep.fallback else pairs) for t in pair}
+        self._apply(out, cands, kept[:MAX_ENTRIES], rep, today, disputed, dry_run)
         rep.themes = _sentences(str(out.get("themes") or ""), 320) or \
             (f"Recurring: {', '.join(recurring)}." if recurring else "")
-        rep.questions = [str(q).strip() for q in out.get("questions") or [] if str(q).strip()][:4] + \
-            [f"These disagree; which is right? \"{a}\" / \"{b}\"" for a, b in clash
-             if not any(a[:20] in str(q) or b[:20] in str(q) for q in out.get("questions") or [])][:2]
+        free = [str(q).strip() for q in out.get("questions") or [] if str(q).strip()][:2]
+        rep.questions = self._questions(free, pairs, today, keep=not dry_run)
         if not dry_run:
-            if rep.added or rep.merged or rep.updated:
-                self._write(entries)
             self._diary(rep, today)
         rep.seconds = round(time.time() - t0, 2)
         self._finish(rep, dry_run, today)
         return rep
 
     async def _deep(self, cands: list[Candidate], kept: list[tuple[str, dict]], clash) -> dict:
-        lines = ["Kept now:"] + ([f"E{i + 1}: {t}" for i, (t, _) in enumerate(kept)] or ["(nothing yet)"])
+        lines = ["Kept now:"] + ([f"E{i + 1} [{p['page'].removeprefix(JARVIS_NS)}]: {t}"
+                                  for i, (t, p) in enumerate(kept)] or ["(nothing yet)"])
         lines.append("\nCandidates:")
         for i, c in enumerate(cands):
             where = "; ".join(sorted({f"{b.kind}{' (the user)' if b.trusted else ''} {b.day:%d %B %Y}" for b in c.bits}))
@@ -448,8 +484,8 @@ class Dreamer:
         except Exception as e:  # a model without schema-constrained output: ask for JSON in words
             log.info("dreaming: no JSON mode (%s); asking for JSON", e)
             messages[0]["content"] += ("\nReply with JSON only, shaped like: {\"decisions\": [{\"op\": \"add\", "
-                                       "\"cites\": [\"C1\"], \"entry\": \"\", \"text\": \"...\"}], \"themes\": \"...\", "
-                                       "\"questions\": []}")
+                                       "\"cites\": [\"C1\"], \"entry\": \"\", \"topic\": \"family\", \"text\": \"...\"}], "
+                                       "\"themes\": \"...\", \"conflicts\": [], \"questions\": []}")
             msg = await llm.chat(messages)
             raw = (msg.get("content") or "") if isinstance(msg, dict) else str(msg)
             m = re.search(r"\{.*\}", raw, re.S)
@@ -458,83 +494,176 @@ class Dreamer:
             return json.loads(m[0])
 
     def _apply(self, out: dict, cands: list[Candidate], kept: list[tuple[str, dict]], rep: Report,
-               today: date, disputed: set[str] = frozenset()) -> list[tuple[str, dict]]:
-        """The model's decisions, checked: each must cite real candidates, say nothing they don't, and stay within
-        the night's limits. What is kept now, with these applied."""
-        entries = [(t, dict(p)) for t, p in kept]
-        by_id = {f"C{i + 1}": c for i, c in enumerate(cands)}
+               today: date, disputed: set[str] = frozenset(), dry_run: bool = False) -> None:
+        """The model's decisions, checked: each must cite real facts or candidates, say nothing they don't, and
+        stay within the night's limits. Each one passed is made on the memory pages (unless dry_run) and goes
+        into rep.changes, so the morning digest can undo it."""
+        from jarvis_hub.kb.tools import TOPICS, memory_topic
+        by_c = {f"C{i + 1}": c for i, c in enumerate(cands)}
+        by_e = {f"E{i + 1}": e for i, e in enumerate(kept)}
         changes = new = 0
         used: set[str] = set()
         for d in out.get("decisions") or []:
             op = str(d.get("op", "")).lower()
-            cites = list(dict.fromkeys(c for c in (str(x).strip().upper() for x in d.get("cites") or []) if c in by_id))
-            if any(b.text in disputed for c in cites for b in by_id[c].bits):  # a question for the user first
-                rep.skipped += 1
-                continue
-            if used.intersection(cites):  # a candidate goes into one decision; a second one rests on it twice
-                continue
-            text = re.sub(r"\s+", " ", str(d.get("text") or "")).strip()
+            ids = [str(x).strip().upper() for x in [*(d.get("cites") or []), d.get("entry") or ""]]
+            cites = list(dict.fromkeys(x for x in ids if x in by_c or x in by_e))
+            cs, es = [by_c[x] for x in cites if x in by_c], [x for x in cites if x in by_e]
+            texts = [b.text for c in cs for b in c.bits] + [by_e[x][0] for x in es]
             if op == "skip" or not cites:
                 rep.skipped += len(cites) if op == "skip" else 0
                 continue
-            text = re.sub(r"\s*\((?:[^()]*\b[CE]\d+\b[^()]*)\)|\s*\[[CE]\d+\]", "", text).strip()  # "(from C2)"
-            if changes >= MAX_CHANGES or not text or SECRET.search(text) or INSTRUCTION.search(text) or \
-                    re.search(r"\b[CE]\d+\b", text) or len(text) > 240 or COMMAND.match(text) or \
-                    len(re.findall(r"[.!?](?:\s|$)", text)) > 2:
+            if any(t in disputed for t in texts):  # a question for the user first
+                rep.skipped += 1
                 continue
-            if len(cites) > 1 and min((similar(words(by_id[a].text), words(by_id[b].text))
-                                       for a in cites for b in cites if a < b), default=1) < 0.4:
-                log.info("dreaming: dropped %r: merges unrelated things", text)
+            if used.intersection(cites) or changes >= MAX_CHANGES:  # a fact goes into one decision
                 continue
-            entry = str(d.get("entry") or "").strip().upper()
-            e_i = int(entry[1:]) - 1 if re.fullmatch(r"E\d+", entry) and int(entry[1:]) <= len(entries) else None
-            # its sources, and the days they were said on: "tomorrow" may become an absolute date
-            sources = [b.text for c in cites for b in by_id[c].bits] + ([entries[e_i][0]] if e_i is not None else []) + \
-                [f"{d:%d %B %Y} {d:%b} {d.day} {d + timedelta(days=1):%d %B %Y} {d + timedelta(days=1):%A %B}"
-                 for d in {b.day for c in cites for b in by_id[c].bits}]
-            if not grounded(text, sources):
-                log.info("dreaming: dropped %r: says what its sources don't", text)
-                continue
-            cs = [by_id[c] for c in cites]
-            props = {"dreamed": f"[[{journal_title(today)}]]",
-                     "from": ", ".join(sorted({f"{'your words' if b.trusted else 'JARVIS'} ({b.kind}, {b.day:%d %b})"
-                                               for c in cs for b in c.bits}))[:200],
-                     "score": f"{max(c.score for c in cs):.2f}"}
-            if e_i is not None and op in ("supersede", "merge"):
-                old = entries[e_i][1]
-                props["score"] = f"{max(float(old.get('score', 0) or 0), float(props['score'])):.2f}"
-                rep.changes.append({"op": "updated" if op == "supersede" else "merged", "text": text,
-                                    "was": entries[e_i][0], "was_props": dict(old)})
-                entries[e_i] = (text, props)
-                (rep.updated if op == "supersede" else rep.merged).append(text)
+            topic = str(d.get("topic") or "").strip().lower().removeprefix(JARVIS_NS)
+            topic = memory_topic(topic) if topic and memory_topic(topic) in TOPICS and \
+                (memory_topic(topic) != "memory" or "memory" in topic) else ""
+            if op == "move":
+                if len(es) != 1 or cs or not topic or JARVIS_NS + topic == by_e[es[0]][1]["page"].lower():
+                    continue
+                t, p = by_e[es[0]]
+                rep.changes.append(self._change("moved", t, JARVIS_NS + topic, _raw(t, p), [by_e[es[0]]], dry_run))
+                rep.moved.append(t)
             else:
-                if new >= MAX_NEW:
+                text = re.sub(r"\s+", " ", str(d.get("text") or "")).strip()
+                text = re.sub(r"\s*\((?:[^()]*\b[CE]\d+\b[^()]*)\)|\s*\[[CE]\d+\]", "", text).strip()  # "(from C2)"
+                if not text or SECRET.search(text) or INSTRUCTION.search(text) or re.search(r"\b[CE]\d+\b", text) \
+                        or len(text) > 240 or COMMAND.match(text) or len(re.findall(r"[.!?](?:\s|$)", text)) > 2:
                     continue
-                if any(similar(words(text), words(t)) >= 0.9 for t, _ in entries):
+                if len(texts) > 1 and min((similar(words(a), words(b)) for i, a in enumerate(texts)
+                                           for b in texts[i + 1:]), default=1) < 0.4:
+                    log.info("dreaming: dropped %r: merges unrelated things", text)
                     continue
-                entries.append((text, props))
-                new += 1
-                (rep.merged if op == "merge" and len(cites) > 1 else rep.added).append(text)
-                rep.changes.append({"op": "merged" if op == "merge" and len(cites) > 1 else "added", "text": text})
+                # its sources, and the days they were said on: "tomorrow" may become an absolute date
+                days = {b.day for c in cs for b in c.bits}
+                sources = texts + [f"{d:%d %B %Y} {d:%b} {d.day} {d + timedelta(days=1):%d %B %Y} "
+                                   f"{d + timedelta(days=1):%A %B}" for d in days]
+                if not grounded(text, sources):
+                    log.info("dreaming: dropped %r: says what its sources don't", text)
+                    continue
+                trusted = any(b.trusted for c in cs for b in c.bits) or \
+                    any(by_e[x][1].get("via", "").lower().startswith(TRUSTED_VIA) for x in es)
+                learned = min((by_e[x][1].get("learned", "") for x in es), key=lambda s: _day_of(
+                    LINK.sub(lambda m: m[1], s)) or date.max, default="") or f"[[{journal_title(today)}]]"
+                via = ("said by you" if trusted else "noted by JARVIS") + ", tidied by dreaming"
+                raw = f"{text}\n  learned:: {learned}\n  via:: {via}"
+                if not es:  # nothing kept says it yet: a new fact
+                    if new >= MAX_NEW or any(similar(words(text), kw) >= 0.9 for kw in (words(t) for t, _ in kept)):
+                        continue
+                    page = JARVIS_NS + (topic or memory_topic("", text))
+                    rep.changes.append(self._change("added", text, page, raw, [], dry_run))
+                    rep.added.append(text)
+                    new += 1
+                else:  # merge (several say one thing) or supersede (corrected): one fact replaces them
+                    kind = "merged" if len(es) + len(cs) > 1 and op == "merge" else "updated"
+                    page = JARVIS_NS + topic if topic else by_e[es[0]][1]["page"]
+                    rep.changes.append(self._change(kind, text, page, raw, [by_e[x] for x in es], dry_run))
+                    (rep.merged if kind == "merged" else rep.updated).append(text)
             used.update(cites)
             changes += 1
-        entries.sort(key=lambda e: -float(e[1].get("score", 0) or 0))
-        rep.changes += [{"op": "dropped", "text": t, "was_props": p} for t, p in entries[MAX_KEPT:]]
-        return entries[:MAX_KEPT]
 
-    def _write(self, entries: list[tuple[str, dict]]) -> None:
-        text = "\n".join(f"- {t}\n" + "".join(f"  {k}:: {v}\n" for k, v in p.items()) for t, p in entries)
-        page = self.graph.page(PAGE)
-        if page is not None:
-            was = page.path.read_text(encoding="utf-8")
-            if was.strip() == text.strip():
-                return  # nothing changed: no rewrite, no copy in .trash/
-            self.graph._trash_path(page.path).write_text(was, encoding="utf-8")  # the page as it was
-        self.graph.write_jarvis_page(PAGE, text, replace=True)
+    # ---------- changes on the memory pages, each undoable ----------
+    def _change(self, op: str, text: str, page: str, raw: str, was: list[tuple[str, dict]], dry_run: bool) -> dict:
+        c = {"op": op, "text": text, "page": page, "raw": raw,
+             "was": [{"page": p["page"], "text": t, "raw": _raw(t, p)} for t, p in was]}
+        if not dry_run:
+            self._do(c)
+        return c
+
+    def _drop(self, page: str, text: str) -> None:
+        try:
+            # the block's lines come joined by spaces: the fact itself, then only its properties ("learned:: ...")
+            self.graph._drop_blocks(self.graph._owned(page), lambda t: t.startswith(text) and (
+                not t[len(text):].strip() or bool(re.match(r"\s+[\w-]+::", t[len(text):]))))
+        except ValueError:
+            pass  # gone already (the user deleted it)
+
+    def _do(self, c: dict) -> None:
+        for w in c["was"]:
+            self._drop(w["page"], w["text"])
+        self.graph.write_jarvis_page(c["page"], c["raw"])
+
+    def _undo(self, c: dict) -> None:
+        self._drop(c["page"], c["text"])
+        for w in c["was"]:
+            self.graph.write_jarvis_page(w["page"], w["raw"])
+
+    def undo(self, i: int) -> dict:
+        """Take back one change of the last dream (the morning digest): an added fact goes, a merged, updated or
+        moved one is back as it was. Undoing it again redoes it."""
+        changes = (self.state.get("last") or {}).get("changes") or []
+        if not 0 <= i < len(changes):
+            raise IndexError("no such change")
+        c = changes[i]
+        if "raw" not in c:
+            raise IndexError("that change is from the old dreams page; it can't be undone here")
+        (self._do if c.get("undone") else self._undo)(c)
+        c["undone"] = not c.get("undone")
+        self.state["memory"] = self._digest()
+        self._save()
+        if self.on_change:
+            self.on_change()
+        return c
+
+    # ---------- questions for the user: asked once, answered in the morning digest ----------
+    def _questions(self, free: list[str], pairs: list[tuple[str, str]], today: date, keep: bool) -> list[str]:
+        qs = self.state.setdefault("questions", []) if keep else list(self.state.get("questions") or [])
+        new = []
+
+        def asked(text: str) -> bool:
+            return any(similar(words(text), words(q["q"])) >= 0.8 for q in qs)
+        for a, b in pairs:
+            q = f'These disagree; which is right? "{a}" / "{b}"'
+            if not any({a, b} == {x.get("a"), x.get("b")} for x in qs) and not asked(q):
+                qs.append({"id": uuid.uuid4().hex[:8], "q": q, "a": a, "b": b, "status": "open",
+                           "asked": today.isoformat()})
+                new.append(q)
+        for q in free:
+            if not asked(q):
+                qs.append({"id": uuid.uuid4().hex[:8], "q": q, "status": "open", "asked": today.isoformat()})
+                new.append(q)
+        del qs[:-MAX_QUESTIONS]
+        return new
+
+    def open_questions(self) -> list[dict]:
+        return [q for q in self.state.get("questions") or [] if q.get("status") == "open"]
+
+    def answer(self, qid: str, choice: str, text: str = "") -> dict:
+        """The user's answer from the morning digest. choice: "a" or "b" (which of two disagreeing facts is
+        right: the other is forgotten), "text" (their answer, saved as a fact), or "dismiss" (never asked again)."""
+        from jarvis_hub.kb.tools import memory_topic
+        q = next((q for q in self.state.get("questions") or [] if q["id"] == qid), None)
+        if q is None:
+            raise KeyError(qid)
+        today = f"[[{journal_title(date.today())}]]"
+        if choice in ("a", "b") and q.get("a"):
+            right, wrong = (q["a"], q["b"]) if choice == "a" else (q["b"], q["a"])
+            for t, p in self.kept():
+                if similar(words(t), words(wrong)) >= 0.9 and similar(words(t), words(right)) < 0.9:
+                    self._drop(p["page"], t)
+            if not any(similar(words(t), words(right)) >= 0.9 for t, _ in self.kept()):
+                self.graph.write_jarvis_page(memory_topic("", right),
+                                             f"{right}\n  learned:: {today}\n  via:: answered by you")
+            q["answer"] = right
+        elif choice == "text" and (said := " ".join(text.split())[:300]):
+            if SECRET.search(said) or INSTRUCTION.search(said):
+                raise ValueError("that answer can't be kept as a memory")
+            self.graph.write_jarvis_page(memory_topic("", said), f"{said}\n  learned:: {today}\n  via:: answered by you")
+            q["answer"] = said
+        elif choice != "dismiss":
+            raise ValueError("choice is a, b, text (with the answer) or dismiss")
+        q["status"] = "dismissed" if choice == "dismiss" else "answered"
+        self.state["memory"] = self._digest()
+        self._save()
+        if self.on_change and choice != "dismiss":
+            self.on_change()
+        return q
 
     def _diary(self, rep: Report, today: date) -> None:
-        """One entry per day on one page: a night with nothing kept and no new question writes nothing, a second
-        run the same day replaces that day's entry, a question already asked isn't asked again, old days roll off."""
+        """One entry per day on one page: a night with nothing changed and no new question writes nothing, a
+        second run the same day replaces that day's entry, old days roll off."""
         if not rep.woke:
             return
         page = self.graph.page(DIARY)
@@ -542,11 +671,9 @@ class Dreamer:
         mark = f"- Dream of [[{journal_title(today)}]]"
         days = [d for d in re.split(r"(?m)^(?=- Dream of )", old) if d.startswith("- Dream of ")]
         others = [d for d in days if not d.startswith(mark)]
-        asked = "\n".join(others)
-        questions = [q for q in rep.questions if q not in asked]
         kids = [f"{label}: {t}" for label, items in (("Kept", rep.added), ("Merged", rep.merged),
-                                                     ("Updated", rep.updated)) for t in items]
-        kids += [f"Question for you: {q}" for q in questions]
+                                                     ("Updated", rep.updated), ("Moved", rep.moved)) for t in items]
+        kids += [f"Question for you: {q}" for q in rep.questions]
         if not kids:
             return
         if rep.themes:
@@ -561,41 +688,10 @@ class Dreamer:
     def _finish(self, rep: Report, dry_run: bool, today: date) -> None:
         if dry_run:
             return
-        self.state.update(last_run=rep.started, until=today.isoformat(), last=rep.__dict__)
+        self.state.update(last_run=rep.started, until=today.isoformat(), last=rep.__dict__, memory=self._digest())
         self._save()
-        if self.on_change and (rep.added or rep.merged or rep.updated):
+        if self.on_change and (rep.added or rep.merged or rep.updated or rep.moved):
             self.on_change()
-
-    def undo(self, i: int) -> dict:
-        """Take back one change of the last dream (the morning digest): an added fact goes, an updated or merged
-        one gets its old wording back, a dropped one returns. Undoing it again redoes it."""
-        changes = (self.state.get("last") or {}).get("changes") or []
-        if not 0 <= i < len(changes):
-            raise IndexError("no such change")
-        c = changes[i]
-        entries = self.kept()
-        at = next((n for n, (t, _) in enumerate(entries) if t == c["text"]), None)
-        was = next((n for n, (t, _) in enumerate(entries) if t == c.get("was")), None)
-        if not c.get("undone"):
-            if c["op"] == "dropped":
-                entries.append((c["text"], c.get("was_props") or {}))
-            elif c.get("was") and at is not None:
-                entries[at] = (c["was"], c.get("was_props") or entries[at][1])
-            elif at is not None:
-                entries.pop(at)
-        else:
-            if c["op"] == "dropped" and at is not None:
-                entries.pop(at)
-            elif c.get("was") and was is not None:
-                entries[was] = (c["text"], entries[was][1])
-            elif c["op"] != "dropped" and at is None:
-                entries.append((c["text"], {}))
-        c["undone"] = not c.get("undone")
-        self._write(entries)
-        self._save()
-        if self.on_change:
-            self.on_change()
-        return c
 
     # ---------- schedule ----------
     def due(self, now: datetime | None = None) -> bool:
@@ -646,10 +742,11 @@ def summary(rep: Report) -> str:
     if rep.error:
         return f"I couldn't dream, sir: {rep.error}"
     done = [f"kept {len(rep.added)} new thing{'s' * (len(rep.added) != 1)}" if rep.added else "",
-            f"merged {len(rep.merged)}" if rep.merged else "", f"updated {len(rep.updated)}" if rep.updated else ""]
+            f"merged {len(rep.merged)}" if rep.merged else "", f"updated {len(rep.updated)}" if rep.updated else "",
+            f"moved {len(rep.moved)}" if rep.moved else ""]
     done = [d for d in done if d]
     out = (f"I went through {rep.gathered} notes and things you said and " +
-           (", ".join(done) if done else "found nothing new worth keeping") + ", sir.")
+           (", ".join(done) if done else "found nothing to change") + ", sir.")
     if kept := rep.added + rep.updated + rep.merged:
         out += " " + " ".join(kept[:3])
     if rep.questions:
@@ -669,7 +766,8 @@ def register_dream_tool(reg: ToolRegistry, dreamer: Dreamer) -> None:
         return summary(rep)
 
     reg.add(Tool("dream", "builtin",
-                 "Go through the last days' notes and conversations now and keep what matters on jarvis/dreams "
+                 "Go through the last days' notes and conversations now and tidy the memory pages: keep what matters, "
+                 "merge duplicates, fix what was corrected "
                  "(it also runs every night). Use for: 'dream now', 'consolidate your memory', 'tidy up what you know'.",
                  {"type": "object", "properties": {"days": {"type": "integer", "description": "how many days back (default 3)"}},
                   "required": []}, Risk.WRITE, dream, self_scoped=True, final_answer=True))

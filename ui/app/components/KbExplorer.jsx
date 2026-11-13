@@ -269,7 +269,7 @@ export default function KbExplorer({ version, context, onAdd, onClose }) {
   }, []);
 
   // a node from the graph or the list: a tool or a family opens its card, anything else is a page
-  // dream now (it also runs every night): go through the last days' notes, keep what matters on jarvis/dreams
+  // dream now (it also runs every night): go through the last days' notes and tidy the memory pages
   const dreamNow = async () => {
     setDream("…");
     const r = await post("dream/run", {});
@@ -277,7 +277,7 @@ export default function KbExplorer({ version, context, onAdd, onClose }) {
     const out = await r.json();
     setDream(out.said);
     setChanged((n) => n + 1);
-    open(out.added?.length || out.merged?.length || out.updated?.length ? "jarvis/dreams" : "jarvis/dreams/diary");
+    open("jarvis/dreams/diary");
   };
 
   const pick = (n) => {
@@ -387,7 +387,7 @@ export default function KbExplorer({ version, context, onAdd, onClose }) {
               <input type="checkbox" checked={agent} onChange={(e) => showAgent(e.target.checked)} /> tools &amp; skills
             </label>
             <button type="button" className="kbx-btn" onClick={dreamNow} disabled={dream === "…"}
-              title="Go through the last days' notes and conversations and keep what matters on jarvis/dreams (also every night)">
+              title="Go through the last days' notes and conversations and tidy the memory pages (also every night)">
               {dream === "…" ? "dreaming…" : "☾ dream"}</button>
             <button type="button" className={`kbx-btn${trash ? " primary" : ""}`} onClick={() => { setTrash((t) => !t); setPage(null); setSelected(null); }}
               title="Deleted pages and earlier versions">{trash ? "close trash" : <><Bin /> trash</>}</button>

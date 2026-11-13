@@ -1582,6 +1582,13 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .digest .fact small { color: var(--cyan-dim); }
 .digest .fact button { justify-self: start; font: 10px var(--mono); background: none; color: var(--cyan-dim); border: 1px solid var(--panel-edge); padding: 0 6px; cursor: pointer; }
 .digest .fact.undone > span { opacity: 0.4; text-decoration: line-through; }
+.digest-qs { margin-top: 8px; }
+.digest-qs h3 { margin: 0 0 4px; font: 600 9px var(--display); letter-spacing: 0.16em; text-transform: uppercase; color: var(--amber); }
+.digest .fact.q button { text-align: left; color: var(--cyan); white-space: normal; padding: 3px 6px; }
+.digest .fact.q button.ignore, .digest .fact.q .q-actions .ignore { color: var(--cyan-dim); }
+.digest .fact.q input { font: 12px var(--mono); background: transparent; color: var(--cyan); border: 1px solid var(--panel-edge); padding: 4px 6px; }
+.digest .fact.q .q-actions { display: flex; gap: 6px; }
+.digest .fact.q button:disabled { opacity: 0.4; cursor: default; }
 
 /* 8. approval previews */
 .pv { margin: 6px 0 8px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11px; }

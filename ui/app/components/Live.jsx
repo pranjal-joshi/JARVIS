@@ -6,7 +6,7 @@
 //   Constellation the subagents at work (jobs, Claude, web lookups, skills, a bigger model) orbiting the orb.
 //   LiveNote      what JARVIS is writing to your notes, line by line, with the pages it links.
 //   Toasts        pop-ups that fade by importance (approvals stay) and a "while you were away" count.
-//   DreamDigest   what last night's dream kept, merged, updated and dropped, each with undo.
+//   DreamDigest   what last night's dream changed on the memory pages, each with undo, and its questions.
 //   Preview       an approval's effect: a note diff or the devices it touches.
 //   WitPanel      the wit dial, for the house and each room.
 // Events reach them through a feed (Hud.jsx): a Set of listeners the one WebSocket calls.
@@ -316,49 +316,93 @@ export function Toasts({ feed }) {
 }
 
 // ---------- 7. morning memory digest ----------
-const OPS = [["added", "Learned"], ["merged", "Merged"], ["updated", "Updated"], ["dropped", "Dropped"]];
+const OPS = [["added", "Learned"], ["merged", "Merged"], ["updated", "Updated"], ["moved", "Moved"]];
 
+// what last night's dream changed on the memory pages (each with undo) and the questions it has for the user
 export function DreamDigest() {
   const [rep, setRep] = useState(null);
+  const [questions, setQuestions] = useState([]);
   const [hidden, setHidden] = useState(true);
   useEffect(() => {
     api("dream").then((r) => (r.ok ? r.json() : null)).then((d) => {
       const last = d?.last;
-      if (!last?.changes?.length || last.dry_run || Date.now() / 1000 - last.started > 20 * 3600) return;
+      const fresh = last?.changes?.length && !last.dry_run && Date.now() / 1000 - last.started < 20 * 3600;
+      const open = d?.questions || [];
+      if (!fresh && !open.length) return;
       let seen = null;
       try { seen = localStorage.getItem("jarvis.digest"); } catch { /* storage blocked: show it */ }
-      setRep(last);
-      setHidden(seen === String(last.started));
+      setRep(fresh ? last : null);
+      setQuestions(open);
+      setHidden(!open.length && seen === String(last.started)); // an open question stays until answered
     }).catch(() => null);
   }, []);
-  if (!rep || hidden) return null;
+  if (hidden || (!rep && !questions.length)) return null;
   const undo = async (i) => {
     const r = await api(`dream/undo/${i}`, { method: "POST" }).catch(() => null);
     if (r?.ok) { const c = await r.json(); setRep((x) => ({ ...x, changes: x.changes.map((y, j) => (j === i ? c : y)) })); }
   };
-  const close = () => { try { localStorage.setItem("jarvis.digest", String(rep.started)); } catch { /* fine */ } setHidden(true); };
+  const answer = async (id, choice, text = "") => {
+    const r = await api(`dream/answer/${id}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ choice, text }),
+    }).catch(() => null);
+    if (r?.ok) setQuestions((qs) => qs.filter((q) => q.id !== id));
+  };
+  const close = () => { try { localStorage.setItem("jarvis.digest", String(rep?.started)); } catch { /* fine */ } setHidden(true); };
   return (
     <section className="digest" aria-label="Last night's memory changes">
       <div className="digest-head"><span>Overnight · what I remembered</span><button type="button" onClick={close} aria-label="Dismiss">×</button></div>
-      {rep.themes && <p className="digest-themes">{rep.themes}</p>}
-      <div className="digest-cols">
-        {OPS.map(([op, label]) => {
-          const items = rep.changes.map((c, i) => [c, i]).filter(([c]) => c.op === op);
-          return items.length ? (
-            <div key={op} className={`digest-col ${op}`}>
-              <h3>{label}</h3>
-              {items.map(([c, i]) => (
-                <div key={i} className={`fact${c.undone ? " undone" : ""}`}>
-                  <span>{c.text}</span>
-                  {c.was && <small>was: {c.was}</small>}
-                  <button type="button" onClick={() => undo(i)}>{c.undone ? "Put back" : "Undo"}</button>
-                </div>
-              ))}
-            </div>
-          ) : null;
-        })}
-      </div>
+      {rep?.themes && <p className="digest-themes">{rep.themes}</p>}
+      {rep && (
+        <div className="digest-cols">
+          {OPS.map(([op, label]) => {
+            const items = rep.changes.map((c, i) => [c, i]).filter(([c]) => c.op === op);
+            return items.length ? (
+              <div key={op} className={`digest-col ${op}`}>
+                <h3>{label}</h3>
+                {items.map(([c, i]) => (
+                  <div key={i} className={`fact${c.undone ? " undone" : ""}`}>
+                    <span>{c.text}</span>
+                    {op === "moved" ? <small>to {c.page?.replace("jarvis/", "")}, from {c.was?.[0]?.page?.replace("jarvis/", "")}</small>
+                      : Array.isArray(c.was) && c.was.length > 0 && <small>was: {c.was.map((w) => w.text).join(" · ")}</small>}
+                    <button type="button" onClick={() => undo(i)}>{c.undone ? "Put back" : "Undo"}</button>
+                  </div>
+                ))}
+              </div>
+            ) : null;
+          })}
+        </div>
+      )}
+      {questions.length > 0 && (
+        <div className="digest-qs">
+          <h3>Questions for you</h3>
+          {questions.map((q) => <Question key={q.id} q={q} answer={answer} />)}
+        </div>
+      )}
     </section>
+  );
+}
+
+function Question({ q, answer }) {
+  const [text, setText] = useState("");
+  if (q.a) {
+    return (
+      <div className="fact q">
+        <span>These disagree. Which is right?</span>
+        <button type="button" onClick={() => answer(q.id, "a")}>{q.a}</button>
+        <button type="button" onClick={() => answer(q.id, "b")}>{q.b}</button>
+        <button type="button" className="ignore" onClick={() => answer(q.id, "dismiss")}>Both fine · don't ask again</button>
+      </div>
+    );
+  }
+  return (
+    <form className="fact q" onSubmit={(e) => { e.preventDefault(); if (text.trim()) answer(q.id, "text", text); }}>
+      <label htmlFor={`q-${q.id}`}>{q.q}</label>
+      <input id={`q-${q.id}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your answer" maxLength={300} />
+      <span className="q-actions">
+        <button type="submit" disabled={!text.trim()}>Save</button>
+        <button type="button" className="ignore" onClick={() => answer(q.id, "dismiss")}>Ignore</button>
+      </span>
+    </form>
   );
 }
 

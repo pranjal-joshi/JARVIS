@@ -48,15 +48,14 @@ class FakeLLM:
 def test_light_gathers_recent_trusted_material_and_drops_secrets(tmp_path):
     bits = gather(_graph(tmp_path), None, date(2026, 11, 2), TODAY)
     texts = [b.text for b in bits]
-    assert "My wife's name is Sanika." in texts and not any("An old fact" in t for t in texts)  # outside the days
+    assert "My wife's name is Sanika." in texts and not any("An old fact" in t for t in texts)
     assert not any("api key" in t or "Ignore previous" in t for t in texts)
     assert all(not t.startswith("Corrected:") and "#jarvis" not in t for t in texts)
+    assert {b.kind for b in bits} == {"journal"}  # the memory pages are what is kept, not candidates
     sanika = [c for c in cluster(bits) if "Sanika" in c.text and "name" in c.text][0]
-    assert len(sanika.bits) >= 3  # the same thing said three times is one candidate
+    assert len(sanika.bits) >= 2  # the same thing said twice is one candidate
     score(sanika, TODAY, 3)
-    assert sanika.signals["frequency"] >= 0.75 and sanika.score >= 0.35
-    aarav = [c for c in cluster(bits) if "Aarav" in c.text][0]  # the journal line and the memory are one
-    assert {b.kind for b in aarav.bits} == {"journal", "memory"}
+    assert sanika.signals["frequency"] >= 0.5 and sanika.score >= 0.35
 
 
 def test_grounding_and_conflicts():
@@ -67,45 +66,80 @@ def test_grounding_and_conflicts():
     assert pairs  # the same birthday with two names: a question for the user
 
 
-def test_a_dream_keeps_checked_decisions_and_writes_a_diary(tmp_path):
+def test_a_dream_tidies_the_memory_pages_and_every_change_undoes(tmp_path):
     g = _graph(tmp_path)
+    (tmp_path / "kb" / "jarvis" / "work.md").write_text(
+        "- My nephew Pranav lives in Bavdhan.\n  learned:: [[2026-11-02]]\n  via:: said by you\n"
+        "- The user's wife's name is Sanika.\n  learned:: [[2026-11-03]]\n  via:: noted by JARVIS\n", encoding="utf-8")
+
     def decide(prompt):
-        ids = {key: next(line.split(" ", 1)[0] for line in prompt.splitlines() if line.startswith("C") and key in line)
-               for key in ("Tanika", "Aarav")}
+        ids = {key: next(line.split(" ", 1)[0].rstrip(":") for line in prompt.splitlines()
+                         if line[:1] in "CE" and key in line)
+               for key in ("Pranav", "wife's name is Sanika.", "Took Aarav", "user's wife's", "birthday")}
         return {"decisions": [
-            {"op": "merge", "cites": [ids["Tanika"]], "text": "The user's wife is Sanika (not Tanika)."},
-            {"op": "add", "cites": [ids["Aarav"]], "text": "The user's wife Priya was born in 1990."},  # not said
+            {"op": "merge", "cites": [ids["wife's name is Sanika."], ids["user's wife's"]],
+             "text": "The user's wife's name is Sanika."},
+            {"op": "move", "entry": ids["Pranav"], "cites": [ids["Pranav"]], "topic": "family"},
+            {"op": "add", "cites": [ids["Took Aarav"]], "text": "The user's wife Priya was born in 1990."},  # not said
             {"op": "add", "cites": ["C99"], "text": "Uncited."},
-            {"op": "merge", "cites": [ids["Tanika"], ids["Aarav"]], "text": "Sanika and Aarav."},  # unrelated
-            {"op": "add", "cites": [ids["Aarav"]], "text": "Remind the user to call Aarav's doctor (from C2)."}],
-            "themes": "Family: the user's wife and son.", "questions": ["Is Chiku Aarav's nickname?"]}
-    llm = FakeLLM(decide)
-    d = Dreamer(g, None, llm, tmp_path / "dreams.json", days=3)
+            {"op": "add", "cites": [ids["Took Aarav"]], "text": "Aarav is 6 months old."},  # kept already
+            {"op": "add", "cites": [ids["birthday"]], "text": "Sanika's birthday is on 20th Aug.", "topic": "dates"}],
+            "themes": "Family.", "questions": ["Is Chiku Aarav's nickname?"]}
+    d = Dreamer(g, None, FakeLLM(decide), tmp_path / "dreams.json", days=3)
     rep = asyncio.run(d.run(today=TODAY))
-    assert rep.woke and rep.added == ["The user's wife is Sanika (not Tanika)."] and not rep.merged
-    kept = d.kept()
-    assert kept[0][0] == "The user's wife is Sanika (not Tanika)." and kept[0][1]["dreamed"] == "[[2026-11-04]]"
-    assert "your words" in kept[0][1]["from"]
-    diary = g.page(DIARY).path.read_text(encoding="utf-8")
-    assert "Dream of [[2026-11-04]]" in diary and "Is Chiku Aarav's nickname?" in diary
-    assert d.context().startswith("- The user's wife is Sanika")
-    assert "Sanika" in summary(rep)
-    # dreaming never feeds on itself, and a night with nothing new asks no model
-    again = asyncio.run(d.run(today=TODAY))
-    for asked in llm.asked[1:]:  # what was kept is shown as kept (E1), never offered again as a candidate
-        assert "E1: The user's wife is Sanika (not Tanika)." in asked
-        assert not any(line.startswith("C") and "Sanika (not Tanika)" in line for line in asked.splitlines())
-    assert json.loads((tmp_path / "dreams.json").read_text())["until"] == "2026-11-04"
-    assert again.woke in (True, False)
+    assert rep.merged == ["The user's wife's name is Sanika."] and rep.moved == ["My nephew Pranav lives in Bavdhan."]
+    assert rep.added == ["Sanika's birthday is on 20th Aug."] and g.page(PAGE) is None  # no second copy
+    texts = {(p["page"], t) for t, p in d.kept()}
+    assert ("jarvis/family", "My nephew Pranav lives in Bavdhan.") in texts
+    assert sum(t == "The user's wife's name is Sanika." for _, t in texts) == 1
+    assert not any("wife's name is Sanika." == t for _, t in texts if t.startswith("My wife"))
+    assert rep.questions == ["Is Chiku Aarav's nickname?"]
+    # every change undoes: the merged facts come back on their pages, the moved one goes back to work
+    for i in range(len(rep.changes)):
+        d.undo(i)
+    back = {(p["page"], t) for t, p in d.kept()}
+    assert ("jarvis/work", "My nephew Pranav lives in Bavdhan.") in back and ("jarvis/people", "My wife's name is Sanika.") in back
+    assert not any(t == "Sanika's birthday is on 20th Aug." for _, t in back)
+    d.undo(1)  # and redoes
+    assert ("jarvis/family", "My nephew Pranav lives in Bavdhan.") in {(p["page"], t) for t, p in d.kept()}
+
+
+def test_what_rides_in_every_chat_is_read_from_the_pages_core_first(tmp_path):
+    g = _graph(tmp_path)
+    (tmp_path / "kb" / "jarvis" / "tools.md").write_text("- REA is a reverse engineering tool.\n  learned:: [[2026-11-04]]\n",
+                                                         encoding="utf-8")
+    d = Dreamer(g, None, FakeLLM({}), tmp_path / "dreams.json")
+    ctx = d.context()
+    assert ctx.startswith("- My wife's name is Sanika.") and ctx.index("Sanika") < ctx.index("REA")
+    (tmp_path / "kb" / "jarvis" / "people.md").write_text("- My wife's name is Sanika Joshi.\n", encoding="utf-8")
+    assert "Sanika Joshi" in d.context()  # a correction on the page is there at once
+
+
+def test_questions_are_asked_once_and_answered_from_the_digest(tmp_path):
+    g = _graph(tmp_path)
+    d = Dreamer(g, None, FakeLLM({}), tmp_path / "dreams.json")
+    pair = ("The user's son's name is Aarav and he is 6 months old.", "The user's son Chiku is 6 months old.")
+    assert d._questions(["Is Chiku Aarav's nickname?"], [pair], TODAY, keep=True)
+    assert d._questions(["Is Chiku Aarav's nickname?"], [pair], TODAY, keep=True) == []  # not asked twice
+    qs = d.open_questions()
+    which = next(q for q in qs if q.get("a"))
+    d.answer(which["id"], "a")
+    kept = [t for t, _ in d.kept()]
+    assert pair[0] in kept and pair[1] not in kept
+    free = next(q for q in qs if not q.get("a"))
+    d.answer(free["id"], "text", "Chiku is Aarav's nickname.")
+    assert "Chiku is Aarav's nickname." in [t for t, _ in d.kept()] and d.open_questions() == []
+    assert d._questions(["Is Chiku Aarav's nickname?"], [], TODAY, keep=True) == []  # answered: never again
 
 
 def test_a_failed_model_keeps_the_best_as_said_and_dry_run_writes_nothing(tmp_path):
     g = _graph(tmp_path)
     d = Dreamer(g, None, FakeLLM(RuntimeError("down")), tmp_path / "dreams.json", days=3)
+    before = d.kept()
     rep = asyncio.run(d.run(today=TODAY, dry_run=True))
-    assert rep.fallback and rep.added and g.page(PAGE) is None and g.page(DIARY) is None
+    assert rep.fallback and rep.added and d.kept() == before and g.page(DIARY) is None
     rep = asyncio.run(d.run(today=TODAY))
-    assert len(rep.added) <= 3 and g.page(PAGE) is not None  # at most 3 new a night
+    assert 0 < len(rep.added) <= 3 and len(d.kept()) == len(before) + len(rep.added)  # at most 3 new a night
 
 
 def test_dreams_ride_in_the_system_prompt():
@@ -137,9 +171,9 @@ def test_a_bad_night_is_a_report_and_disputed_facts_wait_for_an_answer(tmp_path)
     assert not rep.error
     chiku = Candidate([Bit("The user's son Chiku's birthday is 13 May.", TODAY, "memory", True, "x")])
     r = Report(started=0, since="", until="")
-    kept = d._apply({"decisions": [{"op": "add", "cites": ["C1"], "text": "Chiku's birthday is 13 May."}]},
-                    [chiku], [], r, TODAY, {chiku.bits[0].text})
-    assert kept == [] and r.skipped == 1
+    d._apply({"decisions": [{"op": "add", "cites": ["C1"], "text": "Chiku's birthday is 13 May."}]},
+             [chiku], [], r, TODAY, {chiku.bits[0].text})
+    assert r.changes == [] and r.skipped == 1
 
     class Broken:
         model = "x"
@@ -150,7 +184,7 @@ def test_a_bad_night_is_a_report_and_disputed_facts_wait_for_an_answer(tmp_path)
         async def chat(self, *a):
             raise RuntimeError("down")
     d2 = Dreamer(g, None, Broken(), tmp_path / "d2.json")
-    d2._write = lambda entries: (_ for _ in ()).throw(OSError("disk full"))
+    d2._do = lambda c: (_ for _ in ()).throw(OSError("disk full"))
     assert asyncio.run(d2.run(today=TODAY, force=True)).error == "disk full"
 
 
@@ -164,6 +198,22 @@ def test_the_diary_keeps_one_entry_a_day_and_skips_empty_nights(tmp_path):
     assert g.page(DIARY) is None
     d._diary(rep(added=["A"], questions=["Q?"]), TODAY)
     d._diary(rep(added=["B"], questions=["Q?"]), TODAY)  # same day again: replaces, still asks Q
-    d._diary(rep(questions=["Q?"]), date(2026, 11, 5))  # Q already asked on another day: nothing to write
+    d._diary(rep(), date(2026, 11, 5))  # nothing changed, no new question (asked ones aren't new): nothing
     diary = g.page(DIARY).path.read_text(encoding="utf-8")
     assert diary.count("Dream of") == 1 and "Kept: B" in diary and "Kept: A" not in diary and "Q?" in diary
+
+
+def test_only_a_conflict_the_model_confirms_becomes_a_question(tmp_path):
+    g = _graph(tmp_path)
+    (tmp_path / "kb" / "jarvis" / "work.md").write_text(
+        "- You worked at cloudcover from 2022 to 2024.\n- You have worked at Energy Exemplar since 2024.\n"
+        "- The user's son is called Chiku.\n", encoding="utf-8")
+
+    def decide(prompt):
+        e = {k: next(line.split(" ", 1)[0] for line in prompt.splitlines() if line.startswith("E") and k in line)
+             for k in ("Chiku", "Aarav")}
+        return {"decisions": [], "conflicts": [[e["Chiku"], e["Aarav"]], ["E99", "E1"]]}
+    d = Dreamer(g, None, FakeLLM(decide), tmp_path / "dreams.json")
+    rep = asyncio.run(d.run(today=TODAY, force=True))
+    assert len(rep.questions) == 1 and "Chiku" in rep.questions[0] and "Aarav" in rep.questions[0]
+    assert not any("cloudcover" in q for q in rep.questions)  # an old job and a new one aren't a conflict

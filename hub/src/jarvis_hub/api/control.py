@@ -401,7 +401,7 @@ def _by_hand(request: Request, source: Source, tool: str, risk: str, arguments: 
 async def dream_state(request: Request, _: Source = Depends(require_approver)) -> dict:
     d = request.app.state.dreamer
     return {"running": d.running, "at": d.at, "days": d.days, "last": d.state.get("last"),
-            "context": d.context(), "kept": [{"text": t, **p} for t, p in d.kept()]}
+            "context": d.context(), "kept": [{"text": t, **p} for t, p in d.kept()], "questions": d.open_questions()}
 
 
 @router.post("/dream/undo/{index}")
@@ -411,6 +411,22 @@ async def dream_undo(index: int, request: Request, _: Source = Depends(require_a
         return request.app.state.dreamer.undo(index)
     except IndexError:
         raise HTTPException(404, "no such change in the last dream") from None
+
+
+class AnswerBody(BaseModel):
+    choice: str  # "a" | "b" (which of two disagreeing facts is right) | "text" | "dismiss"
+    text: str = ""
+
+
+@router.post("/dream/answer/{qid}")
+async def dream_answer(qid: str, body: AnswerBody, request: Request, _: Source = Depends(require_approver)) -> dict:
+    """Answer (or dismiss) a question a dream asked, from the HUD's morning digest."""
+    try:
+        return request.app.state.dreamer.answer(qid, body.choice, body.text)
+    except KeyError:
+        raise HTTPException(404, "no such question") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
 
 
 class DreamBody(BaseModel):
