@@ -217,6 +217,17 @@ def own_words(tool, args, t) -> Verdict | None:
     return None
 
 
+def once(tool, args, t) -> Verdict | None:
+    """One note write per fact a turn: a 2B model saved a fact, then tried the journal and a page with it too."""
+    if tool.name not in NOTE_TOOLS or not (noted := getattr(t, "noted", None)):
+        return None
+    from jarvis_hub.kb.tools import similar
+    text = str(args.get("fact") or args.get("text") or "")
+    if any(similar(text, n) >= 0.6 for n in noted):
+        return Verdict("error", "Already saved this turn. Don't save it again; tell the user it is saved.")
+    return None
+
+
 def slots(tool, args, t) -> Verdict | None:
     if bad := unsaid(tool, args, t.heard, t.seen):
         return Verdict("error", f"ERROR: {tool.model_name} has {', '.join(bad)}, which the user didn't say. "
@@ -322,7 +333,7 @@ def record_taint(tool, args, output: str, t) -> str:
     return output
 
 
-PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, clock_time, keep_links, own_words, slots, taint,
+PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, clock_time, keep_links, once, own_words, slots, taint,
                             after_outside_text]
 POST_TOOL: list[Callable] = [record_taint]
 

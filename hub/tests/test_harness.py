@@ -233,10 +233,10 @@ def test_remember_skips_a_fact_it_has_and_replaces_one_that_says_less(tmp_path):
     run("remember", fact="My wife's name is Sanika.")
     assert run("remember", fact="my wife's name is Sanika").startswith("Already remembered")
     run("remember", fact="My wife's name is Sanika and she is a doctor.")
-    texts = [b.text.split("\n")[0] for b in g.page("jarvis/memory").blocks]
+    texts = [b.text.split("\n")[0] for b in g.page("jarvis/family").blocks]
     assert texts == ["My wife's name is Sanika and she is a doctor."]
     run("remember", fact="My wife's name is Tanika.")  # a different fact is kept beside it
-    assert len(g.page("jarvis/memory").blocks) == 2
+    assert len(g.page("jarvis/family").blocks) == 2
 
 
 def test_correct_memory_keeps_only_the_right_part_and_one_copy(tmp_path):

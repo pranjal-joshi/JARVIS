@@ -83,6 +83,10 @@ BARE_SAVE = re.compile(
     r"(?:\s+(?:in|to|into|on)\s+(?:my |the |your )?\w+(?:\s+(?:page|notes?))?)?"
     r"(?:\s+(?:please|now|too|as well|for me|sir))*\W*$", re.I)
 NOTE_WRITES = frozenset({"kb_remember", "kb_journal", "kb_append_to_page"})
+# "save this to Sanika page", "add it on my Work page", "put that under the Car page": the page is the user's choice
+NAMED_PAGE = re.compile(r"\b(?:to|on|in|into|under)\s+(?:my|the|her|his|our|a|an)?\s*([\w'][\w' .&-]{0,39}?)\s+page\b",
+                        re.I)
+JOURNAL_ASK = re.compile(r"\b(?:in|to|into)\s+(?:my|the|today'?s)\s+journal\b|\bjournal (?:it|that|this)\b", re.I)
 SAVE_HINT = ("\n(The user wants what came before saved. Call remember with its key facts in one or two sentences, "
              "keeping names, numbers and links (add_to_page or add_to_journal if they named a page or the journal). "
              "What came before:\n{material})")
@@ -107,6 +111,8 @@ STATES_A_FACT = re.compile(
     r"\b(?:my|our)\s+(?:[\w']+\s+){0,3}(?:is|are|was|were)\b"
     r"|\bI\s+(?:prefer|like|love|hate|don'?t like|always|never|usually|am allergic|take|drink|eat|live|work"
     r"|was born)\b|\bI'm allergic\b"
+    r"|\bI\s+(?:worked|work(?:ed)?\s+(?:at|in|for)|started|joined|moved|studied|graduated|used to|have been|retired|quit|left)\b"
+    r"|\bI'?m\s+(?:working|employed|at|with)\b|\bI'?m\s+in\s+[\w ]{2,40}?\s(?:since|till|until|from|onwards|now)\b"
     r"|\bkeep (?:that|this|it) in mind\b|\bdon'?t forget\b|\bfor (?:future|later) reference\b|\bfor the record\b"
     # a word or abbreviation the user uses: "REA = Reverse Engineer Anything", "SL1 stands for Smart Lock 1"
     r"|^\W*[A-Za-z][\w.+-]{1,20}\s*(?:=|stands for|is short for)\s+[A-Za-z]",
@@ -114,7 +120,7 @@ STATES_A_FACT = re.compile(
 # "No, it's Sanika, not Tanika": a correction goes to correct_memory, not to memory capture (which would
 # save the new fact beside the wrong one)
 CORRECTS = re.compile(r"^\W*no\b|\bnot\s+\w+\W*$|\b(?:wrong|incorrect|actually|mistake|misheard|correct(?:ion)?|"
-                      r"fix (?:it|that|this)|update what you know)\b", re.I)
+                      r"fix (?:it|that|this)|update (?:it|that|this|what you know))\b", re.I)
 CORRECT_HINT = ("\nThe user is correcting something you remembered. Call correct_memory with a few words from the "
                 "wrong memory and the corrected fact.")
 CAPTURE_PROMPT = ("Extract the facts the user states about themselves, their people, home, work or preferences, or "
@@ -262,12 +268,15 @@ class ToolAgent:
             turn.hide = turn.hide | {"web_search"}  # "the capital of Australia": answered, not searched
         users = [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
         turn.before = users[-2] if len(users) > 1 else ""
+        turn.last_reply = next((str(m.get("content") or "") for m in reversed(messages[:-1])
+                                if m.get("role") == "assistant"), "")
         turn.heard = " ".join(m["content"] for m in messages if m.get("role") == "user")[-1500:]
         turn.links = LINK.findall(said)  # a link the user gives goes into what is saved (guard/hooks.py keep_links)
         if self.fast and (plan := self.fast.match(said)):
             if (reply := await self._fast(plan, turn)) is not None:
                 return reply
         corrects = bool(CORRECTS.search(said)) and self.tools.get("kb_correct") is not None
+        turn.correcting = corrects
         # a question isn't a statement, "?" or not ("which area of Pune do I live in" says "I live")
         states = (STATES_A_FACT.search(said) or REMEMBER_THAT.match(said)) and not said.rstrip().endswith("?") \
             and not ASKS.match(said) and not corrects
@@ -298,16 +307,19 @@ class ToolAgent:
         return f"\n\n{KNOWN}\n{kept}" if kept else ""
 
     def _material(self, messages: list[dict], t: "_Turn") -> str:
-        """What a bare "remember it" saves: the last reply, and what the tools returned in this conversation's
-        last turn (a page read, a search). Those count as seen this turn, outside text stays outside text, and
+        """What a bare "remember it" saves: the user's recent words, and what the tools returned in this
+        conversation's last few turns (a page read, a search). Those count as seen this turn, outside text stays outside text, and
         links in them or in the user's previous words are kept with the note."""
-        reply = next((str(m.get("content") or "") for m in reversed(messages[:-1]) if m.get("role") == "assistant"), "")
+        # the user's own recent words and what tools returned, never the model's reply: a 2B model's summary
+        # turned "BEL in 2018" into "BEL from 2018 until now" and saved the user's wife's jobs as the user's (2026-11-13)
+        words = [str(m.get("content") or "") for m in messages[:-1] if m.get("role") == "user"][-3:]
         last = self._last.get(t.trace_session or "", {})
         outputs = [o for o in last.get("seen", []) if not o.startswith("ERROR")]
-        t.seen += outputs + ([reply] if reply else [])
+        t.seen += outputs + words
         t.tainted += last.get("tainted", [])
         t.links = list(dict.fromkeys([*t.links, *LINK.findall(t.before), *(u for o in outputs for u in LINK.findall(o))]))
-        return "\n".join(x for x in [*(" ".join(o.split())[:600] for o in outputs[-2:]), reply] if x).strip()
+        return "\n".join(x for x in [*(" ".join(o.split())[:600] for o in outputs[-2:]),
+                                     *(f"The user said: {w}" for w in words)] if x).strip()
 
     async def _chain(self, base: list[dict], steps: list[str], t: "_Turn", start: int = 0,
                      done: list[str] | None = None, convo: list[dict] | None = None) -> str:
@@ -483,6 +495,7 @@ class ToolAgent:
                 if not isinstance(prep, str) and prep[0].name in t.hide:
                     prep = f"ERROR: {prep[0].model_name} can't be used here; carry out the steps with other tools."
                 if not isinstance(prep, str):
+                    prep = self._route_note(prep, t)
                     for hook in PRE_TOOL:  # guard/hooks.py: arguments, needless search, unsaid names/dates, taint
                         if v := hook(prep[0], prep[1], t):
                             if v.kind == "error":
@@ -700,6 +713,26 @@ class ToolAgent:
         # the HUD holds the model picker, wherever the request came from
         for source in dict.fromkeys([Source.WEB, t.source]):
             t.bus.publish(Event("llm_fallback", source, t.request_id, data))
+
+    def _route_note(self, prep: tuple, t: "_Turn") -> tuple:
+        """A note write goes where the user said, whichever write tool the model picked: "save this to Sanika
+        page" is add_to_page on Sanika (a weak model called remember), "note it in my journal" the journal."""
+        tool, args = prep
+        if tool.name not in NOTE_WRITES:
+            return prep
+        text = str(args.get("fact") or args.get("text") or "").strip()
+        said = t.said or ""
+        if (m := NAMED_PAGE.search(said)) and (page := self.tools.get("kb_append_to_page")):
+            name = m[1].strip(" '\"")
+            if tool.name != page.name or args.get("page") != name:
+                t.trace.append({"tool": page.name, "decision": "fixed", "rule": "named page", "why": f"page={name!r}"})
+            return page, {"page": name, "text": text}
+        if tool.name == "kb_remember" and t.correcting and t.last_reply:  # "no, update it": what JARVIS last said
+            return tool, {**args, "corrects": t.last_reply[:400]}         # is the claim being corrected
+        if JOURNAL_ASK.search(said) and (journal := self.tools.get("kb_journal")) and tool.name != journal.name:
+            t.trace.append({"tool": journal.name, "decision": "fixed", "rule": "named page", "why": "journal"})
+            return journal, {"text": text}
+        return prep
 
     def _pool(self, kind: str | None, offered: list[Tool]) -> list[Tool]:
         """The tools a claimed action needs: every tool of that kind, offered or not ("I've saved that" picks from
@@ -948,7 +981,8 @@ class ToolAgent:
                               "dry-run")
         else:
             try:
-                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id, via=t.via, session=t.session or ""))
+                output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id, via=t.via, session=t.session or "",
+                                                        said=t.said or ""))
                 status = "error" if output.startswith("ERROR") else "ok"
             except Exception as e:
                 log.exception("tool %s failed", name)
@@ -962,6 +996,8 @@ class ToolAgent:
             t.changed = True
         if status in ("ok", "dry-run") and (kind := kind_of(name, tool.risk is Risk.READ and "screenshot" not in name)):
             t.done.add(kind)  # backs a claim of that kind (agent/claims.py)
+            if kind == "notes" and not str(output).startswith(("ERROR", "Already")):
+                t.noted.append(str(args.get("fact") or args.get("text") or ""))  # one write per fact (guard/hooks.py)
         self.audit.record(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk,
                           arguments=args, status=status, approved_by=approved_by,
                           result=audit_text(tool, output))
@@ -984,9 +1020,9 @@ class ToolAgent:
             return text
         text = address(text, self.address)
         if t.trace_session:  # for "remember it" next turn
-            self._last.pop(t.trace_session, None)
-            self._last[t.trace_session] = {"seen": [o[:2500] for o in t.seen[-3:]],
-                                           "tainted": [o[:2500] for o in t.tainted[-3:]]}
+            before = self._last.pop(t.trace_session, {})
+            self._last[t.trace_session] = {"seen": [o[:2500] for o in [*before.get("seen", []), *t.seen][-5:]],
+                                           "tainted": [o[:2500] for o in [*before.get("tainted", []), *t.tainted][-5:]]}
             while len(self._last) > LAST_KEPT:
                 self._last.pop(next(iter(self._last)))
         t.bus.publish(Event("reply", t.source, t.request_id, {"text": text}))
@@ -1049,6 +1085,9 @@ class _Turn:
     started: float = field(default_factory=time.time)
     said: str = ""  # the user's latest words
     before: str = ""  # the user's words the turn before (follow-ups)
+    last_reply: str = ""  # what JARVIS said last (a correction is about it)
+    correcting: bool = False  # "no, update it": a remember replaces the wrong memory instead of adding one
+    noted: list[str] = field(default_factory=list)  # what was written to the notes this turn
     ranking: Ranking | None = None  # which tools the request matched, and how closely
     called: bool = False  # some tool ran this turn
     calls_made: set = field(default_factory=set)  # (name, arguments) already called: no repeats

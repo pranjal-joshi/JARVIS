@@ -30,6 +30,7 @@ class ToolCtx:
     request_id: str
     via: str = ""  # where a saved fact came from ("said by you"...), for the memory's provenance
     session: str = ""  # the satellite conversation the call came from ("" = HUD, phone, a skill)
+    said: str = ""  # the user's latest words (a page they named may be made; one the model made up may not)
 
 
 ToolFn = Callable[[dict, ToolCtx], Awaitable[str]]
