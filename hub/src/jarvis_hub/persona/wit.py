@@ -13,6 +13,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class Wit:
 
     def _save(self) -> None:
         if self.path:
-            self.path.write_text(json.dumps(self.levels, indent=1))
+            write_atomic(self.path, json.dumps(self.levels, indent=1))
 
     def _live(self, key: str) -> dict | None:
         e = self.levels.get(key)

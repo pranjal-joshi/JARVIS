@@ -283,7 +283,13 @@ def _note(j: dict, ev: dict) -> None:
 def _run_job(j: dict) -> None:
     prompt = (f"/{j['skill']} " if j.get("skill") else "") + j["goal"] + \
         (f"\n\nTarget: {j['target']}" if j.get("target") else "")
-    cmd = [_exe("claude"), "-p", prompt, "--output-format", "stream-json", "--verbose",
+    try:
+        exe = _exe("claude")
+    except EngineError as e:  # not on PATH: fail the job, or it stays queued and counts toward JOB_MAX for good
+        j.update(state="failed", error=str(e)[:300], ended=time.time())
+        _save_jobs()
+        return
+    cmd = [exe, "-p", prompt, "--output-format", "stream-json", "--verbose",
            "--permission-mode", "dontAsk", "--allowedTools", JOB_TOOLS, "--strict-mcp-config",
            "--max-budget-usd", str(JOB_BUDGET), "--append-system-prompt", JOB_SYSTEM]
     if JOB_MODEL:
@@ -397,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authorised(self) -> bool:
         got = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-        return bool(TOKEN) and hmac.compare_digest(got, TOKEN)
+        return bool(TOKEN) and hmac.compare_digest(got.encode(), TOKEN.encode())  # str compare raises on non-ASCII
 
     def do_GET(self) -> None:
         if not self._authorised():

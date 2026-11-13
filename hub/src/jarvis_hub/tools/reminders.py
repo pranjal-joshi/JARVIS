@@ -20,6 +20,7 @@ from jarvis_hub.events.bus import Event, EventBus
 from jarvis_hub.guard.validate import best_name, resolver
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.tools.when import DAYS, spoken, when
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 REPEATS = ("once", "daily", "weekdays", "weekly")
@@ -70,7 +71,7 @@ class Reminders:
         if not self.path:
             return
         try:
-            self.path.write_text(json.dumps(list(self.items.values()), indent=1), encoding="utf-8")
+            write_atomic(self.path, json.dumps(list(self.items.values()), indent=1), encoding="utf-8")
         except OSError as e:
             log.warning("reminders not saved: %s", e)
 

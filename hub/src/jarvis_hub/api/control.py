@@ -22,6 +22,7 @@ from jarvis_hub.tools.cards import family_of
 from jarvis_hub.voice.service import VoiceError
 from jarvis_hub.voice.speakable import for_ear, to_speech
 from jarvis_hub.voice.spoken import symbols
+from jarvis_hub.files import write_atomic
 
 router = APIRouter(prefix="/v1")
 log = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ async def eval_post(request: Request, _: Source = Depends(require_approver)) -> 
     runs = [*runs, {k: body.get(k) for k in ("model", "when", "cases", "passed", "first_words_median_s",
                                              "by_category")} | {"failed": [
         {"id": r["id"], "fails": r["fails"]} for r in body.get("rows", []) if not r.get("pass")][:60]}][-30:]
-    path.write_text(json.dumps(runs), encoding="utf-8")
+    write_atomic(path, json.dumps(runs), encoding="utf-8")
     return {"ok": True}
 
 

@@ -298,6 +298,8 @@ def adb_tap(a: dict) -> str:
 def adb_type(a: dict) -> str:
     s = _device(a)
     text = str(a.get("text", ""))[:500]
+    if "\n" in text or "\r" in text:  # a newline ends `input text` and runs the rest as a phone shell command
+        raise ActionError("text with line breaks can't be typed; send each line separately")
     # input text needs spaces as %s and shell metacharacters escaped
     esc = re.sub(r"([\\\"'`$&|;<>()*?#~ ])", lambda m: "%s" if m[1] == " " else "\\" + m[1], text)
     adb("shell", "input", "text", esc, serial=s)
@@ -839,7 +841,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authorised(self) -> bool:
         got = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-        return bool(TOKEN) and hmac.compare_digest(got, TOKEN)
+        return bool(TOKEN) and hmac.compare_digest(got.encode(), TOKEN.encode())  # str compare raises on non-ASCII
 
     def do_GET(self) -> None:
         if self.path != "/health":

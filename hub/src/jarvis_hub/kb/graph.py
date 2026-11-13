@@ -15,7 +15,6 @@ The indexer and tools only use the public methods below, so another store can re
 import difflib
 import json
 import hashlib
-import os
 import re
 import threading
 import time
@@ -23,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
+from jarvis_hub.files import write_atomic
 
 LINK = re.compile(r"\[\[([^\[\]|#]+)(?:#[^\[\]|]*)?(?:\|[^\[\]]*)?\]\]")  # [[page]], [[page#heading|alias]]
 TAG = re.compile(r"(?<![\w\[])#(?:\[\[([^\]]+)\]\]|([\w\-/.]+))")
@@ -678,12 +678,7 @@ class ObsidianVault:
     def _save(self, path: Path, text: str) -> None:
         """Write a page atomically (temp file, then replace): Obsidian or Sync reading it mid-write, or a crash,
         never sees half a file. Callers hold the lock."""
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        with open(tmp, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        write_atomic(path, text)
         self._cache.pop(path, None)
 
 

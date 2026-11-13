@@ -299,8 +299,13 @@ def test_events_that_come_while_a_skill_runs_wait_their_turn(tmp_path):
     g.append_to_user_page("skills/Door", "trigger:: webhook\nmatch:: doorbell\n\n- Tell me what it says.")
 
     class SlowAgent(FakeAgent):
+        active = peak = 0
+
         async def run(self, **kw):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
             await asyncio.sleep(0.05)
+            self.active -= 1
             return await super().run(**kw)
 
     agent = SlowAgent()
@@ -312,5 +317,6 @@ def test_events_that_come_while_a_skill_runs_wait_their_turn(tmp_path):
         await asyncio.sleep(0.3)
         assert len(agent.prompts) == 2
         assert "first ring" in agent.prompts[0] and "second ring" in agent.prompts[1]
+        assert agent.peak == 1  # back-to-back events (before the first task starts) never run side by side
 
     asyncio.run(scenario())

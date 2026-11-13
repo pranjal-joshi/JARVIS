@@ -33,6 +33,7 @@ from jarvis_hub.kb.tools import missing_page
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.tools.when import spoken, when
 from jarvis_hub.tools.widget import show as show_widget
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ class Timers:
             return
         keep = [{k: t[k] for k in ("id", "label", "due", "source", "request_id")} for t in self.active.values()]
         try:
-            self.path.write_text(json.dumps(keep, indent=1), encoding="utf-8")
+            write_atomic(self.path, json.dumps(keep, indent=1), encoding="utf-8")
         except OSError as e:
             log.warning("timers not saved: %s", e)
 

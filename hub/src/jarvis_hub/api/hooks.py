@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from jarvis_hub.api.auth import require_source
 from jarvis_hub.approval.gate import APPROVER_SOURCES
 from jarvis_hub.config import Settings, Source
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1")
@@ -107,7 +108,7 @@ class Webhooks:
 
     def _save(self) -> None:
         try:
-            self.state_file.write_text(json.dumps({"secret": "" if self.from_env else self._secret,
+            write_atomic(self.state_file, json.dumps({"secret": "" if self.from_env else self._secret,
                                                    "hooks": self.per_hook}), encoding="utf-8")
         except OSError as e:
             log.warning("webhook secret not saved: %s", e)

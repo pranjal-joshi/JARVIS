@@ -18,6 +18,7 @@ from pathlib import Path
 from jarvis_hub.config import Settings, Source
 from jarvis_hub.devices.tools import bridge_call
 from jarvis_hub.events.bus import Event, EventBus
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 EVERY = re.compile(r"^(\d+)([mh])$")
@@ -46,7 +47,7 @@ class WatchEngine:
 
     def _save(self) -> None:
         try:
-            self.state_file.write_text(json.dumps(self.state, indent=1), encoding="utf-8")
+            write_atomic(self.state_file, json.dumps(self.state, indent=1), encoding="utf-8")
         except OSError as e:
             log.warning("watcher state not saved: %s", e)
 

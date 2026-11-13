@@ -34,6 +34,7 @@ from pathlib import Path
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.kb.graph import JARVIS_NS, JOURNAL_FILE, LINK, PROP, ObsidianVault, journal_title
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -333,7 +334,7 @@ class Dreamer:
             return {}
 
     def _save(self) -> None:
-        self.state_file.write_text(json.dumps(self.state, indent=1, default=str), encoding="utf-8")
+        write_atomic(self.state_file, json.dumps(self.state, indent=1, default=str), encoding="utf-8")
 
     @property
     def running(self) -> bool:

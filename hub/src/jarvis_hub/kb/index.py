@@ -103,20 +103,21 @@ class KBIndex:
     async def sync(self) -> dict:
         async with self._sync_lock:
             pages = self.graph.pages()
-            changed = [p for p in pages if self._digests.get(p.name) != p.digest]
-            removed = set(self._digests) - {p.name for p in pages}
-            stats = {"pages": len(pages), "changed": len(changed), "removed": len(removed),
-                     "vector": False}
+            stats = {"pages": len(pages), "changed": 0, "removed": 0, "vector": False}
             try:
-                if changed or removed or not self.vector_ready:
+                if not self.vector_ready:  # first sync since start (or after a failure)
                     await self._ensure_collection()
-                    if not self.vector_ready:  # first sync since start: pages deleted while the hub was down
-                        stats["removed"] += await self._drop_orphans({p.name for p in pages})
+                    stats["removed"] += await self._drop_orphans({p.name for p in pages})  # deleted while down
+                    if not self._digests:  # what is already indexed, so a restart doesn't re-embed the vault
+                        self._digests = await self._stored_digests()
+                changed = [p for p in pages if self._digests.get(p.name) != p.digest]
+                removed = set(self._digests) - {p.name for p in pages}
+                stats["changed"], stats["removed"] = len(changed), stats["removed"] + len(removed)
+                if changed or removed:
                     for name in removed:
                         await self._delete_page(name)
                         self._digests.pop(name, None)
-                    targets = pages if not self.vector_ready else changed
-                    for p in targets:
+                    for p in changed:
                         await self._index_page(p)
                         self._digests[p.name] = p.digest
                 self.vector_ready = True
@@ -148,6 +149,15 @@ class KBIndex:
             "filter": {"must": [{"key": "page", "match": {"value": name}}]}})
         r.raise_for_status()
 
+    async def _stored_digests(self) -> dict[str, str]:
+        """page -> digest of the version in Qdrant (points from before digests were stored count as changed)."""
+        # shortcut: one scroll of 10,000 points; page through next_page_offset if the vault outgrows it
+        r = await self._qdrant.post(f"/collections/{COLLECTION}/points/scroll", json={
+            "limit": 10000, "with_payload": ["page", "digest"], "with_vector": False})
+        r.raise_for_status()
+        return {p["payload"]["page"]: p["payload"]["digest"] for p in r.json()["result"]["points"]
+                if p["payload"].get("digest")}
+
     async def _drop_orphans(self, names: set[str]) -> int:
         """Delete points of pages no longer in the graph; returns how many pages they belonged to."""
         flt = {"must_not": [{"key": "page", "match": {"any": sorted(names)}}]} if names else {}
@@ -168,7 +178,7 @@ class KBIndex:
             points = [{
                 "id": str(uuid.uuid5(NS, f"{page.name}#{b.index}")),
                 "vector": v,
-                "payload": {"page": page.name, "block": b.index, "text": b.text,
+                "payload": {"page": page.name, "digest": page.digest, "block": b.index, "text": b.text,
                             "links": b.links, "journal": page.is_journal},
             } for b, v in zip(chunk, vectors)]
             r = await self._qdrant.put(f"/collections/{COLLECTION}/points?wait=true",

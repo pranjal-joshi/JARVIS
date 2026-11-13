@@ -23,6 +23,7 @@ from jarvis_hub.config import Settings, Source
 from jarvis_hub.events.bus import Event, EventBus
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
+from jarvis_hub.files import write_atomic
 
 log = logging.getLogger(__name__)
 LIVE, ENDED = ("queued", "running"), ("done", "failed", "cancelled")
@@ -223,7 +224,7 @@ class Jobs:
     def _save_seen(self) -> None:
         if self._seen_file and self._reported is not None:
             try:
-                self._seen_file.write_text(json.dumps({"reported": sorted(self._reported)[-500:],
+                write_atomic(self._seen_file, json.dumps({"reported": sorted(self._reported)[-500:],
                                                        "dismissed": sorted(self.dismissed)[-500:],
                                                        "cleared": sorted(self.cleared)[-500:]}), encoding="utf-8")
             except OSError as e:

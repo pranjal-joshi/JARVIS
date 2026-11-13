@@ -79,6 +79,13 @@ foreach ($c in $ast.FindAll({ $args[0] -is [System.Management.Automation.Languag
     if ($c.Extent.Text -match '-Verb\s+RunAs') { Mark-Block 'asks for administrator rights' }
     Not-Read "starts $target"; continue
   }
+  if ($full -in 'ForEach-Object','Where-Object') {  # -MemberName / a bare name calls any method (% Kill, % Delete)
+    $SB = [System.Management.Automation.Language.ScriptBlockExpressionAst]
+    $bad = $c.CommandElements | Select-Object -Skip 1 | Where-Object {
+      -not ($_ -is $SB -or ($_ -is [System.Management.Automation.Language.CommandParameterAst] -and
+                           $_.ParameterName -match '^(Begin|Process|End|FilterScript)$')) }
+    if ($bad) { Not-Read "uses $full with a method name, which can call anything" }
+  }
   $verb = ($full -split '-')[0]
   if (-not ($readVerbs -contains $verb -or $readExtra -contains $full)) { Not-Read "uses $full" }
   if ($full -eq 'Get-Credential') { Not-Read 'asks for a password' }
@@ -94,11 +101,17 @@ foreach ($m in $ast.FindAll({ $args[0] -is [System.Management.Automation.Languag
     } elseif (-not ($type -match $readTypes -and $member -match $readMethods) -and $type -notmatch '^(System\.)?IO\.(File|Directory)$') {
       Not-Read "calls [$type]::$member"
     }
+  } elseif ($member -match '^(ForEach|Where)$' -and ($m.Arguments | Where-Object {
+              $_ -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst] })) {
+    Not-Read "calls .$member() with a method name, which can call anything"  # .ForEach('Delete')
   } elseif ($member -match '^(Delete|MoveTo|CopyTo|Encrypt|Decrypt|Create|CreateText|AppendText|Open|OpenWrite|WriteAllText|WriteAllBytes|SetAccessControl)$') {
     Mark-Block "calls .$member(), which can change files"
   } elseif ($member -notmatch $readMethods) {
     Not-Read "calls .$member()"
   }
+}
+foreach ($a in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+  if ($a.Left -is [System.Management.Automation.Language.MemberExpressionAst]) { Not-Read "sets $($a.Left.Extent.Text)" }
 }
 if ($src -match '(?i)-e(nc(odedcommand)?)?\s+[A-Za-z0-9+/=]{16,}') { Mark-Block 'contains an encoded command' }
 if ($block) { $read = $false }
