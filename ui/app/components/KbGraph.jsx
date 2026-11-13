@@ -156,7 +156,8 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
         if (!near) return C.link;
         return touches(l, live.current.selected) ? C.near : C.far;
       })
-      .linkWidth((l) => (litKind(l) ? 0.8 : live.current.near && touches(l, live.current.selected) ? 0.45 : 0))
+      // no linkWidth: changing it makes the library rebuild every link object (a ~65 ms stall per pulse);
+      // lit and focused links stand out by colour and particles instead
       .linkOpacity(0.55)
       .linkDirectionalParticles((l) => (litKind(l) && !reduced ? 3 : 0))
       .linkDirectionalParticleSpeed(0.007)
@@ -224,8 +225,25 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
     ro.observe(el);
     size();
 
+    // restyle the links at most once a frame, however many pages light up or fade in it
+    let restyle = 0;
     const refreshLinks = () => {
-      graph.linkColor(graph.linkColor()).linkWidth(graph.linkWidth()).linkDirectionalParticles(graph.linkDirectionalParticles());
+      restyle ||= requestAnimationFrame(() => {
+        restyle = 0;
+        if (!stopped) graph.linkColor(graph.linkColor()).linkDirectionalParticles(graph.linkDirectionalParticles());
+      });
+    };
+    // fly to every lit page together, at most every 900 ms: one pulse per page would yank the camera around.
+    // A page written just now may only exist after the refetch, so a miss retries briefly.
+    let flyTimer = 0, lastFly = 0, misses = 0;
+    const flyLit = (retry = false) => {
+      if (!retry) misses = 0;
+      clearTimeout(flyTimer);
+      flyTimer = setTimeout(() => {
+        if (stopped) return;
+        lastFly = performance.now();
+        if (!flyTo([...lit.keys()], 1400) && ++misses <= 6) flyTimer = setTimeout(() => flyLit(true), 400);
+      }, Math.max(0, lastFly + 900 - performance.now()));
     };
 
     const flyTo = (ids, ms) => {
@@ -342,11 +360,13 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       refreshLinks();
     };
 
-    api.current = { graph, lit, reduced, flyTo, refreshLinks, load, controls, state, focusOn, isHidden: () => hidden };
+    api.current = { graph, lit, reduced, flyTo, flyLit, refreshLinks, load, controls, state, focusOn, isHidden: () => hidden };
     load();
 
     return () => {
       stopped = true;
+      cancelAnimationFrame(restyle);
+      clearTimeout(flyTimer);
       pause();
       io.disconnect();
       ro.disconnect();
@@ -389,16 +409,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
     a.refreshLinks();
     a.controls.autoRotate = false;
     a.state.busy = true;
-    if (!ids.length) return;
-    // a page written just now may only exist after the refetch: retry the fly-to briefly
-    let tries = 0;
-    let timer;
-    const go = () => {
-      if (a.flyTo(ids, 1400) || ++tries > 6) return;
-      timer = setTimeout(go, 400);
-    };
-    go();
-    return () => clearTimeout(timer);
+    if (ids.length) a.flyLit();
   }, [pulse]);
 
   // settle back to ambient
