@@ -560,3 +560,9 @@ def test_notes_accept_other_words_for_saving_and_a_fair_rewording():
                                                       "all based in Pune."}, T) is None
     made_up = {"page": "Sanika", "text": "Xoriant is a Silicon Valley product engineering firm founded in 1990."}
     assert "nobody said" in own_words(page, made_up, T).message  # still not the model's own knowledge
+
+
+def test_remember_writes_only_its_memory_page_not_a_journal_day(tmp_path):
+    g, run = kb(tmp_path)
+    run("remember", fact="My favourite tea is masala chai.")
+    assert g.page("jarvis/preferences") and not [p for p in g.pages() if p.is_journal]

@@ -145,7 +145,6 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         # provenance: "said by you" (memory capture), "approved by you", or noted by JARVIS on its own
         via = ctx.via or "noted by JARVIS"
         page = graph.write_jarvis_page(topic, f"{fact}\n  learned:: [[{_today_title(graph)}]]\n  via:: {via}")
-        graph.append_journal(f"Learned: {fact} (see [[{page}]]) #jarvis")
         await index.sync()
         # the exact words saved, so the spoken confirmation repeats them (a misheard date shows up)
         return (f'Saved "{fact}" to [[{page}]] and today\'s journal. Confirm it to the user in these words.'
@@ -175,7 +174,6 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         topic = memory_topic(str(args.get("topic") or ""), fact) if args.get("topic") else found[0][0]
         via = ctx.via or "corrected by you"
         page = graph.write_jarvis_page(topic, f"{fact}\n  learned:: [[{_today_title(graph)}]]\n  via:: {via}")
-        graph.append_journal(f"Corrected: {fact} (see [[{page}]]) #jarvis")
         await index.sync()
         old = "; ".join(f'"{t.split(chr(10))[0]}"' for _, t in found)
         return (f'Corrected [[{page}]]: removed {old}, saved "{fact}" (old copies kept in .trash). '

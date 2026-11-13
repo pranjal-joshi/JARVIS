@@ -152,3 +152,18 @@ def test_a_bad_night_is_a_report_and_disputed_facts_wait_for_an_answer(tmp_path)
     d2 = Dreamer(g, None, Broken(), tmp_path / "d2.json")
     d2._write = lambda entries: (_ for _ in ()).throw(OSError("disk full"))
     assert asyncio.run(d2.run(today=TODAY, force=True)).error == "disk full"
+
+
+def test_the_diary_keeps_one_entry_a_day_and_skips_empty_nights(tmp_path):
+    import time
+    from jarvis_hub.kb.dreaming import Report
+    g = _graph(tmp_path)
+    d = Dreamer(g, None, FakeLLM({}), tmp_path / "dreams.json")
+    rep = lambda **kw: Report(time.time(), "2026-11-01", "2026-11-04", **kw)
+    d._diary(rep(), TODAY)  # nothing kept, nothing asked: no page at all
+    assert g.page(DIARY) is None
+    d._diary(rep(added=["A"], questions=["Q?"]), TODAY)
+    d._diary(rep(added=["B"], questions=["Q?"]), TODAY)  # same day again: replaces, still asks Q
+    d._diary(rep(questions=["Q?"]), date(2026, 11, 5))  # Q already asked on another day: nothing to write
+    diary = g.page(DIARY).path.read_text(encoding="utf-8")
+    assert diary.count("Dream of") == 1 and "Kept: B" in diary and "Kept: A" not in diary and "Q?" in diary

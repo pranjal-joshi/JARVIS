@@ -40,6 +40,7 @@ log = logging.getLogger(__name__)
 
 PAGE = "jarvis/dreams"
 DIARY = "jarvis/dreams/diary"
+DIARY_DAYS = 30  # diary entries kept; older days roll off (jarvis/dreams keeps what mattered)
 WEIGHTS = {"relevance": 0.30, "frequency": 0.24, "diversity": 0.15, "recency": 0.15, "consolidation": 0.10,
            "richness": 0.06}
 MIN_SCORE = 0.35  # a candidate below this isn't put to the model
@@ -524,25 +525,38 @@ class Dreamer:
     def _write(self, entries: list[tuple[str, dict]]) -> None:
         text = "\n".join(f"- {t}\n" + "".join(f"  {k}:: {v}\n" for k, v in p.items()) for t, p in entries)
         page = self.graph.page(PAGE)
-        if page is not None:  # the page as it was is kept in .trash/
-            self.graph._trash_path(page.path.name).write_text(page.path.read_text(encoding="utf-8"), encoding="utf-8")
+        if page is not None:
+            was = page.path.read_text(encoding="utf-8")
+            if was.strip() == text.strip():
+                return  # nothing changed: no rewrite, no copy in .trash/
+            self.graph._trash_path(page.path).write_text(was, encoding="utf-8")  # the page as it was
         self.graph.write_jarvis_page(PAGE, text, replace=True)
 
     def _diary(self, rep: Report, today: date) -> None:
+        """One entry per day on one page: a night with nothing kept and no new question writes nothing, a second
+        run the same day replaces that day's entry, a question already asked isn't asked again, old days roll off."""
         if not rep.woke:
             return
-        kids = []
+        page = self.graph.page(DIARY)
+        old = page.path.read_text(encoding="utf-8") if page else ""
+        mark = f"- Dream of [[{journal_title(today)}]]"
+        days = [d for d in re.split(r"(?m)^(?=- Dream of )", old) if d.startswith("- Dream of ")]
+        others = [d for d in days if not d.startswith(mark)]
+        asked = "\n".join(others)
+        questions = [q for q in rep.questions if q not in asked]
+        kids = [f"{label}: {t}" for label, items in (("Kept", rep.added), ("Merged", rep.merged),
+                                                     ("Updated", rep.updated)) for t in items]
+        kids += [f"Question for you: {q}" for q in questions]
+        if not kids:
+            return
         if rep.themes:
-            kids.append(f"Themes: {rep.themes}")
-        for label, items in (("Kept", rep.added), ("Merged", rep.merged), ("Updated", rep.updated)):
-            kids += [f"{label}: {t}" for t in items]
-        kids += [f"Question for you: {q}" for q in rep.questions]
-        if not (rep.added or rep.merged or rep.updated):
-            kids.append("Nothing new worth keeping.")
-        head = (f"- Dream of [[{journal_title(today)}]]: went through {rep.gathered} notes and things you said from "
+            kids.insert(0, f"Themes: {rep.themes}")
+        head = (f"{mark}: went through {rep.gathered} notes and things you said from "
                 f"{rep.since} to {rep.until}; {rep.candidates} looked worth a thought"
                 + (" (the model failed, so the best were kept as said)" if rep.fallback else ""))
-        self.graph.write_jarvis_page(DIARY, head + "\n" + "\n".join(f"\t- {k}" for k in kids))
+        entry = head + "\n" + "\n".join(f"\t- {k}" for k in kids) + "\n"
+        days = (others + [entry])[-DIARY_DAYS:]
+        self.graph.write_jarvis_page(DIARY, "".join(d if d.endswith("\n") else d + "\n" for d in days), replace=True)
 
     def _finish(self, rep: Report, dry_run: bool, today: date) -> None:
         if dry_run:
