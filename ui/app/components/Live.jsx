@@ -82,7 +82,7 @@ export function Widget({ spec }) {
     body = (
       <div className="wg-bars">
         {spec.items.map((it, i) => (
-          <div key={i}><span>{it.label}</span><span className="wg-meter"><i style={{ width: `${it.percent}%` }} /></span><small>{it.value || `${it.percent}%`}</small></div>
+          <div key={i}><span>{it.label}</span><span className="wg-meter"><i style={{ transform: `scaleX(${it.percent / 100})` }} /></span><small>{it.value || `${it.percent}%`}</small></div>
         ))}
       </div>
     );
@@ -146,18 +146,20 @@ export function Constellation({ feed }) {
       const el = wrap.current;
       if (el) {
         const t = performance.now() / 1000;
+        const w = el.clientWidth / 100, h = el.clientHeight / 100; // read before any write: no forced layout
         el.querySelectorAll("[data-node]").forEach((n, i) => {
           const ring = i % 2 ? 0.62 : 0.86, speed = i % 2 ? -0.16 : 0.11;
           const a = Number(n.dataset.phase) + t * speed;
           const x = 50 + 50 * ring * Math.cos(a), y = 50 + 50 * ring * Math.sin(a) * 0.62;
-          n.style.left = `${x}%`; n.style.top = `${y}%`;
+          n.style.transform = `translate(${x * w}px, ${y * h}px) translate(-50%, -50%)`; // compositor-only, unlike left/top
           const line = el.querySelector(`[data-line="${n.dataset.node}"]`);
           if (line) { line.setAttribute("x2", x); line.setAttribute("y2", y); }
         });
       }
-      raf = requestAnimationFrame(tick);
+      if (!still) raf = requestAnimationFrame(tick);
     };
-    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) tick();
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    tick(); // reduced motion: placed once, standing still
     return () => cancelAnimationFrame(raf);
   }, []);
   if (!agents.length) return null;
@@ -192,8 +194,15 @@ function Typed({ text }) {
   const [n, setN] = useState(0);
   useEffect(() => {
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return setN(text.length);
-    const id = setInterval(() => setN((x) => (x >= text.length ? (clearInterval(id), x) : x + 2)), 22);
-    return () => clearInterval(id);
+    let raf, i = 0, last = performance.now(); // 2 chars every 22 ms, one render per frame
+    const tick = (now) => {
+      i = Math.min(text.length, i + ((now - last) / 22) * 2);
+      last = now;
+      setN(Math.floor(i));
+      if (i < text.length) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [text]);
   const parts = text.slice(0, n).split(/(\[\[[^\]]+\]\])/g);
   return (

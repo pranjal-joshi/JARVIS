@@ -94,13 +94,17 @@ function useTypewriter(text, speed = 14) {
     }
     let i = text.startsWith(prev.current.text) ? prev.current.i : 0;
     prev.current = { text, i };
-    const id = setInterval(() => {
-      i += 2;
-      prev.current.i = Math.min(i, text.length);
-      setShown(text.slice(0, i));
-      if (i >= text.length) clearInterval(id);
-    }, speed);
-    return () => clearInterval(id);
+    // one render per display frame (not per timer tick): 2 chars every `speed` ms
+    let raf, last = performance.now();
+    const tick = (now) => {
+      i = Math.min(text.length, i + ((now - last) / speed) * 2);
+      last = now;
+      prev.current.i = Math.floor(i);
+      setShown(text.slice(0, Math.floor(i)));
+      if (i < text.length) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [text, speed]);
   return shown;
 }
@@ -110,7 +114,7 @@ const reducedMotion = () =>
 
 // Short "decode" reveal: random glyphs resolve left-to-right into the label.
 const GLYPHS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%/+=";
-function useDecode(label, duration = 420) {
+function Decode({ label, duration = 420 }) { // its own component: the per-frame updates re-render only this span
   const [shown, setShown] = useState(label);
   useEffect(() => {
     if (reducedMotion()) {
@@ -130,7 +134,7 @@ function useDecode(label, duration = 420) {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [label, duration]);
-  return shown;
+  return <span aria-hidden="true">{shown}</span>;
 }
 
 // Which KB pages an event touched, and whether it was a read or a write.
@@ -295,7 +299,6 @@ export default function Hud() {
   if (sessionId.current === null) sessionId.current = newSessionId();
   const chatRef = useRef(null);
   const [tab, setTab] = useState("talk"); // phone layout: talk | activity | watch | map
-  const stateLabel = useDecode(state.toUpperCase());
   // Desktop focus: the panel JARVIS is working in (or one the user pinned) widens and the orb
   // docks aside. The dock holds through the answer (thinking, then speaking) and is let go once
   // playback ends; listening always brings the orb back to centre.
@@ -937,7 +940,7 @@ export default function Hud() {
             <Constellation feed={feed} />
           </div>
           <div className="state" data-state={state}>
-            <span aria-hidden="true">{stateLabel}</span>
+            <Decode label={state.toUpperCase()} />
             <span className="sr-only">{state}</span>
             {approvals.length > 0
               ? <span className="state-sub alert">awaiting your approval</span>

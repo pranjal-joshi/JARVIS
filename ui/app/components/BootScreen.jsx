@@ -26,7 +26,7 @@ export default function BootScreen({ steps, leaving }) {
           </li>
         ))}
       </ul>
-      <div className="boot-bar" aria-hidden="true"><span style={{ width: `${(done / steps.length) * 100}%` }} /></div>
+      <div className="boot-bar" aria-hidden="true"><span style={{ transform: `scaleX(${done / steps.length})` }} /></div>
     </div>
   );
 }

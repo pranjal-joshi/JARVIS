@@ -220,7 +220,7 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
       if (hidden && !stopped) setTimeout(() => !stopped && graph.zoomToFit(0, 18), 30);
       hidden = false;
     };
-    const ro = new ResizeObserver(size);
+    const ro = new ResizeObserver(() => { size(); sync(); }); // runs after sync is defined
     ro.observe(el);
     size();
 
@@ -302,7 +302,8 @@ export default function KbGraph({ pulse, active, version, onStats, interactive =
 
     // pause rendering when off-screen or the tab is hidden
     let onScreen = true;
-    const sync = () => (onScreen && !document.hidden ? run() : pause());
+    // a 0×0 map (the phone's knowledge tab, not open) still counts as on screen to the observer: pause it too
+    const sync = () => (onScreen && !hidden && !document.hidden ? run() : pause());
     const io = new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; sync(); });
     io.observe(el);
     document.addEventListener("visibilitychange", sync);

@@ -237,10 +237,12 @@ export default function Orb({ state = "idle", analyser, accent, alert = false, s
       const el = core.current;
       if (el) {
         const swell = (radius / base) * (1 + level * 0.25);
-        el.style.color = `rgb(${r},${g},${b})`;
+        // only transform/opacity change per frame (compositor); colour repaints the SVG, so only when it changes.
+        // The glow is a fixed drop-shadow in CSS: a per-frame filter re-rasterised the whole dot sphere each frame.
+        const rgb = `rgb(${r},${g},${b})`;
+        if (el.style.color !== rgb) el.style.color = rgb;
         el.style.opacity = String(Math.min(1, (0.85 + level * 0.3) * intro * flicker));
         el.style.transform = `translate(-50%, -50%) scale(${swell.toFixed(4)})`;
-        el.style.filter = `drop-shadow(0 0 ${(3 + level * 10).toFixed(1)}px rgba(${r},${g},${b},${(0.55 + level * 0.4).toFixed(2)}))`;
       }
       ctx.globalCompositeOperation = "source-over";
 
@@ -273,7 +275,7 @@ export default function Orb({ state = "idle", analyser, accent, alert = false, s
         style={{
           position: "absolute", left: "50%", top: "50%", width: `${CORE * 100}%`, aspectRatio: "1 / 1",
           transform: "translate(-50%, -50%)", color: `rgb(${BASE.join(",")})`, opacity: 0, pointerEvents: "none",
-          willChange: "transform, filter",
+          willChange: "transform, opacity", filter: "drop-shadow(0 0 6px currentColor)",
         }}
       >
         <DotOrb state={look} variant={variant} size={coreSize} density={1.15} dotSize={1.15} />

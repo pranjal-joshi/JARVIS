@@ -58,8 +58,9 @@ body::before {
 body::after {
   content: "";
   position: fixed;
-  inset: 0;
+  inset: -48px; /* overscan so the moving layer never shows an edge */
   pointer-events: none;
+  will-change: transform;
   background:
     repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -69,34 +70,33 @@ body::after {
 }
 
 @keyframes grain {
-  0% { background-position: 0 0, 0 0; }
-  20% { background-position: 0 0, -37px 23px; }
-  40% { background-position: 0 0, 29px -41px; }
-  60% { background-position: 0 0, -19px -13px; }
-  80% { background-position: 0 0, 43px 31px; }
-  100% { background-position: 0 0, 0 0; }
+  0%, 100% { transform: none; }
+  20% { transform: translate(-37px, 24px); }
+  40% { transform: translate(29px, -42px); }
+  60% { transform: translate(-19px, -12px); }
+  80% { transform: translate(43px, 30px); }
 }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes rise {
-  from { opacity: 0; transform: translateY(14px); filter: blur(6px); }
-  to { opacity: 1; transform: none; filter: none; }
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
 }
 @keyframes slide-in {
   from { opacity: 0; transform: translateX(-14px); }
   to { opacity: 1; transform: none; }
 }
 @keyframes orb-in {
-  from { opacity: 0; transform: scale(0.86); filter: blur(10px); }
-  to { opacity: 1; transform: none; filter: none; }
+  from { opacity: 0; transform: scale(0.86); }
+  to { opacity: 1; transform: none; }
 }
 @keyframes card-in {
-  from { opacity: 0; transform: translateY(10px) scale(0.97); clip-path: inset(0 0 100% 0); }
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
   60% { opacity: 1; }
-  to { opacity: 1; transform: none; clip-path: inset(0 0 0 0); }
+  to { opacity: 1; transform: none; }
 }
 @keyframes card-out {
-  from { opacity: 1; transform: none; max-height: 420px; }
-  to { opacity: 0; transform: translateY(-6px) scale(0.97); max-height: 0; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-6px) scale(0.97); }
 }
 @keyframes ping {
   from { transform: scale(1); opacity: 0.6; }
@@ -944,7 +944,7 @@ header { position: relative; z-index: 20; }
   box-shadow: 0 0 0 1px rgba(127, 231, 255, 0.05), 0 0 60px rgba(127, 231, 255, 0.12), inset 0 0 80px rgba(127, 231, 255, 0.04);
   animation: kbx-grow var(--dur-long) var(--ease-glide) both;
 }
-@keyframes kbx-grow { from { transform: scale(0.94); opacity: 0; filter: blur(4px); } }
+@keyframes kbx-grow { from { transform: scale(0.94); opacity: 0; } }
 /* corner brackets */
 .kbx-frame::before, .kbx-frame::after {
   content: ""; position: absolute; z-index: 2; width: 28px; height: 28px; pointer-events: none; border: 2px solid var(--cyan);
@@ -1064,9 +1064,9 @@ header { position: relative; z-index: 20; }
 .boot {
   position: fixed; inset: 0; z-index: 80; display: grid; place-content: center; justify-items: center; gap: 10px;
   background: radial-gradient(ellipse at 50% 42%, #0b1a24 0%, var(--bg) 62%);
-  transition: opacity 700ms var(--ease-in-out), filter 700ms var(--ease-in-out), transform 700ms var(--ease-in-out);
+  transition: opacity 700ms var(--ease-in-out), transform 700ms var(--ease-in-out);
 }
-.boot.leaving { opacity: 0; filter: blur(6px); transform: scale(1.04); pointer-events: none; }
+.boot.leaving { opacity: 0; transform: scale(1.04); pointer-events: none; }
 .boot-orb { position: relative; width: 190px; height: 190px; display: grid; place-items: center; color: var(--cyan);
   filter: drop-shadow(0 0 18px rgba(127, 231, 255, 0.35)); }
 .boot-ring { position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--cyan-faint);
@@ -1088,7 +1088,7 @@ header { position: relative; z-index: 20; }
 .boot-steps li.fail { opacity: 1; color: var(--red); }
 .boot-bar { width: 280px; height: 2px; margin-top: 8px; background: var(--cyan-faint); border-radius: 2px; overflow: hidden; }
 .boot-bar span { display: block; height: 100%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan);
-  transition: width var(--dur-med) var(--ease-out); }
+  transform-origin: left; transition: transform var(--dur-med) var(--ease-out); }
 @media (prefers-reduced-motion: reduce) {
   .boot-ring, .boot-ring::after, .boot-steps li i { animation: none; }
   .boot { transition: none; }
@@ -1146,7 +1146,7 @@ header { position: relative; z-index: 20; }
 .mon.error { --tone: #ff5c9a; }
 .mon.t { --tone: #6dffa8; }
 .mon.s { --tone: #b49cff; }
-@keyframes mon-in { from { opacity: 0; transform: translateX(14px); clip-path: inset(0 0 0 100%); } to { opacity: 1; transform: none; clip-path: inset(0); } }
+@keyframes mon-in { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 .mon-glyph { position: relative; width: 24px; height: 24px; display: grid; place-items: center; }
 .mon-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 8px var(--tone); }
 .mon.running .mon-dot { animation: mon-blink 0.8s steps(2) infinite; }
@@ -1173,7 +1173,7 @@ header { position: relative; z-index: 20; }
 .mon.fx-fired::after {
   content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
   background: linear-gradient(100deg, transparent 30%, rgba(255, 220, 160, 0.45) 50%, transparent 70%);
-  background-size: 250% 100%; animation: mon-shine 1.1s var(--ease-out) 2;
+  background-size: 250% 100%; animation: mon-shine 1.1s var(--ease-out) 2; /* paints one row only; a moving layer would spill past it */
 }
 @keyframes mon-shine { from { background-position: 120% 0; } to { background-position: -120% 0; } }
 .mon-ping {
@@ -1188,7 +1188,7 @@ header { position: relative; z-index: 20; }
 .mon.fx-failed { border-color: #ff5c9a; animation: mon-shake 0.5s linear both; }
 @keyframes mon-shake { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
 .mon.fx-paused { animation: mon-dim 0.8s both; }
-@keyframes mon-dim { from { filter: saturate(1.6) brightness(1.4); } }
+@keyframes mon-dim { from { opacity: 0.5; } }
 /* gone (cancelled, deleted, timer done): struck through, then dissolves upward */
 .mon.ghost { pointer-events: none; }
 .mon.ghost .mon-title { text-decoration: line-through; text-decoration-color: var(--red); }
@@ -1196,9 +1196,9 @@ header { position: relative; z-index: 20; }
 .mon.ghost.fx-done { --tone: #6dffa8; animation: mon-gone 1.5s var(--ease-in-out) both; }
 .mon.ghost.fx-done .mon-title { text-decoration-color: #6dffa8; }
 @keyframes mon-gone {
-  0% { opacity: 1; background: rgba(255, 92, 92, 0.18); filter: none; }
-  45% { opacity: 1; letter-spacing: 0; }
-  100% { opacity: 0; transform: translateY(-10px) scale(0.97); filter: blur(4px); letter-spacing: 0.25em; }
+  0% { opacity: 1; background: rgba(255, 92, 92, 0.18); }
+  45% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-10px) scale(0.97); }
 }
 .linkish { background: none; border: none; color: var(--cyan); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
 
@@ -1356,8 +1356,8 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .job-box.ended.done { --job-tone: #7dffb0; }
 .job-box.ended.failed, .job-box.ended.cancelled { --job-tone: var(--red); }
 .job-box.closing { animation: job-out 420ms var(--ease-in-out, ease-in) both; }
-@keyframes job-in { from { opacity: 0; transform: translateX(-24px); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
-@keyframes job-out { to { opacity: 0; transform: translateX(-16px) scale(0.98); filter: blur(3px); } }
+@keyframes job-in { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+@keyframes job-out { to { opacity: 0; transform: translateX(-16px) scale(0.98); } }
 .job-head { display: flex; justify-content: space-between; gap: 10px; font-family: var(--display); font-size: 9px;
   letter-spacing: 0.22em; color: var(--job-tone); }
 .job-kind { display: inline-flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1466,7 +1466,7 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .widget { margin: 10px 0 10px 52px; padding: 10px 12px; border: 1px solid var(--panel-edge); background: rgba(8, 20, 28, 0.75);
   animation: wg-in 520ms var(--ease-out) both; max-width: 520px; min-width: 0; }
 .widget figcaption { font-family: var(--display); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan-dim); margin-bottom: 8px; }
-@keyframes wg-in { from { opacity: 0; transform: scale(0.96); filter: blur(4px); } }
+@keyframes wg-in { from { opacity: 0; transform: scale(0.96); } }
 .wg-count { display: flex; align-items: center; gap: 14px; }
 .wg-count circle { fill: none; stroke-width: 5; }
 .wg-count .bg { stroke: rgba(127, 231, 255, 0.12); }
@@ -1489,7 +1489,7 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .wg-bars { display: grid; gap: 6px; font-size: 12px; }
 .wg-bars > div { display: grid; grid-template-columns: minmax(0, 1fr) 90px 40px; gap: 8px; align-items: center; }
 .wg-meter { height: 4px; background: rgba(127, 231, 255, 0.12); }
-.wg-meter i { display: block; height: 100%; background: var(--amber); transition: width 600ms var(--ease-out); }
+.wg-meter i { display: block; height: 100%; background: var(--amber); transform-origin: left; transition: transform 600ms var(--ease-out); }
 .wg-bars small { color: var(--cyan-dim); text-align: right; font-variant-numeric: tabular-nums; }
 .wg-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; }
 .wg-stats b { display: block; font: 600 20px var(--display); color: var(--cyan); }
@@ -1503,7 +1503,7 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .constellation svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .constellation line { stroke-width: 0.35; stroke-opacity: 0.25; vector-effect: non-scaling-stroke; transition: stroke-opacity 600ms; }
 .constellation line.hot { stroke-opacity: 0.85; stroke-width: 1.4; }
-.c-node { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; display: flex; align-items: center; gap: 5px;
+.c-node { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); will-change: transform; pointer-events: auto; display: flex; align-items: center; gap: 5px;
   background: rgba(4, 7, 10, 0.75); border: 1px solid color-mix(in srgb, var(--c) 50%, transparent); color: var(--text);
   padding: 2px 7px 2px 4px; font: 10px var(--mono); cursor: pointer; white-space: nowrap; animation: rise 400ms var(--ease-out) both; }
 .c-node i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
@@ -1542,11 +1542,11 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .toast.ask { --t: var(--red); }
 .toast b { font: 600 10px var(--display); letter-spacing: 0.14em; text-transform: uppercase; color: var(--t); }
 .toast small { color: var(--cyan-dim); font-size: 10px; }
-.toast .life { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--t); animation: toast-life linear forwards; }
+.toast .life { position: absolute; left: 0; bottom: 0; width: 100%; height: 2px; transform-origin: left; background: var(--t); animation: toast-life linear forwards; }
 .toast:hover .life, .toast:focus .life { animation-play-state: paused; }
 .toast > button { position: absolute; top: 4px; right: 4px; background: none; border: 0; color: var(--cyan-dim); cursor: pointer; font-size: 13px; padding: 0 4px; }
 @keyframes toast-in { from { opacity: 0; transform: translateX(24px); } }
-@keyframes toast-life { from { width: 100%; } to { width: 0; } }
+@keyframes toast-life { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .away { pointer-events: auto; justify-self: end; display: grid; gap: 4px; }
 .away-chip { justify-self: end; font: 600 10px var(--display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan);
   background: rgba(6, 16, 22, 0.94); border: 1px solid var(--panel-edge); padding: 3px 9px; cursor: pointer; }
