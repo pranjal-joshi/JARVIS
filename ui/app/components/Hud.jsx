@@ -11,7 +11,7 @@ import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import MonitorsPanel from "./MonitorsPanel";
 import JobBox from "./JobBox";
-import { Constellation, DreamDigest, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
+import { AGENT_TOOLS, Constellation, DreamDigest, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
 import { askToNotify, chime, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
 
@@ -321,7 +321,8 @@ export default function Hud() {
     document.addEventListener("pointerdown", off);
     return () => document.removeEventListener("pointerdown", off);
   }, [skillOpen, watchOpen, settingsOpen]);
-  const [pinned, setPinned] = useState(null); // timeline | console | kb | watch
+  const [agentsOn, setAgentsOn] = useState(false);
+  const [pinned, setPinned] = useState(null); // timeline | console | kb | watch | notes
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
   const lastBusy = useRef(null);
   // any knowledge-base tool enlarges the map; a watcher or timer changing, the monitors; other tools the console
@@ -329,7 +330,8 @@ export default function Hud() {
   const holding = state === "thinking" || state === "speaking";
   if (busy) lastBusy.current = busy;
   else if (!holding) lastBusy.current = null;
-  const auto = state === "listening" ? null : busy || (holding ? lastBusy.current : null);
+  // agents at work (web, subagents, jobs): the orb stays big with them orbiting it, not docked behind the console
+  const auto = state === "listening" || agentsOn ? null : busy || (holding ? lastBusy.current : null);
   const focus = pinned || auto;
   // Layout changes (focus, panels growing) run as one view transition: the browser snapshots the
   // old and new layout and animates them on the compositor, so the move stays at 60 fps instead of
@@ -549,11 +551,14 @@ export default function Hud() {
           if (ev.type === "tool_result")
             settle(ev.request_id, ev.data.tool, { status: ev.data.status, preview: ev.data.preview || "", done: ev.ts });
           if (ev.type === "kb_retrieved") settle(ev.request_id, "kb_search", { pages: ev.data.pages });
-          if (ev.type === "tool_call") echo({ kind: "cmd", text: asCommand(ev.data.tool, ev.data.arguments), risk: ev.data.risk });
-          if (ev.type === "approval_request") echo({ kind: "wait" });
+          // an agent's tool (web, claude, a job) is shown by the orb's constellation: logged, but the console
+          // doesn't grow and dock the orb
+          const log = AGENT_TOOLS[ev.data?.tool] ? note : echo;
+          if (ev.type === "tool_call") log({ kind: "cmd", text: asCommand(ev.data.tool, ev.data.arguments), risk: ev.data.risk });
+          if (ev.type === "approval_request") log({ kind: "wait" });
           if (ev.type === "tool_result") {
             const out = (ev.data.preview || "").split("\n").filter((l) => l.trim()).slice(0, 8).join("\n");
-            echo(...(out ? [{ kind: "out", text: out }] : []), { kind: "exit", status: ev.data.status });
+            log(...(out ? [{ kind: "out", text: out }] : []), { kind: "exit", status: ev.data.status });
           }
           const kb = kbTouch(ev);
           if (kb) {
@@ -929,7 +934,8 @@ export default function Hud() {
       </section>
       <SystemConsole lines={consoleLines} active={shown.con} focused={shown.focus === "console"}
         pinned={pinned === "console"} onToggle={() => togglePin("console")} />
-      <LiveNote feed={feed} />
+      <LiveNote feed={feed} pinned={pinned === "notes"} focused={shown.focus === "notes"}
+        head={headProps(pinned === "notes", () => togglePin("notes"), "notes being written")} />
       </div>
 
       <section className="core reveal" style={{ "--i": 1 }}>
@@ -937,7 +943,7 @@ export default function Hud() {
           <div className="orb-wrap" {...(pinned ? { role: "button", tabIndex: 0, title: "Back to JARVIS (Esc)",
             onClick: () => setPinned(null), onKeyDown: (e) => e.key === "Enter" && setPinned(null) } : {})}>
             <Orb state={state} analyser={analyser} accent={accent} alert={approvals.length > 0} />
-            <Constellation feed={feed} />
+            <Constellation feed={feed} onActive={setAgentsOn} />
           </div>
           <div className="state" data-state={state}>
             <Decode label={state.toUpperCase()} />

@@ -100,10 +100,12 @@ export function Widget({ spec }) {
 }
 
 // ---------- 2. subagent constellation ----------
-const AGENT_TOOLS = { ask_claude: ["claude", "#ffb347"], ask_opencode: ["opencode", "#ffb347"], web_search: ["web", "#b48bff"],
+export const AGENT_TOOLS = { ask_claude: ["claude", "#ffb347"], ask_opencode: ["opencode", "#ffb347"], web_search: ["web", "#b48bff"],
   fetch_page: ["reader", "#b48bff"], start_job: ["job", "#ffb347"], dream: ["dreamer", "#7dffb0"], run_skill: ["skill", "#7fe7ff"] };
 
-export function Constellation({ feed }) {
+const RIM = 0.4; // where a line starts, as a share of the way from the orb's centre to the node
+
+export function Constellation({ feed, onActive }) {
   const [agents, setAgents] = useState([]); // { key, name, via, color, state, step, at }
   const [pick, setPick] = useState(null);
   const upsert = useCallback((key, patch) => setAgents((a) => {
@@ -139,6 +141,8 @@ export function Constellation({ feed }) {
     }
     if (ev.type === "reply") setAgents((a) => a.map((x) => (x.key.startsWith("esc:") && x.key.endsWith(ev.request_id) ? { ...x, state: "done" } : x)));
   });
+  const working = agents.some((a) => a.state === "running" || a.state === "queued");
+  useEffect(() => onActive?.(working), [working, onActive]);
   const wrap = useRef(null);
   useEffect(() => { // orbit: position each node by time, no React state per frame
     let raf;
@@ -153,15 +157,19 @@ export function Constellation({ feed }) {
           const x = 50 + 50 * ring * Math.cos(a), y = 50 + 50 * ring * Math.sin(a) * 0.62;
           n.style.transform = `translate(${x * w}px, ${y * h}px) translate(-50%, -50%)`; // compositor-only, unlike left/top
           const line = el.querySelector(`[data-line="${n.dataset.node}"]`);
-          if (line) { line.setAttribute("x2", x); line.setAttribute("y2", y); }
+          // from the orb's rim, not its centre: a line across the orb read as a scratch on it
+          if (line) {
+            line.setAttribute("x1", 50 + (x - 50) * RIM); line.setAttribute("y1", 50 + (y - 50) * RIM);
+            line.setAttribute("x2", x); line.setAttribute("y2", y);
+          }
         });
       }
       if (!still) raf = requestAnimationFrame(tick);
     };
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    tick(); // reduced motion: placed once, standing still
+    tick(); // reduced motion: placed once (again whenever an agent comes or goes), standing still
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [agents.length]);
   if (!agents.length) return null;
   const chosen = agents.find((a) => a.key === pick) || agents[agents.length - 1];
   return (
@@ -169,7 +177,7 @@ export function Constellation({ feed }) {
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         {agents.map((a) => (
           <line key={a.key} data-line={a.key} x1="50" y1="50" x2="50" y2="50" stroke={a.color}
-            className={a.pulse && Date.now() - a.pulse < 1500 ? "hot" : ""} />
+            className={`${a.state}${a.pulse && Date.now() - a.pulse < 1500 ? " hot" : ""}`} />
         ))}
       </svg>
       {agents.map((a) => (
@@ -211,7 +219,7 @@ function Typed({ text }) {
   );
 }
 
-export function LiveNote({ feed }) {
+export function LiveNote({ feed, pinned, focused, head }) {
   const [lines, setLines] = useState([]); // { id, page, text, task }
   const [open, setOpen] = useState(false);
   const pending = useRef(new Map());
@@ -235,9 +243,11 @@ export function LiveNote({ feed }) {
   if (!lines.length) return null;
   const links = [...new Set(lines.flatMap((l) => [l.page, ...[...l.text.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1])]))];
   return (
-    <section className={`panel live-note${open ? " open" : ""}`} aria-label="Notes being written">
-      <h2 onClick={() => setOpen((o) => !o)}>Writing to notes <small>{lines.length}</small></h2>
-      {open && (
+    <section className={`panel live-note${open || pinned ? " open" : ""}${focused ? " focused" : ""}`}
+      aria-label="Notes being written">
+      {/* the heading expands it like the other panels (wider column, full height); expanded, it never folds */}
+      <h2 {...head}>Writing to notes <small>{lines.length}<b className="expand" aria-hidden="true" /></small></h2>
+      {(open || pinned) && (
         <div className="ln-body">
           <ol className="ln-lines">
             {lines.map((l) => (
