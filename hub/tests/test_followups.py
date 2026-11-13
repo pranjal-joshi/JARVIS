@@ -336,3 +336,24 @@ def test_a_recall_question_never_turns_into_a_note_write():
                   "summarize all notes you made"):
         assert _claimed(saying, SimpleNamespace(said=asked, done=set())) is None, asked
     assert _claimed("Noted, sir.", SimpleNamespace(said="remember that I parked on level 2", done=set())) == "notes"
+
+
+def test_a_save_that_points_back_saves_the_earlier_plan_even_from_a_fresh_chat():
+    plan = "Saturday: enable developer options, install ADB, install the kiosk APK. Sunday: set kiosk launcher."
+    fact = "Weekend project: Saturday enable developer options, install ADB and kiosk APK; Sunday set kiosk launcher."
+    llm = ScriptLLM([call("web_search", query="frameo kiosk plan"), say("Here is the plan, sir."),
+                     call("remember", fact=fact), say("Saved, sir."),
+                     call("remember", fact=fact), say("Saved, sir.")])
+    a, ran = setup(llm)
+    a.tools.get("web_search").call = lambda args, ctx: _ret(plan)
+    ask(a, "Draft a plan for the frameo kiosk")
+    history = [{"role": "user", "content": "Draft a plan for the frameo kiosk"}, say("Here is the plan, sir.")]
+    ask(a, "Did you save the above plan? Do it if not already", history)
+    assert "enable developer options" in llm.seen[-1][-1]["content"]  # the plan is in front of the model
+    assert [args["fact"] for name, args in ran if name == "kb_remember"] == [fact]
+    ask(a, "Save the earlier plan that claude has given to you", session="web-s2")  # the HUD started a new chat
+    assert [name for name, _ in ran].count("kb_remember") == 2
+
+
+async def _ret(text):
+    return text

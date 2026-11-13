@@ -22,7 +22,7 @@ from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.audit.traces import TraceStore
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event, EventBus
-from jarvis_hub.guard.hooks import (ABOUT_TIME, CURRENT, LINK, POST_TOOL, PRE_TOOL, REDACT_IN_AUDIT, TEXTBOOK, audit_text,
+from jarvis_hub.guard.hooks import (ABOUT_TIME, ASKS_TO_SAVE, CURRENT, LINK, POST_TOOL, PRE_TOOL, REDACT_IN_AUDIT, TEXTBOOK, audit_text,
                                      unsaid)
 from jarvis_hub.guard.policy import Decision as PolicyDecision
 from jarvis_hub.guard.policy import Policy
@@ -81,13 +81,20 @@ BARE_SAVE = re.compile(
     r"|(?:all\s+)?(?:these|those|the|that|this)\s+(?:[\w-]+\s+){0,3}?(?:info(?:rmation)?|details?|results?|points?|"
     r"facts?|summary|summaries|data|findings|list|answers?|notes?|records?)))*"
     r"(?:\s+(?:in|to|into|on)\s+(?:my |the |your )?\w+(?:\s+(?:page|notes?))?)?"
+    r"(?:\s+as\s+(?:an?\s+|my\s+)?[\w' -]{1,30}?)?"  # "save it as weekend project"
     r"(?:\s+(?:please|now|too|as well|for me|sir))*\W*$", re.I)
+# "did you save the above plan?", "save the earlier plan Claude gave": a save that points back at what came before
+REFERS_BACK = re.compile(r"\b(?:above|earlier|previous|before|last (?:answer|reply|result|search)|"
+                         r"(?:that|the|this|your) (?:plan|list|steps|answer|reply|results?|summary|findings|output)|"
+                         r"(?:claude|opencode|you|the search|web search)\s+(?:has\s+|had\s+)?"
+                         r"(?:gave|given|said|found|wrote|returned|suggested|came up with))\b", re.I)
 NOTE_WRITES = frozenset({"kb_remember", "kb_journal", "kb_append_to_page"})
 # "save this to Sanika page", "add it on my Work page", "put that under the Car page": the page is the user's choice
 NAMED_PAGE = re.compile(r"\b(?:to|on|in|into|under)\s+(?:my|the|her|his|our|a|an)?\s*([\w'][\w' .&-]{0,39}?)\s+page\b",
                         re.I)
 JOURNAL_ASK = re.compile(r"\b(?:in|to|into)\s+(?:my|the|today'?s)\s+journal\b|\bjournal (?:it|that|this)\b", re.I)
-SAVE_HINT = ("\n(The user wants what came before saved. Call remember with its key facts in one or two sentences, "
+SAVE_HINT = ("\n(The user wants what came before saved. Call remember with its key facts in one or two sentences "
+             "(a plan or list: every step, each in a few of its own words), "
              "keeping names, numbers and links (add_to_page or add_to_journal if they named a page or the journal). "
              "What came before:\n{material})")
 # "search ... on github", "do a web search for X": asked for by name, so a reply without one (asking for a URL
@@ -290,8 +297,9 @@ class ToolAgent:
             if m["role"] == "user":
                 m["content"] = f"{m['content']}\n\n(Now: {datetime.now():%A %d %B %Y, %H:%M}.{hint})"
                 break
-        if BARE_SAVE.match(said) and (material := self._material(messages, turn)):
-            convo[-1]["content"] += SAVE_HINT.format(material=material[:1500])
+        if (BARE_SAVE.match(said) or (ASKS_TO_SAVE.search(said) and REFERS_BACK.search(said))) \
+                and (material := self._material(messages, turn)):
+            convo[-1]["content"] += SAVE_HINT.format(material=material[:3000])
             turn.intent = "save what came before"
             return await self._loop(convo, turn, only=NOTE_WRITES)
         if not self._is_claude() and len(steps := await plan_steps(self.llm, said)) > 1:
@@ -314,11 +322,13 @@ class ToolAgent:
         # turned "BEL in 2018" into "BEL from 2018 until now" and saved the user's wife's jobs as the user's (2026-11-13)
         words = [str(m.get("content") or "") for m in messages[:-1] if m.get("role") == "user"][-3:]
         last = self._last.get(t.trace_session or "", {})
+        if not last and len(messages) <= 1 and self._last:  # a fresh chat (the HUD switched model): the last one's
+            last = next(reversed(self._last.values()))
         outputs = [o for o in last.get("seen", []) if not o.startswith("ERROR")]
         t.seen += outputs + words
         t.tainted += last.get("tainted", [])
         t.links = list(dict.fromkeys([*t.links, *LINK.findall(t.before), *(u for o in outputs for u in LINK.findall(o))]))
-        return "\n".join(x for x in [*(" ".join(o.split())[:600] for o in outputs[-2:]),
+        return "\n".join(x for x in [*(" ".join(o.split())[:1500] for o in outputs[-2:]),
                                      *(f"The user said: {w}" for w in words)] if x).strip()
 
     async def _chain(self, base: list[dict], steps: list[str], t: "_Turn", start: int = 0,
@@ -1021,7 +1031,9 @@ class ToolAgent:
         text = address(text, self.address)
         if t.trace_session:  # for "remember it" next turn
             before = self._last.pop(t.trace_session, {})
-            self._last[t.trace_session] = {"seen": [o[:2500] for o in [*before.get("seen", []), *t.seen][-5:]],
+            # failed calls don't count: three refused saves pushed Claude's plan out of the last five (2026-11-13)
+            kept = [o for o in [*before.get("seen", []), *t.seen] if not o.startswith("ERROR")]
+            self._last[t.trace_session] = {"seen": [o[:2500] for o in kept[-5:]],
                                            "tainted": [o[:2500] for o in [*before.get("tainted", []), *t.tainted][-5:]]}
             while len(self._last) > LAST_KEPT:
                 self._last.pop(next(iter(self._last)))

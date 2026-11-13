@@ -125,7 +125,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
             for t in tasks)
 
     async def kb_remember(args: dict, ctx: ToolCtx) -> str:
-        fact = dated(str(args.get("fact", "")).strip())
+        fact = dated(" ".join(str(args.get("fact", "")).split()))  # one line: a saved plan's line breaks would split the note
         if not fact:
             return "ERROR: empty fact"
         topic = memory_topic(str(args.get("topic") or ""), fact)
