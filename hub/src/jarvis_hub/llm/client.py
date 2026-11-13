@@ -51,6 +51,17 @@ def sampling(model: str) -> dict:
     return next((dict(s) for key, s in SAMPLING if key in m), {})
 
 
+def _env_key(name: str) -> str:
+    """An endpoint's API key (LLM_ENDPOINTS key_env): the environment, else .env. Docker puts .env into the
+    environment; a hub started on the host only has Settings read .env, which skips names it has no field for."""
+    if not name:
+        return ""
+    if v := os.environ.get(name, ""):
+        return v
+    from dotenv import dotenv_values
+    return dotenv_values(".env").get(name) or ""
+
+
 class LLMClient:
     def __init__(self, base_url: str, api_key: str, model: str, timeout_s: float = 180,
                  extra_body: dict | None = None, per_model: dict | None = None,
@@ -68,7 +79,7 @@ class LLMClient:
         # models served elsewhere (LLM_ENDPOINTS): picker name -> (client, model id on that server)
         self._remote: dict[str, tuple[httpx.AsyncClient, str]] = {}
         for name, ep in (endpoints or {}).items():
-            key = os.environ.get(ep.get("key_env") or "", "") or "none"
+            key = _env_key(ep.get("key_env") or "") or "none"
             self._remote[name] = (httpx.AsyncClient(base_url=ep["base_url"].rstrip("/"),
                                                     headers={"Authorization": f"Bearer {key}"},
                                                     timeout=httpx.Timeout(timeout_s, connect=10)),
