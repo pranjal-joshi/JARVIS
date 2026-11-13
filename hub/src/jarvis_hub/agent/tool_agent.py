@@ -394,7 +394,7 @@ class ToolAgent:
                 {"name": c.get("function", {}).get("name"), "arguments": c.get("function", {}).get("arguments")}
                 for c in calls]})
             raw = _strip_think(msg.get("content") or "").strip()
-            kind = claimed_kind(raw, t.done)  # "that's committed to memory", "timer set" with nothing done
+            kind = _claimed(raw, t)  # "that's committed to memory", "timer set" with nothing done
             if kind and part and not calls and any(c["tool_calls"] for c in t.loops[-1]["calls"][:-1]):
                 # a part that did its own work and talks ahead ("searched it and saved it to your notes"): the
                 # later parts do the rest, so it is asked once for its own outcome, then ends without the claim
@@ -442,7 +442,7 @@ class ToolAgent:
                     convo.append({"role": "assistant", "content": text})
                     convo.append({"role": "user", "content": FAKE_TOOL_NUDGE})
                     continue
-                if kind := claimed_kind(text, t.done):
+                if kind := _claimed(text, t):
                     # "Noted, sir." with nothing saved: send it back once, then don't pass the claim on.
                     log.warning("reply claims an action no tool did: %.200s", text)
                     if streamed:
@@ -1065,6 +1065,18 @@ class _Turn:
 _FILLER = set("""a an the and or of to in on at for about is are was were be been am do does did have has had i i'm
 me my mine you your what what's whats when where who whose which how tell remind again please jarvis sir can could
 would will know any anything that this it there here""".split())
+# "tell me everything you know", "summarise my notes": asked to read the notes, so a reply that sounds like a save
+# is a recap; never answered with a note write the user didn't ask for (it wrote one on 2026-11-13)
+RECALL_ASK = re.compile(r"\?\s*$|^\W*(?:tell me|summari[sz]e|recap|list|show me|give me|read me)\b"
+                        r"|^\W*(?:what|which|who|where|when|how)\s+(?:do|does|did|have|has|is|are|was|were|else|can)\b"
+                        r"|^\W*(?:do|does|did|have|has|can|could)\s+you\b", re.I)
+
+
+def _claimed(text: str, t) -> str | None:
+    kind = claimed_kind(text, t.done)
+    return None if kind == "notes" and RECALL_ASK.search(t.said) else kind
+
+
 OWN_NAME = re.compile(r"\b(?:what(?:'s| is) my name|what (?:am I|I'm|I am) called|who am I)\b", re.I)
 _SAME = {"called": "name", "named": "name", "live": "live address area", "born": "birthday"}
 

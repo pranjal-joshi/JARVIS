@@ -34,14 +34,19 @@ OFFER = re.compile(r"\?\s*$|\b(?:shall I|should I|would you like|do you want|wan
 RECALL = re.compile(r"\b(?:I|let me) (?:remember|recall)\b(?! (?:that|this|it)\b\W*$)|\bas I recall\b"
                     r"|\byou (?:said|told me|mentioned)\b", re.I)
 # "noted in your calendar as 4 pm": somewhere other than JARVIS's notes says it
+# "the notes I have on file", "here is what I have on record": having notes, not saving one. Only counted as a
+# recap when the notes were read this turn; with nothing read, "I have it on file" is still a claim.
+POSSESS = re.compile(r"\b(?:notes|what|everything|all) I (?:have|keep|hold)\b|\bI (?:have|keep|hold|found) (?:\w+ ){0,4}?"
+                     r"(?:on file|on record|in (?:your|my|the) notes|notes?)\b|\b(?:here is|here's) (?:a summary|what)\b", re.I)
 ELSEWHERE = re.compile(r"\b(?:in|on) (?:your|the) (?:calendar|diary|schedule|ticket|email|page you)\b", re.I)
 
 
-def claims_memory(text: str) -> bool:
-    """The reply says it saved, noted or will remember something."""
+def claims_memory(text: str, recap: bool = False) -> bool:
+    """The reply says it saved, noted or will remember something. recap: the notes were read this turn, so
+    "the notes I have on file" describes them."""
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
         s = sentence.strip()
-        if not s or OFFER.search(s) or RECALL.search(s) or ELSEWHERE.search(s):
+        if not s or OFFER.search(s) or RECALL.search(s) or ELSEWHERE.search(s) or recap and POSSESS.search(s):
             continue
         if BARE.search(s):
             return True
@@ -86,6 +91,7 @@ KINDS = {
                           "adb_call_end"}),
     "skill": frozenset({"create_skill", "update_skill", "delete_skill", "enable_skill"}),
 }
+NOTE_READS = frozenset({"kb_search", "search_notes", "kb_read_page", "read_page", "kb_tasks", "kb_retrieved"})
 
 
 def kind_of(name: str, read: bool) -> str | None:
@@ -93,6 +99,8 @@ def kind_of(name: str, read: bool) -> str | None:
     for kind, names in KINDS.items():
         if name in names:
             return kind
+    if name in NOTE_READS:
+        return "recap"  # backs no claim; lets a summary of what was read say "the notes I have"
     return None if read else "device"
 
 
@@ -100,7 +108,7 @@ def claimed_kind(text: str, done: set[str]) -> str | None:
     """The kind of action the reply says was done (or is about to be) that no tool of that kind did this turn:
     "notes", "timer", "message", "device", or "action" for a claim of no particular kind with nothing changed.
     None when every claim in it is backed. done: the kinds of the tools that ran (kind_of)."""
-    if claims_memory(text) and "notes" not in done:
+    if claims_memory(text, "recap" in done) and "notes" not in done:
         return "notes"
     unbacked = []
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
@@ -109,7 +117,7 @@ def claimed_kind(text: str, done: set[str]) -> str | None:
             continue
         kind = "skill" if _SKILL.search(s) else "timer" if _TIMER.search(s) else "message" if _MESSAGE.search(s) else \
             "device" if _DEVICE.search(s) else "action"
-        if kind == "action" and not done or kind != "action" and kind not in done:
+        if kind == "action" and not done - {"recap"} or kind != "action" and kind not in done:
             unbacked.append(kind)
     # "That's done, sir. I've set a timer...": the timer is what to make happen
     return next((k for k in unbacked if k != "action"), unbacked[0] if unbacked else None)

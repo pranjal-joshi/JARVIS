@@ -317,3 +317,22 @@ def test_a_cloud_model_gets_a_smaller_context():
     assert a._context() == 4000
     a.llm.remote = False
     assert a._context() == 8192
+
+
+def test_a_summary_of_notes_just_read_is_not_a_fake_save():
+    from jarvis_hub.agent.claims import claimed_kind, kind_of
+    recap = "Here is a summary of the notes I have on file:\n\n- **Wife:** Sanika\n- You plan to save ESP Home modules."
+    assert claimed_kind(recap, {kind_of("search_notes", True)}) is None  # read the notes, then recounted them
+    assert claimed_kind(recap, set()) == "notes"  # nothing read: still a claim
+    assert claimed_kind("Noted, sir.", {"recap"}) == "notes"  # a read never backs a save
+
+
+def test_a_recall_question_never_turns_into_a_note_write():
+    from types import SimpleNamespace
+
+    from jarvis_hub.agent.tool_agent import _claimed
+    saying = "I've noted that you plan to set up ESP Home modules."
+    for asked in ("what do you have about esphome", "tell me everything you remembered so far",
+                  "summarize all notes you made"):
+        assert _claimed(saying, SimpleNamespace(said=asked, done=set())) is None, asked
+    assert _claimed("Noted, sir.", SimpleNamespace(said="remember that I parked on level 2", done=set())) == "notes"
