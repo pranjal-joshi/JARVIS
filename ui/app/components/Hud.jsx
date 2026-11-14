@@ -35,7 +35,7 @@ const api = (path, init) => fetch(`/api/hub/${path}`, { cache: "no-store", ...in
 const MODEL_NAMES = { "claude-haiku-5-5": "Haiku 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-opus-5-5": "Opus 5.5" };
 const modelLabel = (m) => (m.startsWith("claude-")
   ? `${MODEL_NAMES[m] || m} · cloud`
-  : /^(groq|zai)-/.test(m) ? `${m} · cloud`
+  : /^(groq|zai|gemini)-/.test(m) ? `${m} · cloud`
   : m.startsWith("unsloth-") ? `${m} · DGX`
   : `${m.replace(/^hf\.co\/[^/]+\//, "").replace(/-GGUF:.*$/i, "")} · local`);
 
