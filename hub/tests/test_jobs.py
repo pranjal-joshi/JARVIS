@@ -155,3 +155,31 @@ def test_clearing_takes_finished_jobs_off_the_list(monkeypatch, tmp_path):
     assert jobs.clear() == 1 and jobs.cards() == [] and "abcd1234" in jobs.dismissed
     again = Jobs(jobs.s, graph, None, EventBus(), tmp_path / "seen.json")
     assert "abcd1234" in again.cleared
+
+
+def test_document_project_writes_linked_kb_pages(monkeypatch, tmp_path):
+    bridge, jobs, reg, graph, sent = _setup(monkeypatch, tmp_path)
+    tool = reg.get("document_project")
+    assert tool.risk is Risk.EXTERNAL and tool.final_answer
+    assert "ERROR" in asyncio.run(tool.call({}, None))
+    asyncio.run(tool.call({"project": r"C:\code\My-App"}, None))
+    assert bridge.posts[-1]["target"] == r"C:\code\My-App" and "pages" in bridge.posts[-1]["goal"]
+    asyncio.run(jobs.poll())
+    bridge.jobs["abcd1234"].update(state="done", ended=3.0, summary="Wrote 2 pages.", pages={
+        "overview": "My App syncs photos.\n\n## Parts\n- See [[how-to-run]] and [[Nope]].",
+        "how-to-run": "Run it with npm.\n\n```\nnpm start\n```"})
+    asyncio.run(jobs.poll())
+    text = graph.page("jarvis/projects/my app/overview").path.read_text(encoding="utf-8")
+    assert text.startswith("---\nproject: my app\n") and "My App syncs photos." in text
+    assert "[[jarvis/projects/my app/how to run|how-to-run]]" in text and "[[Nope]]" in text
+    assert "tags: project" in text and text.count("how to run|how-to-run]]") == 1  # already linked: not listed again
+    assert "npm start" in graph.page("jarvis/projects/my app/how to run").path.read_text(encoding="utf-8")
+    assert "2 pages under jarvis/projects/my app" in sent[-1][1]
+
+
+def test_document_project_is_offered_when_asked():
+    for said in ("document the jarvis project", r"make kb pages for my project at C:\code\app",
+                 "build a knowledge base for this repo", "write notes on the neuramesh codebase"):
+        assert NAMED["document_project"].search(said), said
+    for said in ("document this meeting", "open the project folder", "search my kb"):
+        assert not NAMED["document_project"].search(said), said

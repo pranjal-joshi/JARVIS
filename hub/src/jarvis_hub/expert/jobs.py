@@ -21,7 +21,7 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.automation.notify import Notifier
 from jarvis_hub.config import Settings, Source
 from jarvis_hub.events.bus import Event, EventBus
-from jarvis_hub.kb.graph import ObsidianVault
+from jarvis_hub.kb.graph import ObsidianVault, frontmatter
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.files import write_atomic
 
@@ -95,6 +95,45 @@ def report_page(j: dict) -> tuple[str, str]:
             lines.append("\t- " + (first[2:] if first.startswith("- ") else rows[0]))
             lines += ["\t  " + r for r in rows[1:]]
     return page_name(j), "\n".join(lines)
+
+
+PROJECT_GOAL = (
+    "Build a small knowledge base about the project in the target folder, for the user's notes, read by a voice "
+    "assistant. Read the README, docs, manifests, entry points and config first; don't read everything. Write 4 to 8 "
+    "markdown pages into a folder named pages beside REPORT.md (your job folder, never the target: the target is "
+    "read-only, and JARVIS copies the pages into the user's notes itself), one file each, named in lowercase words like "
+    "overview.md, how-to-run.md, architecture.md, key-files.md, configuration.md, glossary.md; add or skip pages as the "
+    "project needs. Each page: under 400 words; it starts with one or two plain sentences that answer what the page is "
+    "about and can be read aloud; then short sections under ## headings, short bullets, exact commands in code blocks, "
+    "file paths relative to the project. No tables, no badges, no secrets or tokens from config files. Link pages to "
+    "each other with [[page name]] (the file name without .md). REPORT.md only lists the pages written. End with one "
+    "sentence on what the project is and which pages you wrote.")
+
+
+def project_pages(j: dict) -> list[tuple[str, str]]:
+    """The KB pages a project job handed back (pages/*.md), as notes pages jarvis/projects/<folder>/<page>,
+    with [[page]] links between them made full and frontmatter saying where they came from."""
+    folder = re.split(r"[\\/]", (j.get("target") or "").rstrip("\\/"))[-1]
+    project = " ".join(re.findall(r"[a-z0-9]+", folder.lower())) or j["id"][:4]
+    names = {}
+    for stem in j.get("pages") or {}:
+        if short := " ".join(re.findall(r"[a-z0-9]+", stem.lower().replace("-", " "))):
+            names[stem] = f"jarvis/projects/{project}/{short}"
+    head = frontmatter({"project": project, "tags": "project", "source": j.get("target") or "",
+                        "updated": time.strftime("%Y-%m-%d", time.localtime(j.get("ended") or time.time()))})
+
+    def link(m: re.Match) -> str:
+        key = next((k for k in names if k.lower() == m[1].strip().lower().replace(" ", "-")
+                    or k.lower() == m[1].strip().lower()), None)
+        return f"[[{names[key]}|{m[1].strip()}]]" if key else m[0]
+    pages = {stem: re.sub(r"\[\[([^\]|]+)\]\]", link, text.strip()) for stem, text in (j.get("pages") or {}).items()
+             if stem in names and text.strip()}
+    # the overview is the project's hub (an Obsidian "map of content"): it links every other page
+    if hub := next((s for s in pages if s.lower() == "overview"), None):
+        missing = [s for s in pages if s != hub and f"[[{names[s]}|" not in pages[hub]]
+        if missing:
+            pages[hub] += "\n\n## Pages\n" + "".join(f"- [[{names[s]}|{s}]]\n" for s in missing)
+    return [(names[s], head + pages[s].rstrip() + "\n") for s in pages]
 
 
 class Jobs:
@@ -203,6 +242,11 @@ class Jobs:
             try:
                 page, text = report_page(j)
                 self.graph.write_jarvis_page(page, text, replace=True)
+                kb = project_pages(j)
+                for name, body in kb:
+                    self.graph.write_jarvis_page(name, body, replace=True)
+                if kb:  # what's said aloud: where the project pages are, not the report page
+                    page = f"{len(kb)} pages under {kb[0][0].rsplit('/', 1)[0]}"
                 if self.on_change:
                     self.on_change()
             except (OSError, ValueError) as e:
@@ -307,6 +351,26 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
                                                        "else leave empty."}},
             "required": ["goal"]},
         risk=Risk.EXTERNAL, call=start_job, final_answer=True))
+    async def document_project(args: dict, ctx: ToolCtx) -> str:
+        target = str(args.get("project") or args.get("path") or args.get("target") or "").strip().strip("\"'")
+        if not target:
+            return "ERROR: say which project: a folder path, or its folder name"
+        ok, j = await jobs.start("", PROJECT_GOAL, target)
+        if not ok:
+            return f"ERROR: {j.get('detail')}"
+        return (f"I'm having Claude read {j.get('target') or target} and write knowledge-base pages for it. It takes a "
+                f"few minutes; I'll tell you when they're in your notes.")
+
+    reg.add(Tool(
+        name="document_project", origin="expert",
+        description=("Have Claude Code read a project folder on the laptop and write knowledge-base pages about it "
+                     "(overview, how to run, architecture, key files) into the notes. Runs as a background job; the "
+                     "user approves it first. Reply with what this returns."),
+        parameters={"type": "object", "properties": {
+            "project": {"type": "string", "description": "The project's folder path, or just its folder name as "
+                                                         "the user said it (e.g. 'jarvis')."}},
+            "required": ["project"]},
+        risk=Risk.EXTERNAL, call=document_project, final_answer=True))
     reg.add(Tool(
         name="job_status", origin="expert",
         description="How the background jobs are going, or what one found.",

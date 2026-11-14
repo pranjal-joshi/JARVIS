@@ -120,6 +120,8 @@ CARDS: dict[str, Card] = {
     "start_job": Card(("run a background job to research the best 2B models and write a summary",
                        "start a job to go through C:\\logs and find the errors",
                        "do this in the background: compare these three libraries", "run it as a job"), "jobs"),
+    "document_project": Card(("document the jarvis project", "make kb pages for my project at C:\\code\\app",
+                              "build a knowledge base for this repo"), "jobs"),
     "job_status": Card(("how's the job going", "is the background job done yet", "what did the job find"), "jobs"),
     "cancel_job": Card(("stop the job", "cancel that background job"), "jobs"),
 }

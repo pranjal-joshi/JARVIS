@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 
@@ -9,4 +10,14 @@ def write_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    # Windows refuses the swap while another program (Obsidian, Sync, an antivirus scan) has the file open for a
+    # moment: try again briefly, and leave no temp file behind if it never frees up.
+    for wait in (0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 0):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if not wait:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(wait)

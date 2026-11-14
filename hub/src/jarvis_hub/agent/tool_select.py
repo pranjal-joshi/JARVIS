@@ -38,6 +38,10 @@ NAMED = {"ask_claude": re.compile(r"\bclaude\b", re.I), "ask_opencode": re.compi
          "start_job": re.compile(r"\b(?:background|long[- ]running|long)[- ](?:job|task)s?\b|\bin the background\b|"
                                  r"\bas a (?:background )?job\b|\b(?:start|run|kick off|launch|create|make|do) (?:a |an |the |"
                                  r"this |that |it )?(?:new )?(?:background )?job\b|^\W*job\b", re.I),
+         # a project's KB pages: "document the jarvis project", "make kb pages for this repo"
+         "document_project": re.compile(r"\b(?:document|kb|knowledge[- ]base|wiki|notes? (?:on|for|about))\b"
+                                        r"[^.?!]*\b(?:project|repo|repository|codebase|code ?base|folder)\b|"
+                                        r"\b(?:project|repo|codebase)\b[^.?!]*\b(?:kb|knowledge[- ]base|wiki)\b", re.I),
          "job_status": re.compile(r"\bjobs?\b", re.I),
          "cancel_job": re.compile(r"\bjobs?\b", re.I)}
 
