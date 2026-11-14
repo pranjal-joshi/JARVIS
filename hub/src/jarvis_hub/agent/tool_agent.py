@@ -178,6 +178,8 @@ REPEAT = ("ERROR: you already called {name} with these arguments this turn; its 
 
 
 class ToolAgent:
+    on_llm_down = None  # () -> str | None, set by main.py: what to say when the model isn't answering
+
     def __init__(self, llm: LLMClient, tools: ToolRegistry, gate: ApprovalGate,
                  audit: AuditStore, ask_for: frozenset[Risk] = DEFAULT_ASK_FOR,
                  hidden: frozenset[str] = frozenset(), selector: ToolSelector | None = None,
@@ -416,6 +418,9 @@ class ToolAgent:
             except LLMError as e:
                 log.warning("%s", e)
                 t.halt = "fail"
+                # a DGX model that isn't loaded (Studio restarted): main.py starts loading it, and says so
+                if self.on_llm_down and (said := self.on_llm_down()):
+                    return self._reply(t, said)
                 return self._reply(t, "My apologies, sir, the language model is not answering.")
             calls = msg.get("tool_calls") or []
             t.loops[-1]["calls"].append({"content": msg.get("content") or "", "tool_calls": [

@@ -31,6 +31,7 @@ from jarvis_hub.expert.jobs import Jobs, register_job_tools
 from jarvis_hub.expert.tools import register_expert_tool
 from jarvis_hub.web.search import register_web_search
 from jarvis_hub.kb.dreaming import Dreamer, register_dream_tool
+from jarvis_hub.llm.studio import StudioLoader
 from jarvis_hub.kb.tools import register_kb_tools
 from jarvis_hub.automation.notify import Notifier, register_notify_tool
 from jarvis_hub.automation.watchers import WatchEngine
@@ -168,6 +169,17 @@ async def lifespan(app: FastAPI):
         st.agent.memory = st.dreamer.context
     if s.agent != "echo" and s.dream_enabled:
         st.dreamer.start()
+    # the DGX model picked in the HUD stays loaded as configured (LLM_ENDPOINTS "load"; llm/studio.py)
+    st.studio = StudioLoader(s.llm_endpoints_map(), lambda: st.llm.model)
+    if s.agent != "echo":
+        st.studio.start()
+    if isinstance(st.agent, ToolAgent):
+        def llm_down() -> str | None:
+            if not st.studio.handles(st.llm.model):
+                return None
+            asyncio.get_running_loop().create_task(st.studio.ensure(st.llm.model))
+            return "The model isn't loaded on the DGX, sir; I'm loading it now. Ask again in a minute."
+        st.agent.on_llm_down = llm_down
 
     if n := st.timers.restore(st.bus):
         log.info("%d timers re-armed from before the restart", n)
@@ -187,6 +199,7 @@ async def lifespan(app: FastAPI):
                 await t
         await st.skills.stop()
         await st.dreamer.stop()
+        await st.studio.stop()
         await st.watch.stop()
         await st.reminders.stop()
         await st.jobs.stop()

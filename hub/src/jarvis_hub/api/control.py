@@ -706,6 +706,8 @@ async def llm_set(body: ModelBody, request: Request, _: Source = Depends(require
 
     async def warm() -> None:  # load it now, so the next reply doesn't pay the load time
         try:
+            if s.studio.handles(body.model):  # a DGX model: loaded on Studio as configured first
+                log.info("Studio: %s", await s.studio.ensure(body.model))
             await s.llm.chat([{"role": "user", "content": "ok"}])
         except Exception as e:
             log.info("warm-up of %s failed: %s", body.model, e)
