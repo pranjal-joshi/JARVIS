@@ -135,6 +135,33 @@ services:
     networks: [jarvis]
     depends_on: [voicestudio]
 
+  # ---------------- google (read-only Gmail, Drive, Calendar, Docs, Sheets) ----------------
+  # docker compose --profile google up -d --build google
+  # Put the OAuth client JSON at config/google/client_secret.json and GOOGLE_USER_EMAIL in .env.
+  # The first Google tool call returns a consent link; it lands on 127.0.0.1:8000/oauth2callback.
+  google:
+    <<: *hardened
+    profiles: [google]
+    build: https://github.com/taylorwilsdon/google_workspace_mcp.git#v2.4.2
+    image: jarvis/google-workspace-mcp:2.4.2
+    command: ["exec /app/.venv/bin/python main.py --transport streamable-http --single-user --read-only --tools gmail drive calendar docs sheets"]
+    environment:
+      TZ: ${TZ:-UTC}
+      GOOGLE_CLIENT_SECRET_PATH: /secrets/client_secret.json
+      USER_GOOGLE_EMAIL: ${GOOGLE_USER_EMAIL:-}
+      WORKSPACE_MCP_CREDENTIALS_DIR: /app/store_creds
+      OAUTHLIB_INSECURE_TRANSPORT: "1"  # plain http on loopback for the consent callback
+      # no MCP-level auth in this mode: reachable only on the jarvis network and host loopback (ports below)
+      WORKSPACE_MCP_HOST: 0.0.0.0
+      WORKSPACE_MCP_ALLOWED_HOSTS: google,localhost,127.0.0.1  # Host-header check against DNS rebinding
+    read_only: true
+    tmpfs: [/tmp, "/home/app:uid=1000,gid=1000"]
+    volumes:
+      - ./config/google/client_secret.json:/secrets/client_secret.json:ro
+      - google-creds:/app/store_creds
+    ports: ["127.0.0.1:8000:8000"]
+    networks: [jarvis]
+
 volumes:
   hub-data:
   qdrant-data:
@@ -142,6 +169,7 @@ volumes:
   whisper-data:
   piper-data:
   voicestudio-data:
+  google-creds:
 
 networks:
   jarvis:

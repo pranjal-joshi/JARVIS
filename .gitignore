@@ -1,5 +1,6 @@
 # secrets
 .env
+config/google/
 *.key
 # voice reference audio and anything derived from it: never committed
 voice/reference/*

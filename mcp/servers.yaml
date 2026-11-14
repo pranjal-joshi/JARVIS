@@ -36,6 +36,35 @@ servers:
       HassCancel*: write
       # Locks, covers, alarms and anything else stay hidden until you add them here.
 
+  google:
+    # Google Workspace, read-only twice over: the server asks Google only for *.readonly scopes (--read-only),
+    # and only the read tools below reach the model. Start it with `docker compose --profile google up -d google`.
+    transport: http
+    url: ${GOOGLE_MCP_URL:-http://google:8000/mcp}
+    allow:
+      search_gmail_messages: read
+      get_gmail_message_content: read
+      get_gmail_messages_content_batch: read
+      get_gmail_thread_content: read
+      get_gmail_threads_content_batch: read
+      read_gmail_message_page: read
+      list_gmail_labels: read
+      search_drive_files: read
+      get_drive_file_content: read
+      list_drive_items: read
+      list_calendars: read
+      get_events: read
+      query_freebusy: read
+      search_docs: read
+      get_doc_content: read
+      get_doc_as_markdown: read
+      list_docs_in_folder: read
+      inspect_doc_structure: read
+      list_spreadsheets: read
+      get_spreadsheet_info: read
+      read_sheet_values: read
+      # attachments/downloads (write temp files), sharing, sending and editing stay hidden
+
   # Added in Phase 6 (read-only first, then gated write):
   # filesystem: {transport: stdio, ...}
   # desktop:    {transport: stdio, ...}
