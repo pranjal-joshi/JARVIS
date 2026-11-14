@@ -626,7 +626,7 @@ async def _listening(uri: str) -> bool:
     """A Wyoming service (tcp://host:port) accepts a connection."""
     u = httpx.URL(uri.replace("tcp://", "http://"))
     try:
-        _, w = await asyncio.wait_for(asyncio.open_connection(u.host, u.port), 3)
+        _, w = await asyncio.wait_for(asyncio.open_connection(u.host, u.port), 5)
         w.close()
         return True
     except (OSError, asyncio.TimeoutError):
@@ -634,9 +634,10 @@ async def _listening(uri: str) -> bool:
 
 
 async def _answers(url: str) -> bool:
-    """Up when anything answers, even 401 or 404: down means nothing is listening."""
+    """Up when anything answers, even 401 or 404: down means nothing is listening. Windows tries "localhost" as
+    ::1 first and takes ~2 s to give up on a service that only listens on IPv4, so connect gets 5 s."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(3, connect=2), verify=False) as c:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(6, connect=5), verify=False) as c:
             await c.get(url)
         return True
     except httpx.HTTPError:
