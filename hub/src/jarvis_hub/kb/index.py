@@ -368,11 +368,17 @@ class KBIndex:
                     nodes[target] = {"id": target, "label": target, "journal": False,
                                      "jarvis": target.startswith("jarvis/"), "blocks": 0}
                 edges.append({"source": key, "target": target, **({"label": kinds[target]} if kinds.get(target) else {})})
-            if "/" in key:  # namespace parent -> child
+        # namespace parent -> child, every level: a folder with no page of its own (jarvis/projects/airteno) still
+        # hangs off jarvis/projects, or each project floats as its own island
+        tree = set()
+        for key in list(nodes):
+            while "/" in key:
                 parent = key.rsplit("/", 1)[0]
                 nodes.setdefault(parent, {"id": parent, "label": parent, "journal": False,
                                           "jarvis": parent.startswith("jarvis"), "blocks": 0})
-                edges.append({"source": parent, "target": key})
+                tree.add((parent, key))
+                key = parent
+        edges += [{"source": s, "target": t} for s, t in sorted(tree)]
         return {"nodes": list(nodes.values()), "edges": edges}
 
     async def aclose(self) -> None:

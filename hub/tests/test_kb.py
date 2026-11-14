@@ -65,6 +65,16 @@ def test_keyword_fallback_search(graph_dir):
     assert {"home", "zigbee", "jarvis", "jarvis/preferences"} <= ids
 
 
+def test_link_graph_hangs_pageless_folders_off_their_parents(graph_dir):
+    g = ObsidianVault(str(graph_dir))
+    (graph_dir / "jarvis" / "projects" / "airteno").mkdir(parents=True)
+    (graph_dir / "jarvis" / "projects" / "airteno" / "overview.md").write_text("- an app\n", encoding="utf-8")
+    edges = {(e["source"], e["target"]) for e in KBIndex(g, None, "none", "http://127.0.0.1:9").link_graph()["edges"]}
+    # jarvis/projects/airteno has no page, yet it still links up to jarvis/projects and on to jarvis
+    assert {("jarvis/projects/airteno", "jarvis/projects/airteno/overview"),
+            ("jarvis/projects", "jarvis/projects/airteno"), ("jarvis", "jarvis/projects")} <= edges
+
+
 def test_memory(graph_dir):
     g = ObsidianVault(str(graph_dir))
     g.write_jarvis_page("jarvis/preferences", "- likes tea", replace=True)
