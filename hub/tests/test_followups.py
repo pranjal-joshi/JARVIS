@@ -413,3 +413,13 @@ def test_a_recorded_phone_routine_replays_without_the_model(tmp_path, monkeypatc
     assert "Done: 4 steps." in reply and llm.seen == []  # straight to the phone, no model
     assert sent[-1] == ("adb_replay", {"steps": ["open com.frameo.app", "wait 2.0s", "tap 540 1210", "key back"],
                                        "device": ""})
+
+
+def test_moving_a_note_to_the_page_it_is_on_says_so_and_names_other_pages(tmp_path):
+    (tmp_path / "jarvis").mkdir()
+    (tmp_path / "jarvis" / "home.md").write_text("- The user's home is in Keshavnagar.\n", encoding="utf-8")
+    (tmp_path / "home interior.md").write_text("- Interior quote for Keshavnagar is about 17 lakh\n", encoding="utf-8")
+    g, reg = ObsidianVault(str(tmp_path)), ToolRegistry()
+    register_kb_tools(reg, g, Index())
+    out = asyncio.run(reg.get("kb_move_item").call({"match": "Interior quote", "to_page": "home/interior"}, None))
+    assert out.startswith("ERROR: that note is already on [[home interior]]") and "jarvis/home" in out

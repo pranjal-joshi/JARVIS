@@ -242,6 +242,13 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         sources = [graph.page(where)] if where else [
             p for p in graph.pages() if p.name.lower() != to.lower() and not p.name.lower().startswith("skills/")]
         found = [(p.name, b.text) for p in sources for b in p.blocks if match.lower() in b.text.lower()]
+        if not found and not where and (target := graph.page(to)) is not None and \
+                any(match.lower() in b.text.lower() for b in target.blocks):
+            # "home/interior" resolved to the page the note is on; "search again" only looped (2026-11-14)
+            others = [n for n in names if n.lower().startswith("jarvis/") and n.lower() != target.name.lower()
+                      and not n.lower().startswith(("jarvis/dreams", "jarvis/inbox"))][:12]
+            return (f"ERROR: that note is already on [[{target.name}]]. To move it, call move_note again with a "
+                    f"different to_page, one of the existing pages: {', '.join(others) or 'none'}.")
         if not found:
             return (f"ERROR: no note contains {match!r}. Call search_notes to find the exact words, then call "
                     "move_note with a few of them.")
