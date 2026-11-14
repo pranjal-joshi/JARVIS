@@ -10,8 +10,18 @@ against LFM3's chat template by [`scripts/sft/check_sft.py`](../../../scripts/sf
 python -I scripts/sft/build_sft.py
 ```
 
-That pulls the traces and tool schemas from the running hub container. Turns that no eval case grades need a
-verdict in `scripts/sft/review.json`; list the new ones with `--list-unreviewed`. Then check:
+That pulls the traces and tool schemas from the running hub container. With the hub running on the host, give the
+trace databases instead (the container's old one copied out, and the host's); the tool schemas then come from
+`hub/.venv`:
+
+```bash
+docker cp jarvis-hub-1:/data/traces.db container-traces.db
+python -I scripts/sft/build_sft.py --traces container-traces.db data/hub-local/traces.db
+```
+
+Turns that no eval case grades need a verdict in `scripts/sft/review.json`; list the new ones with
+`--list-unreviewed`. A verdict can carry a `fix` that keeps a turn that went wrong, corrected (the right calls,
+their results as the hub writes them, the reply); see `fixed()` in the script. Then check:
 
 ```bash
 ollama show jarvis-lfm3-gpu --template > lfm3.jinja   # or docker exec jarvis-ollama-1 ollama show ...
@@ -35,9 +45,9 @@ same tokens through LFM3's template **and** through a generic ChatML one (checke
 1. Model: `LiquidAI/LFM3-1.7B` (the Hugging Face weights, not the GGUF).
 2. Dataset: upload `lfm3_tools_chatml.jsonl` (and `_val` for evaluation); format **chatml**.
 3. Chat template: the model's own. Train on assistant turns only, if offered.
-4. Max sequence length 8192 covers every sample (the longest is ~18k characters, about 4.6k tokens; most
+4. Max sequence length 8192 covers every sample (the longest is ~14k characters, about 3.5k tokens; most
    are ~6k characters).
-5. It's a small set (about 200 samples): LoRA, 1-3 epochs, and mix in general tool-calling data if the model
+5. It's a small set (about 270 samples): LoRA, 1-3 epochs, and mix in general tool-calling data if the model
    starts forgetting other skills. Afterwards, run `python scripts/eval/run_eval.py --model <new model>`.
 
 Not checked: whether Studio's ChatML loader accepts the `tool` role as is. If it rejects it, use the

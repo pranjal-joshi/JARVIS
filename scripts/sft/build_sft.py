@@ -2,6 +2,8 @@
 
     python scripts/sft/build_sft.py                 # pulls traces + tool schemas from the running hub container
     python scripts/sft/build_sft.py --traces t.json --tools tools.json   # or from files exported before
+    python scripts/sft/build_sft.py --traces old.db data/hub-local/traces.db   # trace databases (merged by request);
+                                                    # without --tools, the schemas come from hub/.venv
 
 Writes docs/testing/sft/ (gitignored data, see README there):
   lfm3_tools_chatml.jsonl   {"messages": [...]}: LFM3's tool format written into the text (tools in the system
@@ -23,7 +25,12 @@ Which turns teach the right thing:
     nudge are dropped and the corrected step kept;
   - a refused duplicate call is dropped;
   - a dry-run or bridge-down result isn't a real tool result: the sample ends at the tool call (it still teaches
-    which tool, with what arguments).
+    which tool, with what arguments);
+  - from STRICT_SINCE on, tainted turns (outside text was read), skill runs and dry runs are left out;
+  - a review verdict can carry a "fix": a turn that went wrong where the right call and reply are plain from the
+    notes and tool outputs is kept corrected (see fixed());
+  - remember no longer copies to the journal: "and today's journal" goes from old results, and a reply that
+    still claims a journal write without one is left out.
 """
 
 import argparse
@@ -42,11 +49,18 @@ NOW = re.compile(r"\n\n\(Now: [^)]*\)\.?\s*$")
 NUDGE = "(system)"
 BRIDGE_DOWN = "the device bridge is not reachable"
 FAKE = ("(dry run",)
-BAD_REPLY = re.compile(r"(?i)couldn't quite catch|didn't catch that|\(dry run\)|would answer here|i ran into a problem")
+BAD_REPLY = re.compile(r"(?i)couldn't quite catch|didn't catch that|\(dry run\)|would answer here|i ran into a problem|"
+                       r"going in circles|haven't actually saved or changed anything|language model is not answering")
 # the harness's guards refusing a wrong call: the refused step is dropped (a repair), the rest of the turn graded
 GUARD = re.compile(r"you already called|didn't ask (?:about a time|you to write)|general knowledge, not current|"
                    r"which the user didn't say|would save words nobody said")
 KEEP_PER_KEY = 2  # copies of the same request + tool calls (evals ran each case many times)
+# turns from the second build on (5 Nov 2026): tainted turns, skill runs and dry runs are left out. The first build's
+# turns were reviewed under the older rules, and its eval runs read notes and web pages in dry runs.
+STRICT_SINCE = 1793817000  # 2026-11-05 00:00 IST
+JOURNAL_COPY = re.compile(r"(\]\]) and today's journal\.")  # remember/correct_memory stopped writing one (13 Nov)
+JOURNAL_CLAIM = re.compile(r"(?i)\b(?:logged|noted|saved|added|recorded)\b[^.]{0,60}\bjournal\b|journal (?:entry )?"
+                           r"(?:has been|was) (?:added|recorded)")
 
 
 def _run_eval_module():
@@ -54,6 +68,29 @@ def _run_eval_module():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def load_traces(paths: list[str]) -> list[dict]:
+    """Traces from exported JSON or trace databases (the container's /data/traces.db, the host hub's
+    data/hub-local/traces.db), one row per request."""
+    rows = {}
+    for path in paths:
+        if path.endswith(".json"):
+            got = json.loads(Path(path).read_text(encoding="utf-8"))
+        else:
+            got = json.loads(subprocess.run([sys.executable, "-", path], input=TRACES_PY.replace("'/data/traces.db'",
+                             "sys.argv[1]").replace("import sqlite3", "import sqlite3, sys"), text=True,
+                             capture_output=True, check=True, encoding="utf-8").stdout)
+        for r in got:
+            rows.setdefault(r["request_id"], r)
+    return sorted(rows.values(), key=lambda r: r["ts"])
+
+
+def local_tools() -> list[dict]:
+    """Every tool's schema from the hub's own venv (the hub running on the host, not in a container)."""
+    py = ROOT / "hub" / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    return json.loads(subprocess.run([str(py), "-"], input=TOOLS_PY, text=True, capture_output=True, check=True,
+                                     encoding="utf-8", cwd=ROOT).stdout)  # the repo .env turns the device tools on
 
 
 def pull_from_hub() -> tuple[list[dict], list[dict]]:
@@ -89,6 +126,8 @@ from jarvis_hub.web.search import register_web_search
 from jarvis_hub.kb.dreaming import register_dream_tool
 from jarvis_hub.kb.tools import register_kb_tools
 from jarvis_hub.automation.notify import register_notify_tool
+from jarvis_hub.persona.wit import Wit, register_wit_tool
+from jarvis_hub.tools.widget import register_widget_tool
 from jarvis_hub.tools.reminders import register_reminder_tools
 from jarvis_hub.tools.utility import register_utility_tools
 s, reg = Settings(), ToolRegistry()
@@ -96,7 +135,8 @@ for f in (lambda: register_kb_tools(reg, m(), m()), lambda: register_utility_too
           lambda: register_expert_tool(reg, s), lambda: register_device_tools(reg, s),
           lambda: register_web_search(reg, s), lambda: register_notify_tool(reg, m()),
           lambda: register_reminder_tools(reg, m()), lambda: register_skill_tools(reg, m(), m()),
-          lambda: register_dream_tool(reg, m()), lambda: register_job_tools(reg, Jobs(s, m(), None, EventBus()))):
+          lambda: register_dream_tool(reg, m()), lambda: register_job_tools(reg, Jobs(s, m(), None, EventBus())),
+          lambda: register_widget_tool(reg), lambda: register_wit_tool(reg, Wit())):
     try:
         f()
     except TypeError as e:
@@ -182,6 +222,26 @@ def repair(convo: list[dict]) -> tuple[list[dict], list[str]]:
             continue
         keep.append(m)
     return keep, fixes
+
+
+def fixed(loop: dict, fix: dict, rid: str) -> list[dict]:
+    """A corrected turn (a review.json "fix"): the loop's conversation up to the user's message (or its first `keep`
+    messages; `user` replaces that message), then the right steps and reply. Without `steps`, the turn's own
+    (repaired) steps stay and only the reply changes."""
+    convo = loop["convo"]
+    if "steps" not in fix:
+        return repair(convo)[0] + [{"role": "assistant", "content": fix["reply"]}]
+    n = fix.get("keep") or max(i for i, m in enumerate(convo) if m["role"] == "user") + 1
+    msgs = [dict(m) for m in convo[:n]]
+    if "user" in fix:
+        msgs[-1]["content"] = fix["user"]
+    for i, step in enumerate(fix["steps"]):
+        cid = f"fix-{rid[:8]}-{i}"
+        msgs.append({"role": "assistant", "content": "", "tool_calls": [{"id": cid, "type": "function", "function": {
+            "name": step["call"], "arguments": json.dumps(step["args"], ensure_ascii=False)}}]})
+        msgs.append({"role": "tool", "tool_call_id": cid, "name": step["call"],
+                     "content": f'<tool_result tool="{step["call"]}">\n{step["result"]}\n</tool_result>'})
+    return msgs + [{"role": "assistant", "content": fix["reply"]}]
 
 
 def truncate_fake(msgs: list[dict]) -> tuple[list[dict], bool]:
@@ -273,19 +333,22 @@ def as_text(msgs: list[dict], tools: list[dict]) -> list[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--traces", help="traces JSON exported before (default: pull from the hub container)")
-    ap.add_argument("--tools", help="tool schemas JSON exported before (default: pull from the hub container)")
+    ap.add_argument("--traces", nargs="+", help="traces: JSON exported before or trace databases (default: pull "
+                                                "from the hub container)")
+    ap.add_argument("--tools", help="tool schemas JSON exported before (default: the container's, or with --traces "
+                                    "the hub's own venv)")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--list-unreviewed", action="store_true",
                     help="print the samples no eval case grades and review.json doesn't cover, then stop")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")  # traces hold non-ASCII text; a Windows console isn't UTF-8
-    # turns no eval case grades, reviewed by hand: request_id -> {"keep": bool, "why": str}
+    # turns no eval case grades, reviewed by hand: request_id -> {"keep": bool, "why": str, "fix": {...}}; a "no"
+    # also overrules an eval pass
     review_file = Path(__file__).with_name("review.json")
     review = json.loads(review_file.read_text(encoding="utf-8")) if review_file.exists() else {}
-    if a.traces and a.tools:
-        rows = json.loads(Path(a.traces).read_text(encoding="utf-8"))
-        schemas = json.loads(Path(a.tools).read_text(encoding="utf-8"))
+    if a.traces:
+        rows = load_traces(a.traces)
+        schemas = json.loads(Path(a.tools).read_text(encoding="utf-8")) if a.tools else local_tools()
     else:
         rows, schemas = pull_from_hub()
     by_model = {t["name"]: t for t in schemas}
@@ -304,27 +367,45 @@ def main() -> None:
         user_turns = [m for m in row["data"].get("messages") or [] if m.get("role") == "user"]
         said = (row.get("said") or (user_turns[-1]["content"] if user_turns else "")).strip()
         case = cases.get(said.lower())
-        calls = turn_calls(row, by_model)
-        good, why = grade(row, case, calls, score)
-        if not good:
-            why_dropped[why.split(":")[0]] += 1
+        r = review.get(row["request_id"])
+        fix = (r or {}).get("fix")
+        if r is not None and not r["keep"]:
+            why_dropped["review: " + r["why"]] += 1
             continue
-        if case is None:  # "no errors" doesn't make the calls right: a person's review does
-            r = review.get(row["request_id"])
-            if r is None:
-                unreviewed.append(row)
-                why_dropped["not reviewed yet"] += 1
+        if fix:
+            why = "corrected: " + r["why"]
+        else:
+            new = row["ts"] >= STRICT_SINCE
+            left_out = new and ("tainted (outside text read)" if row["data"].get("tainted") else
+                                "skill run" if row["session"].startswith("skill-") else
+                                "dry run" if row["data"].get("dry_run") else "")
+            if left_out:
+                why_dropped[left_out] += 1
                 continue
-            if not r["keep"]:
-                why_dropped["review: " + r["why"]] += 1
+            calls = turn_calls(row, by_model)
+            good, why = grade(row, case, calls, score)
+            if not good:
+                why_dropped[why.split(":")[0]] += 1
                 continue
-            why = "reviewed: " + r["why"]
+            if case is None:  # "no errors" doesn't make the calls right: a person's review does
+                if r is None:
+                    unreviewed.append(row)
+                    why_dropped["not reviewed yet"] += 1
+                    continue
+                why = "reviewed: " + r["why"]
         for k, loop in enumerate(loops):
-            msgs, fixes = repair(loop["convo"])
-            final = (loop.get("calls") or [{}])[-1]
-            if k == len(loops) - 1 and final.get("content") and not final.get("tool_calls") \
-                    and not BAD_REPLY.search(final["content"]):
-                msgs = msgs + [{"role": "assistant", "content": final["content"]}]
+            if fix and k != fix.get("loop", -1) % len(loops):  # a corrected turn: only the part put right
+                continue
+            if fix:
+                msgs, fixes = fixed(loop, fix, row["request_id"]), []
+            else:
+                msgs, fixes = repair(loop["convo"])
+                final = (loop.get("calls") or [{}])[-1]
+                if k == len(loops) - 1 and final.get("content") and not final.get("tool_calls") \
+                        and not BAD_REPLY.search(final["content"]):
+                    msgs = msgs + [{"role": "assistant", "content": final["content"]}]
+            msgs = [{**m, "content": JOURNAL_COPY.sub(r"\1.", m["content"])}
+                    if m["role"] != "assistant" and isinstance(m.get("content"), str) else m for m in msgs]
             msgs, cut = truncate_fake(msgs)
             while msgs and msgs[-1]["role"] != "assistant":  # a sample ends on something to learn
                 msgs.pop()
@@ -332,6 +413,9 @@ def main() -> None:
                 why_dropped["nothing left to learn"] += 1
                 continue
             called = [c["function"]["name"] for m in msgs for c in m.get("tool_calls") or []]
+            if JOURNAL_CLAIM.search(msgs[-1].get("content") or "") and "add_to_journal" not in called:
+                why_dropped["reply claims a journal write"] += 1
+                continue
             if any(n not in by_model for n in called):
                 why_dropped["calls a tool that no longer exists"] += 1
                 continue
@@ -344,9 +428,12 @@ def main() -> None:
                 continue
             offered = [n for n in loop.get("offered") or [] if n in by_model]
             tools = [fn_of(n) for n in dict.fromkeys(offered + called)]
+            # corrected turns are each their own example ("save that" means a different thing every time)
+            key = (said.lower() + (" " + row["request_id"] if fix else ""), tuple(called))
             samples.append({"msgs": structured(msgs), "tools": tools, "fixes": fixes, "cut": cut,
-                            "key": (said.lower(), tuple(called)), "rid": row["request_id"], "model": row["model"],
-                            "dry": bool(row["data"].get("dry_run")), "case": case["id"] if case else "", "why": why})
+                            "key": key, "rid": row["request_id"], "model": row["model"],
+                            "dry": bool(row["data"].get("dry_run")), "case": case["id"] if case else "", "why": why,
+                            "corrected": bool(fix), "new": row["ts"] >= STRICT_SINCE})
             fixes_seen.update(f.split(":")[0] for f in fixes)
 
     if a.list_unreviewed:
@@ -363,7 +450,7 @@ def main() -> None:
 
     # near-duplicates: evals ran each case many times
     kept, per_key = [], Counter()
-    for s in sorted(samples, key=lambda s: (s["dry"], s["cut"])):  # prefer real, complete conversations
+    for s in sorted(samples, key=lambda s: (not s["corrected"], s["dry"], s["cut"])):  # corrected, then real, complete
         if per_key[s["key"]] < KEEP_PER_KEY:
             per_key[s["key"]] += 1
             kept.append(s)
@@ -392,6 +479,9 @@ def main() -> None:
         f"| samples before de-duplication | {len(samples)} |",
         f"| near-duplicates dropped (same request and calls, over {KEEP_PER_KEY}) | {dupes} |",
         f"| samples with a repaired step | {sum(1 for s in kept if s['fixes'])} |",
+        f"| corrected turns (review.json fixes) | {sum(1 for s in kept if s['corrected'])} |",
+        f"| samples from turns since 5 Nov 2026 (of them corrected) | {sum(1 for s in kept if s['new'])} "
+        f"({sum(1 for s in kept if s['new'] and s['corrected'])}) |",
         f"| samples ending at a tool call (dry run or bridge down) | {sum(1 for s in kept if s['cut'])} |",
         f"| samples answering without a tool | {no_tool} |",
         f"| graded by an eval case / reviewed by hand (review.json) | {sum(1 for s in kept if s['case'])} / "
@@ -401,7 +491,9 @@ def main() -> None:
         "## Samples by the model that produced them", "", *[f"- {k}: {v}" for k, v in by_model_n.most_common()], "",
         "## Tool calls taught", "", *[f"- {k}: {v}" for k, v in tool_n.most_common()], "",
     ]
-    (out / "report.md").write_text("\n".join(report), encoding="utf-8")
+    old = (out / "report.md").read_text(encoding="utf-8") if (out / "report.md").exists() else ""
+    notes = old[old.index("## Notes"):] if "## Notes" in old else ""  # written by hand: kept across rebuilds
+    (out / "report.md").write_text("\n".join(report) + ("\n" + notes if notes else ""), encoding="utf-8")
     print("\n".join(report[:12]))
 
 
