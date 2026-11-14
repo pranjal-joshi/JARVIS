@@ -16,6 +16,7 @@ _MEMORY = (r"\b(?:remember(?:ed)?|memori[sz]ed?|memory|note[ds]?|recorded|record
            r"jot(?:ted)?|filed|file|kept|keep|committed|commit|in mind|on record|on file|in the book|"
            r"hold on to|holding on to|recall|ma(?:de|ke|king) a note|won'?t forget|will not forget|never forget|"
            r"updated? what I know|added? (?:it |that |this )?to (?:your|my|the) \w+)\b")
+LISTED = re.compile(r"(?:[-*•]|\d+[.)])\s")  # a list item: what the notes say, not what was done
 CLAIM = re.compile(rf"{_SPEAKER}(?:\W+\w+){{0,6}}?\W+(?P<mem>{_MEMORY})", re.I)
 # "a note", "the record", "worth keeping a log": the memory word as a thing, not something done
 THING = re.compile(r"\b(?:a|an|the|good|worth|nice|useful)\s+(?:\w+\s+)?$", re.I)
@@ -114,6 +115,8 @@ def claimed_kind(text: str, done: set[str]) -> str | None:
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
         s = sentence.strip()
         if not s or OFFER.search(s) or not ACTION_CLAIM.search(s):
+            continue
+        if "recap" in done and LISTED.match(s):  # "- Set up AdGuard on Proxmox": a plan read from the notes
             continue
         kind = "skill" if _SKILL.search(s) else "timer" if _TIMER.search(s) else "message" if _MESSAGE.search(s) else \
             "device" if _DEVICE.search(s) else "action"

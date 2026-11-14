@@ -93,8 +93,28 @@ def test_a_rare_word_outranks_a_common_one(tmp_path):
 def test_fusion_lifts_a_note_both_searches_found():
     dense = [{"page": "A", "text": "a", "score": 0.9}, {"page": "B", "text": "b", "score": 0.8}]
     words = [{"page": "B", "text": "b", "score": 7.0}, {"page": "C", "text": "c", "score": 5.0}]
-    fused = _fuse(dense, words, 3)
+    fused = _fuse(dense, words, limit=3)
     assert [h["page"] for h in fused] == ["B", "A", "C"] and fused[0]["score"] == 0.8
+
+
+def test_a_term_links_a_question_to_notes_that_use_its_other_name(tmp_path):
+    (tmp_path / "jarvis").mkdir()
+    (tmp_path / "jarvis" / "terms.md").write_text("- Z2M = Zigbee2MQTT\n    learned:: [[2026-11-14]]\n",
+                                                 encoding="utf-8")
+    (tmp_path / "jarvis" / "projects.md").write_text("- wants Z2M monitored and deployed properly\n",
+                                                    encoding="utf-8")
+    (tmp_path / "jarvis" / "home.md").write_text("".join(f"- home note {i}\n" for i in range(8)), encoding="utf-8")
+    idx = KBIndex(ObsidianVault(str(tmp_path)), None, "m", "http://127.0.0.1:9")
+    assert idx.aliases(["zigbee"]) == ["z2m"] and idx.aliases(["z2m"]) == ["zigbee2mqtt"]
+    hits = asyncio.run(idx.search("zigbee plans once we move to the new home"))
+    assert any("Z2M monitored" in h["text"] for h in hits)  # the home page's lines don't push it out
+
+
+def test_a_plan_read_back_as_a_list_is_not_a_claim():
+    from jarvis_hub.agent.claims import claimed_kind
+    plans = "Your plans are:\n- Set up AdGuard on Proxmox this weekend.\n- Configure and save ESP Home modules."
+    assert claimed_kind(plans, {"recap"}) is None
+    assert claimed_kind("I've set up AdGuard on Proxmox.", set()) == "action"
 
 
 # ---------- pinned skills ----------

@@ -40,14 +40,18 @@ def _content_words(query: str) -> list[str]:
     return [w for w in WORD.findall(query.lower()) if w not in _FILLER]
 
 
+TERMS_PAGE = "jarvis/terms"
+# "Z2M = Zigbee2MQTT", "REA stands for ...", "defines the abbreviation REA as ..."; the meaning ends at a comma
+TERM = re.compile(r"(?:abbreviation\s+)?(?P<a>[\w.+-]{2,20})\s*(?:=|:|stands for|means|as)\s*(?P<z>[^,;.(]{2,60})", re.I)
+
 RRF_K = 60  # reciprocal-rank fusion constant: rank matters, raw scores from the two lists don't compare
 
 
-def _fuse(dense: list[dict], lexical: list[dict], limit: int) -> list[dict]:
+def _fuse(*lists: list[dict], limit: int) -> list[dict]:
     """Merge the meaning hits and the word hits by reciprocal rank. A note in both lists rises; each hit keeps
     the score it came with (cosine for meaning, BM25 for words)."""
     fused: dict[tuple[str, str], tuple[float, dict]] = {}
-    for hits in (dense, lexical):
+    for hits in lists:
         for rank, h in enumerate(hits):
             key = (h["page"], h["text"])
             prev = fused.get(key)
@@ -203,8 +207,35 @@ class KBIndex:
         words = _content_words(query)
         dense = await self._search(query, limit) if self.vector_ready else []
         lexical = self._keyword_search(" ".join(words), limit + 4, min_cover=0.5 if dense or topical else 0.0)
-        found = [h for h in _fuse(dense, lexical, limit) if (h["page"], h["text"]) not in seen]
-        return (topical + found)[:max(limit, len(topical))]
+        # "zigbee" finds the notes that say Z2M, through "Z2M = Zigbee2MQTT" on the terms page
+        other = self._keyword_search(" ".join(alias), limit, 0.0) if (alias := self.aliases(words)) else []
+        found = [h for h in _fuse(dense, lexical, other, limit=limit) if (h["page"], h["text"]) not in seen]
+        # a named page ("new home" -> jarvis/home) keeps half the room: "zigbee plans once we move to the new
+        # home" found the Z2M plan, and the home page's six lines pushed it out
+        keep = max(limit, len(topical))
+        head = topical[:keep - min(len(found), limit // 2)]
+        return head + found[:keep - len(head)]
+
+    def aliases(self, words: list[str]) -> list[str]:
+        """The other name of each query word the terms page defines ("REA = Reverse Engineer Anything",
+        "defines the abbreviation REA as ..."), both ways; a word matches a name's word or starts it
+        ("zigbee" -> "Zigbee2MQTT")."""
+        page = self.graph.page(TERMS_PAGE)
+        if page is None:
+            return []
+        def hit(w: str, side: list[str]) -> bool:
+            return any(w == t or len(w) >= 4 and t.startswith(w) for t in side)
+        out = []
+        for b in page.blocks:
+            m = TERM.search(b.text.split("\n")[0])
+            if not m:
+                continue
+            a, z = (WORD.findall(m.group(g).lower()) for g in ("a", "z"))
+            for w in words:
+                for side, other in ((a, z), (z, a)):
+                    if hit(w, side):
+                        out += [t for t in other if t not in _FILLER and t not in words and t not in out]
+        return out
 
     def _topic_hits(self, query: str, limit: int) -> list[dict]:
         """A memory page the query names: its blocks that share the most words with the query first."""
