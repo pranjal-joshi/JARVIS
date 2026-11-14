@@ -139,6 +139,7 @@ async def lifespan(app: FastAPI):
         st.agent._bus = st.bus
         st.agent.wit, st.agent.address = st.wit, s.jarvis_address.strip()
         st.agent.preview = lambda tool, args: approval_preview(tool, args, st.kb_graph)
+        st.agent.vault = st.kb_graph  # web and expert answers kept verbatim on raw/ pages
         st.agent.async_approval_s = s.voice_async_approval_s  # satellite approvals finish in the background
         if s.llm_escalate_model in s.llm_choices():  # a stuck or unsure turn goes to the bigger model
             st.agent.escalate, st.agent.escalate_below = s.llm_escalate_model, s.llm_escalate_below
@@ -166,7 +167,7 @@ async def lifespan(app: FastAPI):
                          model=s.dream_model if s.dream_model in s.llm_choices() else "")
     register_dream_tool(st.tools, st.dreamer)
     if isinstance(st.agent, ToolAgent) and s.dream_context:
-        st.agent.memory = st.dreamer.context
+        st.agent.memory = st.dreamer.context  # called with limit= sized for the model (ToolAgent.memory_chars)
     if s.agent != "echo" and s.dream_enabled:
         st.dreamer.start()
     # the DGX model picked in the HUD stays loaded as configured (LLM_ENDPOINTS "load"; llm/studio.py)

@@ -6,7 +6,7 @@ Risk model (see mcp/servers.yaml for the same idea applied to MCP servers):
 - editing any of the user's own pages: write, needs approval"""
 
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.events.bus import Event
@@ -31,12 +31,16 @@ _PERSON = [(re.compile(rf"\b{a}\b", re.I), b) for a, b in (
     ("I was", "you were"), ("I've", "you've"), ("I'll", "you'll"), ("I'd", "you'd"), ("I", "you"),
     ("myself", "yourself"), ("my", "your"), ("mine", "yours"), ("me", "you"))]
 YOURS = 'In these notes "you" is the user.\n'
+# "The user wants" -> "You wants" read badly: the verb after "the user" (and an adverb) loses its third-person -s
+_AGREE = re.compile(r"\b(the user\s+(?:(?:also|still|now|often|usually|always|never|really|only|just)\s+)?)"
+                    r"([a-z]{3,})\b", re.I)
+_IRREGULAR = {"has": "have", "does": "do", "goes": "go", "was": "were", "is": "are"}
 
 
 # The memory pages JARVIS keeps (jarvis/<topic>). A model's topic is mapped onto one of these in code, so a weak
 # model can't scatter facts over pages it invents ("remembering", "employment", "save to Sanika page").
 TOPICS = ("people", "family", "work", "home", "location", "dates", "preferences", "projects", "tools", "terms",
-          "memory")
+          "decisions", "memory")
 _TOPIC_ALIASES = {
     "work": "work job jobs career employment employer employers company companies office colleague colleagues "
             "salary experience resume cv profession joined employed hired",
@@ -51,6 +55,7 @@ _TOPIC_ALIASES = {
     "projects": "project plan plans goal goals idea ideas",
     "tools": "tool software app apps phone",
     "terms": "term abbreviation acronym definition meaning",
+    "decisions": "decision decided decide choose chose chosen choice",
 }
 _ALIAS = {w: topic for topic, ws in _TOPIC_ALIASES.items() for w in ws.split()}
 
@@ -91,10 +96,11 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         if not hits:
             return "No matching notes."
         # a hit on a small memory page (jarvis/work, jarvis/family) brings the rest of that page: "my companies"
-        # found the wife's jobs and missed the user's own, two lines further down the same topic
+        # found the wife's jobs and missed the user's own, two lines further down the same topic. Not for the
+        # automatic look-first search (brief): it only hands over the best few hits.
         lines = [(h["page"], h["text"]) for h in hits]
         have = {_PROPS.sub("", t).strip() for _, t in lines}
-        for name in dict.fromkeys(p for p, _ in lines):
+        for name in [] if args.get("brief") else dict.fromkeys(p for p, _ in lines):
             page = graph.page(name) if name.lower().startswith("jarvis/") and "dream" not in name.lower() else None
             if page and len(page.blocks) <= WHOLE_PAGE:
                 for b in page.blocks:
@@ -144,7 +150,10 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
                 graph.delete_memory_items(old)  # the new one says more: it replaces the old one
         # provenance: "said by you" (memory capture), "approved by you", or noted by JARVIS on its own
         via = ctx.via or "noted by JARVIS"
-        page = graph.write_jarvis_page(topic, f"{fact}\n  learned:: [[{_today_title(graph)}]]\n  via:: {via}")
+        props = f"\n  learned:: [[{_today_title(graph)}]]\n  via:: {via}"
+        if when := as_of_date(str(args.get("as_of") or "")):  # bi-temporal: when it is true, not when it was learned
+            props += f"\n  as_of:: [[{when}]]"
+        page = graph.write_jarvis_page(topic, fact + props + _source(ctx))
         await index.sync()
         # the exact words saved, so the spoken confirmation repeats them (a misheard date shows up)
         return (f'Saved "{fact}" to [[{page}]] and today\'s journal. Confirm it to the user in these words.'
@@ -191,9 +200,9 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         page, text = str(args.get("page", "")), str(args.get("text", ""))
         if page.strip().lower().startswith("skills/"):  # a skill runs as soon as it changes: only its tools write it
             return "ERROR: skill pages are changed with update_skill (add_steps for a new step), not add_to_page"
-        made = ""
+        made, block = "", text + _source(ctx)
         if page.lower().startswith("jarvis/"):  # JARVIS's memory: one of its fixed pages, never a new one
-            page = graph.write_jarvis_page(memory_topic(page, text), text)
+            page = graph.write_jarvis_page(memory_topic(page, text), block)
         else:
             if graph.page(page) is None:
                 hit = best_name(page, [p.name for p in graph.pages() if not p.is_journal])
@@ -203,9 +212,18 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
                     return missing_page(graph, page, "add_to_page") + " Or call remember to keep it as a memory."
                 else:
                     made = " It's a new page."
-            graph.append_to_user_page(page, text)
+            graph.append_to_user_page(page, block)
         await index.sync()
         return f'Added "{text}" to [[{page}]].{made}'
+
+    async def capture_note(args: dict, ctx: ToolCtx) -> str:
+        """Quick capture: a line for jarvis/inbox, sorted into the memory pages by the nightly dream."""
+        text = " ".join(str(args.get("text", "")).split())
+        if not text:
+            return "ERROR: empty text"
+        graph.write_jarvis_page("inbox", f"{text}\n  learned:: [[{_today_title(graph)}]]\n  via:: said by you")
+        await index.sync()
+        return f'Captured "{text}" in [[jarvis/inbox]].'
 
     async def kb_move_item(args: dict, ctx: ToolCtx) -> str:
         """Move notes (with what is nested under them) that contain some words to another page: "move the ESP
@@ -272,8 +290,15 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
                  "Save a fact to your memory. Use only when the user says 'remember...' or 'note that I...'; "
                  "never for things you just looked up.",
                  _obj({"fact": {"type": "string"},
-                       "topic": {"type": "string", "description": "one of: " + ", ".join(TOPICS)}},
+                       "topic": {"type": "string", "description": "one of: " + ", ".join(TOPICS)},
+                       "as_of": {"type": "string", "description": "optional: when the fact is true from or at, if "
+                                 "the user says (e.g. 2018, 3 March 2025, next Friday)"}},
                       ["fact"]), Risk.WRITE, kb_remember, self_scoped=True))
+    reg.add(Tool("capture_note", "builtin",
+                 "Quickly capture a thought or note to the inbox, sorted later. Use for: 'capture call the plumber', "
+                 "'jot down idea for the garden', 'inbox: renew passport', 'note: gate code changed'.",
+                 _obj({"text": {"type": "string", "description": "the note, in the user's words"}}, ["text"]),
+                 Risk.WRITE, capture_note, self_scoped=True))
     reg.add(Tool("kb_correct", "builtin",
                  "Fix something you remembered wrongly: removes the wrong memory and saves the corrected fact. "
                  "Use for: 'no, my wife's name is Sanika, not Tanika', 'that's wrong, my son was born on 13 May', "
@@ -308,11 +333,48 @@ def missing_page(graph: ObsidianVault, name: str, tool: str) -> str:
     return f"ERROR: no page named {name!r}. Call search_notes to find where it is written."
 
 
+def _source(ctx: ToolCtx) -> str:
+    """The raw page a fact saved from earlier output came from (tool_agent sets it while saving)."""
+    return f"\n  source:: [[{ctx.source_ref}]]" if getattr(ctx, "source_ref", "") else ""
+
+
+def as_of_date(phrase: str, today: date | None = None) -> str | None:
+    """"2018", "3 March 2025", "next friday", "2025-03-03" -> "YYYY-MM-DD"; None when it isn't a date."""
+    today = today or date.today()
+    p = re.sub(r"(\d)(?:st|nd|rd|th)\b", r"\1", dated(phrase.strip(), today)).replace(",", "")
+    p = re.sub(r"^(?:on|since|from|as of|in)\s+", "", p.strip(" ."), flags=re.I)
+    if not p:
+        return None
+    if not re.search(r"\d{4}", p):  # "3 March": this year
+        p += f" {today.year}"
+    for fmt in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y", "%B %Y", "%b %Y", "%Y"):
+        try:
+            return datetime.strptime(p, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
 def second_person(text: str) -> str:
     """A note in the user's own voice, said back to them: "My wife's name is Sanika" -> "Your wife's ..."."""
+    text = _AGREE.sub(lambda m: m[1] + _plural(m[2]), text)
     for rx, to in _PERSON:
         text = rx.sub(lambda m, to=to: to[0].upper() + to[1:] if _starts(m) else to, text)
     return text
+
+
+def _plural(verb: str) -> str:
+    """The verb as it goes with "you": wants -> want, watches -> watch, studies -> study, has -> have."""
+    low = verb.lower()
+    if low in _IRREGULAR:
+        return _IRREGULAR[low]
+    if not low.endswith("s") or low.endswith(("ss", "us", "is")) or verb != low:
+        return verb  # not a third-person verb ("this", a name)
+    if low.endswith("ies"):
+        return verb[:-3] + "y"
+    if re.search(r"(?:ch|sh|x|z|o)es$", low):
+        return verb[:-2]
+    return verb[:-1]
 
 
 def _starts(m: re.Match) -> bool:

@@ -1,0 +1,14 @@
+[
+  {"q": "when is my car insurance due", "expect": ["car insurance"]},
+  {"q": "what runs my smart home", "expect": ["Smart home runs on"]},
+  {"q": "what network is the wifi on", "expect": ["192.168.0"]},
+  {"q": "how is the TV controlled", "expect": ["controlled over IR"]},
+  {"q": "what is the movie night lighting", "expect": ["Movie night"]},
+  {"q": "focus mode in the study", "expect": ["Focus mode"]},
+  {"q": "do I prefer tea or coffee", "expect": ["tea over coffee"]},
+  {"q": "where will JARVIS move to", "expect": ["move JARVIS to"]},
+  {"q": "what services are planned for the homelab", "expect": ["Services planned"]},
+  {"q": "how was the voice decided", "expect": ["cloned from the film voice"]},
+  {"q": "smoke detector battery", "expect": ["smoke detector"]},
+  {"q": "second NVMe drive", "expect": ["NVMe"]}
+]

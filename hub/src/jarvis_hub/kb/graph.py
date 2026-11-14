@@ -36,6 +36,7 @@ JOURNAL_FILE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.md$")
 JOURNALS = "journals"
 HIDDEN = {JOURNALS, "logseq", "node_modules"}  # top-level folders that hold no pages (plus any dot-folder)
 JARVIS_NS = "jarvis/"
+ENTITIES_NS = "jarvis/entities/"  # one page per person, project, place...: aliases and relations in frontmatter
 TRASH_FILE = re.compile(r"^(\d+)_(.+)\.md$")  # "<seconds>_<path, "/" as "___">[_n].md"
 _MEMORY_TAG = re.compile(r"#jarvis\b|#\[\[jarvis\]\]|\[\[jarvis\]\]", re.I)  # notes the agent wrote
 
@@ -102,6 +103,10 @@ class Page:
         for v in self.properties.values():
             out.update(_links(v))
         return out
+
+    def listprop(self, key: str) -> list[str]:
+        """A list property's items (`[a, b]`, a block list or "a, b"); a comma inside [[...]] stays."""
+        return [x for x in (_unquote(x) for x in re.split(r",(?![^\[]*\]\])", self.properties.get(key, ""))) if x]
 
     @property
     def digest(self) -> str:
@@ -312,16 +317,27 @@ class ObsidianVault:
             short = [p for p in pages if not p.is_journal and p.name.lower().rsplit("/", 1)[-1] == key]
             if len(short) == 1:
                 return short[0]
+        if key and not exact and (named := self.entity_aliases().get(key)):  # [[Z2M]] -> jarvis/entities/zigbee2mqtt
+            return next((p for p in pages if p.name.lower() == named), None)
         return None
 
+    def entity_aliases(self) -> dict[str, str]:
+        """Each entity page's alias (lowercase) -> that page's name (lowercase)."""
+        out: dict[str, str] = {}
+        for p in self.pages():
+            if p.name.lower().startswith(ENTITIES_NS):
+                for a in p.listprop("aliases"):
+                    out.setdefault(a.lower(), p.name.lower())
+        return out
+
     @staticmethod
-    def resolve(link: str, names: set[str]) -> str:
-        """A [[link]] (lowercase) as the page it points at: itself, or the one page in a folder whose file name
-        it is. names: every page name, lowercase."""
+    def resolve(link: str, names: set[str], aliases: dict[str, str] | None = None) -> str:
+        """A [[link]] (lowercase) as the page it points at: itself, the one page in a folder whose file name
+        it is, or the entity page it is an alias of. names: every page name, lowercase; aliases: entity_aliases()."""
         if link in names or "/" in link:
             return link
         short = [n for n in names if n.rsplit("/", 1)[-1] == link]
-        return short[0] if len(short) == 1 else link
+        return short[0] if len(short) == 1 else (aliases or {}).get(link, link)
 
     def similar_pages(self, name: str, n: int = 3) -> list[str]:
         """Page names close to `name` (typos, singular/plural, a missing namespace)."""

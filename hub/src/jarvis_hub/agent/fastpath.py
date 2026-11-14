@@ -41,6 +41,13 @@ WIT_BE = re.compile(r"^(?:be|stay|act|keep it|get) (?:a (?:bit|little) )?(" +
 WIT_NONE = re.compile(r"^(?:no|stop the|stop|less|fewer|enough) (?:more )?" + _WIT + r"$")
 
 
+# "capture call the plumber", "note: gate code changed", "jot down ...", "inbox: renew passport": straight to
+# jarvis/inbox (capture_note), sorted by the nightly dream. Not "capture the screen" (a screenshot).
+CAPTURE = re.compile(r"^\W*(?:(?:hey|ok|okay)\W+)?(?:jarvis\W+)?(?:capture\b(?!\s+(?:a\s+|the\s+|my\s+)?"
+                     r"(?:screen|screenshot|photo|picture|image)\b)|note\s*:|jot down\b|inbox\b)\s*:?\s*(\S.{1,500}?)\W*$",
+                     re.I | re.S)
+
+
 @dataclass
 class Plan:
     intent: str
@@ -138,6 +145,9 @@ class FastPaths:
             return Plan("phone_routine", [("phone_replay", {"name": m[1].strip()})], lambda r: _body(r[0]))
         if plan := self._skills(utterance):  # skill steps may say "and": checked before that rule
             return plan
+        if m := CAPTURE.match(utterance):  # a captured note may say "and" too
+            text = m[1].strip()
+            return Plan("capture", [("capture_note", {"text": text})], lambda r: "Captured, sir.")
         text = _clean(utterance)
         if not text or len(text) > 90 or re.search(r"\b(and|then|also)\b", text):
             return None  # several requests in one: the model handles those

@@ -124,7 +124,7 @@ def test_questions_about_the_user_look_in_the_notes_first():
     llm = ScriptLLM([say("You are Pranjal, sir.")])
     a, ran = setup(llm, ToolSelector(WordEmbedder(), "m", k=1))
     assert ask(a, "remind me what my name is?") == "You are Pranjal, sir."
-    assert ran[0] == ("kb_search", {"query": "name"})  # searched by keywords, not the whole question
+    assert ran[0] == ("kb_search", {"query": "name", "limit": 4, "brief": True})  # searched by keywords, not the whole question
     assert llm.seen[0][-1]["role"] == "tool" and "Pranjal" in llm.seen[0][-1]["content"]
     assert _keywords("remind me what I'm called again") == "my name is" and _keywords("what's my wife called") == "wife name" and _keywords("what do you know about me") == ""
     llm = ScriptLLM([say("Canberra, sir.")])  # not about the user: no search
@@ -309,7 +309,7 @@ def test_a_follow_up_searches_for_who_the_last_question_was_about():
     asyncio.run(a.run(messages=[{"role": "user", "content": "who is Pranav?"}, say("Your nephew, sir."),
                                 {"role": "user", "content": "how old is he?"}],
                       source=Source.WEB, request_id="r1", bus=EventBus()))
-    assert ran[0] == ("kb_search", {"query": "pranav old he"})
+    assert ran[0] == ("kb_search", {"query": "pranav old he", "limit": 4, "brief": True})
 
 
 def test_todays_date_copied_into_a_journal_note_is_dropped():

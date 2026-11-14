@@ -441,7 +441,9 @@ function Question({ q, answer }) {
       <label htmlFor={`q-${q.id}`}>{q.q}</label>
       <input id={`q-${q.id}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your answer" maxLength={300} />
       <span className="q-actions">
-        <button type="submit" disabled={!text.trim()}>Save</button>
+        {q.fact && <button type="button" onClick={() => answer(q.id, "yes")}>Still true</button>}
+        {q.fact && <button type="button" onClick={() => answer(q.id, "no")}>Not anymore</button>}
+        <button type="submit" disabled={!text.trim()}>{q.fact ? "Correct it" : "Save"}</button>
         <button type="button" className="ignore" onClick={() => answer(q.id, "dismiss")}>Ignore</button>
       </span>
     </form>

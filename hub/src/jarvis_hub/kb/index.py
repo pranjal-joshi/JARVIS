@@ -11,14 +11,46 @@ from collections import Counter
 
 import httpx
 
-from jarvis_hub.kb.graph import Block, ObsidianVault, Page
+from jarvis_hub.kb.graph import ENTITIES_NS, LINK, PROP, Block, ObsidianVault, Page
 from jarvis_hub.llm.client import LLMClient, LLMError
 
 log = logging.getLogger(__name__)
 COLLECTION = "kb_blocks"
-UNSEARCHED = {"jarvis/dreams/diary"}  # indexed for the map, but never a search answer
+# indexed for the map, but never a search answer: the dream diary, the unsorted inbox, raw/ (verbatim web and
+# model output, not facts)
+UNSEARCHED = {"jarvis/dreams/diary", "jarvis/inbox"}
 NS = uuid.UUID("8f5b0c2e-6a0b-4d55-9b5f-6a7c1e2d3f40")
 WORD = re.compile(r"[a-z0-9]+")
+TRUSTED = re.compile(r"^via::.*\bby you\b", re.M | re.I)  # said / corrected / answered / edited by you
+
+
+def _unsearched(name: str) -> bool:
+    return name.lower() in UNSEARCHED or name.lower().startswith("raw/")
+
+
+def _entity_names(p: Page) -> list[str]:
+    """What an entity page is called: its slug as words, its title, its aliases."""
+    return list(dict.fromkeys([p.name.rsplit("/", 1)[-1].replace("-", " "),
+                               *filter(None, [p.properties.get("title")]), *p.listprop("aliases")]))
+
+
+def _starts(q: str, t: str) -> bool:
+    """q is the name word t, or a long enough start of it: "zigbee" -> "zigbee2mqtt", not "home" -> "homelab"."""
+    return q == t or t.startswith(q) and (len(q) >= 5 or t[len(q)].isdigit())
+
+
+def _says(words: list[str], name: list[str]) -> bool:
+    """The name's words appear in a row in the query; a query word of 4+ letters may start a name word
+    ("zigbee" -> "zigbee2mqtt")."""
+    n = len(name)
+    return n > 0 and any(all(_starts(q, t) for q, t in zip(words[i:i + n], name))
+                         for i in range(len(words) - n + 1))
+
+
+def _ranked(page: Page, terms: set[str]) -> list[Block]:
+    """A page's blocks, those sharing the most words with the query first."""
+    return sorted(page.searchable, key=lambda b: (-len(terms & set(WORD.findall(b.text.lower()))),
+                                                  b.index < 0, abs(b.index)))
 
 
 # words that name a memory page without saying its name ("relatives" -> jarvis/family)
@@ -56,7 +88,9 @@ def _fuse(*lists: list[dict], limit: int) -> list[dict]:
             key = (h["page"], h["text"])
             prev = fused.get(key)
             fused[key] = ((prev[0] if prev else 0.0) + 1 / (RRF_K + rank + 1), prev[1] if prev else h)
-    return [h for _, h in sorted(fused.values(), key=lambda x: -x[0])][:limit]
+    # a fact you said beats an equal one JARVIS noted: the boost is far below one rank's worth (~2e-4)
+    return [h for _, h in sorted(fused.values(), key=lambda x: -(x[0] + 1e-6 * bool(TRUSTED.search(x[1]["text"]))))
+            ][:limit]
 
 
 class _BM25:
@@ -82,7 +116,7 @@ class _BM25:
             s = sum(self.idf[t] * tf[t] * (self.K1 + 1) / (tf[t] + self.K1 * (1 - self.B + self.B * n / self.avg))
                     for t in hit)
             out.append((s, b))
-        out.sort(key=lambda x: -x[0])
+        out.sort(key=lambda x: (-round(x[0], 9), not TRUSTED.search(x[1].text)))
         return out[:limit]
 
 
@@ -176,9 +210,12 @@ class KBIndex:
     async def _index_page(self, page: Page) -> None:
         await self._delete_page(page.name)
         blocks = page.searchable  # bullets and prose sections (prose has a negative index)
+        # an entity's notes carry its other names, so a question by any of them is close in meaning
+        head = f"{page.name} ({', '.join(_entity_names(page))})" if page.name.lower().startswith(ENTITIES_NS) \
+            else page.name
         for i in range(0, len(blocks), 32):
             chunk = blocks[i:i + 32]
-            vectors = await self._embed([f"{page.name}: {b.text}" for b in chunk], "document")
+            vectors = await self._embed([f"{head}: {b.text}" for b in chunk], "document")
             points = [{
                 "id": str(uuid.uuid5(NS, f"{page.name}#{b.index}")),
                 "vector": v,
@@ -202,8 +239,11 @@ class KBIndex:
         by words, fused. A short note scores low against a one-word query by meaning alone, so "who is in my
         family" found nothing on a page called family; and a name the embedder has not seen ("Ghidra", "AC
         servicing") is found by its words even when a vaguer note is closer by meaning."""
-        topical = self._topic_hits(query, limit)
-        seen = {(h["page"], h["text"]) for h in topical}
+        topical, seen = [], set()
+        for h in self._entity_hits(query, limit) + self._topic_hits(query, limit):
+            if (key := (h["page"], h["text"])) not in seen:
+                seen.add(key)
+                topical.append(h)
         words = _content_words(query)
         dense = await self._search(query, limit) if self.vector_ready else []
         lexical = self._keyword_search(" ".join(words), limit + 4, min_cover=0.5 if dense or topical else 0.0)
@@ -218,38 +258,52 @@ class KBIndex:
 
     def aliases(self, words: list[str]) -> list[str]:
         """The other name of each query word the terms page defines ("REA = Reverse Engineer Anything",
-        "defines the abbreviation REA as ..."), both ways; a word matches a name's word or starts it
-        ("zigbee" -> "Zigbee2MQTT")."""
-        page = self.graph.page(TERMS_PAGE)
-        if page is None:
-            return []
+        "defines the abbreviation REA as ..."), and each entity page's names (slug, title, aliases), both ways;
+        a word matches a name's word or starts it ("zigbee" -> "Zigbee2MQTT")."""
+        groups: list[list[list[str]]] = []  # each: the names of one thing, as words
+        page = self.graph.page(TERMS_PAGE, exact=True)
+        for b in page.blocks if page else []:
+            if m := TERM.search(b.text.split("\n")[0]):
+                groups.append([WORD.findall(m.group(g).lower()) for g in ("a", "z")])
+        groups += [[WORD.findall(n.lower()) for n in _entity_names(p)] for p in self._entities()]
         def hit(w: str, side: list[str]) -> bool:
-            return any(w == t or len(w) >= 4 and t.startswith(w) for t in side)
+            return any(_starts(w, t) for t in side)
         out = []
-        for b in page.blocks:
-            m = TERM.search(b.text.split("\n")[0])
-            if not m:
-                continue
-            a, z = (WORD.findall(m.group(g).lower()) for g in ("a", "z"))
+        for names in groups:
             for w in words:
-                for side, other in ((a, z), (z, a)):
+                for i, side in enumerate(names):
                     if hit(w, side):
-                        out += [t for t in other if t not in _FILLER and t not in words and t not in out]
+                        out += [t for j, other in enumerate(names) if j != i for t in other
+                                if t not in _FILLER and t not in words and t not in out]
         return out
+
+    def _entities(self) -> list[Page]:
+        return [p for p in self.graph.pages() if p.name.lower().startswith(ENTITIES_NS)]
+
+    def _entity_hits(self, query: str, limit: int) -> list[dict]:
+        """Entity pages the query names by slug, title or alias: their blocks, then up to 2 blocks from each page
+        they relate to (located_at [[jarvis/entities/new-home]])."""
+        words, terms = WORD.findall(query.lower()), set(_content_words(query))
+        named = [p for p in self._entities() if any(_says(words, WORD.findall(n.lower())) for n in _entity_names(p))]
+        own = [{"page": p.name, "text": b.text, "score": 1.0} for p in named for b in _ranked(p, terms)[:limit]]
+        related = []
+        for p in named:
+            for target in (t for rel in p.listprop("relations") for t in LINK.findall(rel)):
+                if (q := self.graph.page(target.strip())) and not _unsearched(q.name):
+                    related += [{"page": q.name, "text": b.text, "score": 0.8} for b in _ranked(q, terms)[:2]]
+        return own + related
 
     def _topic_hits(self, query: str, limit: int) -> list[dict]:
         """A memory page the query names: its blocks that share the most words with the query first."""
         pages = {p.name.lower(): p for p in self.graph.pages()
-                 if not p.is_journal and p.name.lower().startswith("jarvis/")}
+                 if not p.is_journal and p.name.lower().startswith("jarvis/") and not _unsearched(p.name)}
         terms = set(_content_words(query))
         out = []
         for word in _content_words(query):
             for topic in {word, word.rstrip("s"), *TOPIC_WORDS.get(word, ())}:
                 page = pages.pop(f"jarvis/{topic}", None)
                 if page:
-                    ranked = sorted(page.searchable, key=lambda b: (-len(terms & set(WORD.findall(b.text.lower()))),
-                                                                   b.index < 0, abs(b.index)))
-                    out += [{"page": page.name, "text": b.text, "score": 1.0} for b in ranked[:limit]]
+                    out += [{"page": page.name, "text": b.text, "score": 1.0} for b in _ranked(page, terms)[:limit]]
         return out
 
     async def _search(self, query: str, limit: int) -> list[dict]:
@@ -265,7 +319,7 @@ class KBIndex:
                         # the journal's copy of a memory or correction, and the dream diary (a log of what
                         # jarvis/dreams keeps): repeats that pushed "My name is Pranjal" out of the top 6
                         if not p["payload"]["text"].startswith(("Learned: ", "Corrected: "))
-                        and p["payload"]["page"] not in UNSEARCHED]
+                        and not _unsearched(p["payload"]["page"])]
                 top = hits[0]["score"] if hits else 0
                 return [h for h in hits if h["score"] >= self.min_score and h["score"] >= top - 0.08][:limit]
             except (httpx.HTTPError, LLMError, KeyError) as e:
@@ -275,10 +329,12 @@ class KBIndex:
     def _bm25_corpus(self) -> "_BM25":
         """The word index over every searchable block, rebuilt when a page changes (pages are cached, so this
         is cheap to check)."""
-        pages = [p for p in self.graph.pages() if p.name not in UNSEARCHED]
+        pages = [p for p in self.graph.pages() if not _unsearched(p.name)]
         key = tuple((p.name, p.digest) for p in pages)
         if self._bm25 is None or self._bm25.key != key:
-            docs = [(b, WORD.findall(f"{p.name} {b.text}".lower())) for p in pages for b in p.searchable
+            # without the learned::/via::/as_of::/source:: lines: "source" or a date is not what a note is about
+            docs = [(b, WORD.findall(" ".join([p.name] + [ln for ln in b.text.splitlines() if not PROP.match(ln)])
+                                     .lower())) for p in pages for b in p.searchable
                     if not b.text.startswith(("Learned: ", "Corrected: "))]
             self._bm25 = _BM25(key, docs)
         return self._bm25
@@ -295,6 +351,7 @@ class KBIndex:
     def link_graph(self) -> dict:
         pages = self.graph.pages()
         names = {p.name.lower(): p for p in pages}
+        aliases = self.graph.entity_aliases()
         nodes: dict[str, dict] = {}
         edges = []
         for p in pages:
@@ -302,11 +359,15 @@ class KBIndex:
             nodes[key] = {"id": key, "label": p.name, "journal": p.is_journal,
                           "jarvis": key.startswith("jarvis/"), "blocks": len(p.blocks),
                           "updated": int(p.path.stat().st_mtime)}  # seconds: how fresh the page is
-            for target in {self.graph.resolve(t, set(names)) for t in p.links}:  # [[people]] -> jarvis/people
+            # an entity's relations ("part_of [[jarvis/entities/homelab]]") label their edge with the relation
+            kinds = {self.graph.resolve(t.strip().lower(), set(names), aliases): rel.split("[[", 1)[0].strip()
+                     for rel in p.listprop("relations") for t in LINK.findall(rel)} \
+                if key.startswith(ENTITIES_NS) else {}
+            for target in {self.graph.resolve(t, set(names), aliases) for t in p.links}:  # [[people]] -> jarvis/people
                 if target not in names and target not in nodes:
                     nodes[target] = {"id": target, "label": target, "journal": False,
                                      "jarvis": target.startswith("jarvis/"), "blocks": 0}
-                edges.append({"source": key, "target": target})
+                edges.append({"source": key, "target": target, **({"label": kinds[target]} if kinds.get(target) else {})})
             if "/" in key:  # namespace parent -> child
                 parent = key.rsplit("/", 1)[0]
                 nodes.setdefault(parent, {"id": parent, "label": parent, "journal": False,

@@ -13,7 +13,8 @@ Triggers: manual (runs only when asked: the HUD's run button, or "run the X skil
 notification: WhatsApp, SMS, mail...), call_incoming, watch (a watcher found something new), webhook (a POST to
 /v1/hooks/<name>, see api/hooks.py; `match` the hook name).
 `match` (optional) must appear in the event text (device model/serial, timer label, hook name).
-`schedule` for trigger schedule: a daily time like `07:30`, or an interval like `every 30m` / `every 2h`.
+`schedule` for trigger schedule: a daily time like `07:30`, on some days only like `fri 18:00` / `mon,wed 07:30`,
+or an interval like `every 30m` / `every 2h`.
 
 A skill JARVIS writes (create_skill, update_skill) or you approve in the HUD is pinned: the hash of its
 trigger, match, schedule and steps is kept in skills.json. A skill page that appears or changes any other way
@@ -44,7 +45,9 @@ log = logging.getLogger(__name__)
 NS = "skills/"
 TRIGGERS = {"manual", "device_joined", "device_left", "timer_done", "schedule", "notification", "call_incoming", "watch", "webhook"}
 EVERY = re.compile(r"^every\s+(\d+)\s*([mh])$", re.I)
-DAILY = re.compile(r"^(\d{1,2}):(\d{2})$")
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# "07:30" every day, or on some days only: "fri 18:00", "mon,wed 07:30"
+DAILY = re.compile(r"^(?:((?:mon|tue|wed|thu|fri|sat|sun)(?:\s*,\s*(?:mon|tue|wed|thu|fri|sat|sun))*)\s+)?(\d{1,2}):(\d{2})$", re.I)
 QUEUE_MAX = 5  # events waiting per skill while it runs; more are dropped (and logged)
 CATCH_UP = 6 * 3600  # a daily run missed by more than this (JARVIS was off overnight) is skipped
 RUN_SOURCE = Source.WEB  # results show on the HUD; approvals go to the HUD/phone as usual
@@ -301,8 +304,8 @@ class SkillEngine:
                         self._ran(key)  # the first run waits one period; one missed while down runs once
                         if last:
                             self._spawn(s, f"schedule ({s['schedule']})")
-                elif m := DAILY.match(s["schedule"]):
-                    due = now.replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
+                elif (m := DAILY.match(s["schedule"])) and on_day(m[1], now):
+                    due = now.replace(hour=int(m[2]), minute=int(m[3]), second=0, microsecond=0)
                     # due and not yet run today; a run missed while the hub was down catches up within CATCH_UP
                     if now >= due and datetime.fromtimestamp(last) < due:
                         self._ran(key)
@@ -323,3 +326,8 @@ class SkillEngine:
     async def stop(self) -> None:
         for t in [*self._watchers, *self._tasks]:
             t.cancel()
+
+
+def on_day(days: str | None, now: datetime) -> bool:
+    """A schedule's days ("mon,wed"; None = every day) include now's weekday."""
+    return not days or DAYS[now.weekday()] in {d.strip().lower() for d in days.split(",")}

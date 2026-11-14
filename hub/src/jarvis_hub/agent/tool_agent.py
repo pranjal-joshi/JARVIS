@@ -173,6 +173,11 @@ ABOUT_PAGE = "jarvis/people"  # what JARVIS has learned about the user and their
 PICK_PROMPT = ("(system) Which tool does what the user just asked? Answer with one tool name, or none if the "
                "request needs no tool.")
 ARGS_PROMPT = "(system) Fill in the arguments for {name} ({desc}). Use the user's own words, names, dates and numbers."
+# What the memory block in the system prompt may hold, by model: a small local model gets the core facts only
+MEMORY_CHARS = {"local": 500, "remote": 1300, "claude": 2500}
+# tools whose output is kept verbatim on a raw/ page, so a fact saved from it later can name its source
+RAW_TOOLS = frozenset({"web_search", "ask_claude", "ask_opencode"})
+LOOK_FIRST_LINES = 4  # the automatic search before the model answers hands over at most this many hits
 REPEAT = ("ERROR: you already called {name} with these arguments this turn; its result is above. Answer from it "
           "now, or call a different tool.")
 
@@ -196,7 +201,8 @@ class ToolAgent:
         self.traces = traces  # every turn as the model saw it (audit/traces.py); None = not kept
         # what dreaming kept (kb/dreaming.py), for the system prompt; it changes once a night, so the cached
         # prompt prefix stays the same all day
-        self.memory: Callable[[], str] | None = None
+        self.memory: Callable[..., str] | None = None  # called with limit= (characters) when it takes one
+        self.vault = None  # kb/graph.py ObsidianVault: raw/ pages for web and expert answers; None = not kept
         # what may run without a human (guard/policy.py); without a file, APPROVAL_RISKS (ask_for) decides
         self.policy = policy or Policy(None, ask_for, ":memory:")
         self._bus: EventBus | None = None  # the hub's bus, for work that starts outside a request
@@ -308,9 +314,22 @@ class ToolAgent:
             return await self._chain(convo, steps, turn)
         return await self._loop(convo, turn)
 
+    def memory_chars(self) -> int:
+        """The memory block's size for the model in use: more for models that can hold (and use) more."""
+        llm = getattr(self, "llm", None)
+        if str(getattr(llm, "model", "")).startswith("claude-"):
+            return MEMORY_CHARS["claude"]
+        return MEMORY_CHARS["remote" if getattr(llm, "remote", False) else "local"]
+
     def _known(self) -> str:
         try:
-            kept = self.memory() if self.memory else ""
+            if not self.memory:
+                kept = ""
+            else:
+                try:
+                    kept = self.memory(limit=self.memory_chars())
+                except TypeError:  # a memory source that takes no limit
+                    kept = self.memory()
         except Exception:
             log.exception("dreams not read")
             kept = ""
@@ -330,7 +349,10 @@ class ToolAgent:
         t.seen += outputs + words
         t.tainted += last.get("tainted", [])
         t.links = list(dict.fromkeys([*t.links, *LINK.findall(t.before), *(u for o in outputs for u in LINK.findall(o))]))
-        return "\n".join(x for x in [*(" ".join(o.split())[:1500] for o in outputs[-2:]),
+        # the verbatim copy of the last web or expert answer: a fact saved from it names it (source::)
+        t.source_ref = (last.get("raw") or [""])[-1]
+        kept = [f"(Kept verbatim as [[{t.source_ref}]].)"] if t.source_ref else []
+        return "\n".join(x for x in [*kept, *(" ".join(o.split())[:1500] for o in outputs[-2:]),
                                      *(f"The user said: {w}" for w in words)] if x).strip()
 
     async def _chain(self, base: list[dict], steps: list[str], t: "_Turn", start: int = 0,
@@ -652,15 +674,20 @@ class ToolAgent:
             tool, args = page, {"page": ABOUT_PAGE}
         elif not args["query"]:
             args["query"] = said[:200]
+        if tool.name == "kb_search":  # the best few hits only, never whole pages (kb/tools.py brief)
+            args = {**args, "limit": LOOK_FIRST_LINES, "brief": True}
         result = await self._approve_and_run(tool, args, t)
         call = {"id": "look-1", "type": "function", "function": {"name": tool.model_name, "arguments": json.dumps(args)}}
         t.calls_made.add(_signature(call))
-        if not personal and "No matching notes" in result:
-            # nothing on a general question: the model answers as it would have (and may still search
-            # the notes or the web itself), rather than being nudged to say "I couldn't find any notes"
-            log.info("looked in the notes first, nothing: %.80s", said)
+        if "brief" in args:  # the model's own search for the same words counts as made
+            t.calls_made.add((tool.model_name, json.dumps({"query": args["query"]}, sort_keys=True)))
+        lines = sum(ln.startswith("[") for ln in (_unfence(result) or "").splitlines())
+        if tool.name == "kb_search" and not lines:
+            # nothing found: the model answers as it would have (and may still search the notes or the web
+            # itself), rather than being handed "No matching notes" and saying "I couldn't find any notes"
+            log.info("look-first %r: nothing found, nothing injected", args["query"])
             return []
-        log.info("looked in the notes first: %.80s", said)
+        log.info("look-first %r: %d lines injected", args.get("query") or args.get("page"), lines)
         return [{"role": "assistant", "content": "", "tool_calls": [call]},
                 {"role": "tool", "tool_call_id": "look-1", "content": result}]
 
@@ -1023,11 +1050,13 @@ class ToolAgent:
         else:
             try:
                 output = await tool.call(args, ToolCtx(t.bus, t.source, t.request_id, via=t.via, session=t.session or "",
-                                                        said=t.said or ""))
+                                                        said=t.said or "", source_ref=t.source_ref))
                 status = "error" if output.startswith("ERROR") else "ok"
             except Exception as e:
                 log.exception("tool %s failed", name)
                 output, status = f"ERROR: {e}", "error"
+            if status == "ok" and name in RAW_TOOLS and (raw := self._keep_raw(tool, args, output)):
+                t.raw.append(raw)
         output = output[:MAX_TOOL_RESULT_CHARS]
         t.called = True
         for hook in POST_TOOL:  # guard/hooks.py: records outside text (taint)
@@ -1047,6 +1076,23 @@ class ToolAgent:
         # Fence results so the model treats them as data, not instructions.
         return f"<tool_result tool=\"{tool.model_name}\">\n{output}\n</tool_result>"
 
+    def _keep_raw(self, tool: Tool, args: dict, output: str) -> str:
+        """A web or expert answer, verbatim, on a raw/<YYYY-MM-DD-HHMM>-<slug> page; its name, or "" if not kept."""
+        if self.vault is None or output.startswith("No results"):
+            return ""
+        asked = str(args.get("query") or args.get("question") or "")
+        now = datetime.now()
+        slug = "-".join(re.findall(r"[a-z0-9]+", asked.lower())[:8])[:60] or tool.model_name
+        name = f"raw/{now:%Y-%m-%d-%H%M}-{slug}"
+        # frontmatter keeps the page as written (no bullets added); json quoting keeps the YAML valid
+        head = (f"---\ntool: {tool.model_name}\nquery: {json.dumps(asked)}\ntime: {now:%Y-%m-%d %H:%M}\n---\n"
+                f"{tool.model_name} for {asked!r} at {now:%Y-%m-%d %H:%M}:\n\n")
+        try:
+            return self.vault.replace_page(name, head + output)
+        except Exception:
+            log.exception("raw page %s not written", name)
+            return ""
+
     def _unknown_tool(self, name: str) -> str:
         names = [t.model_name for t in self.visible()]
         near = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
@@ -1065,7 +1111,8 @@ class ToolAgent:
             # failed calls don't count: three refused saves pushed Claude's plan out of the last five (2026-11-13)
             kept = [o for o in [*before.get("seen", []), *t.seen] if not o.startswith("ERROR")]
             self._last[t.trace_session] = {"seen": [o[:2500] for o in kept[-5:]],
-                                           "tainted": [o[:2500] for o in [*before.get("tainted", []), *t.tainted][-5:]]}
+                                           "tainted": [o[:2500] for o in [*before.get("tainted", []), *t.tainted][-5:]],
+                                           "raw": [*before.get("raw", []), *t.raw][-5:]}
             while len(self._last) > LAST_KEPT:
                 self._last.pop(next(iter(self._last)))
         t.bus.publish(Event("reply", t.source, t.request_id, {"text": text}))
@@ -1122,6 +1169,8 @@ class _Turn:
     read_outside: list[str] = field(default_factory=list)  # what outside text was read ("your note X", "a web page")
     trace: list[dict] = field(default_factory=list)  # policy decisions, for the HUD's "why" panel
     via: str = ""  # provenance for memories saved this turn
+    raw: list = field(default_factory=list)  # raw/ pages written this turn (verbatim web and expert answers)
+    source_ref: str = ""  # while saving what came before: the raw/ page it came from (source::)
     route: str = "model"  # fast | memory | confirm | model
     intent: str = ""
     model: str = ""

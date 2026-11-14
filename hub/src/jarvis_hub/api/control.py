@@ -217,6 +217,7 @@ async def kb_page(name: str, request: Request, _: Source = Depends(require_appro
     if page is None:
         raise HTTPException(404, "no such page")
     key, names = page.name.lower(), {p.name.lower() for p in pages}
+    aliases = g.entity_aliases()
     blocks = page.blocks[:400]
     shown = [_said_and_props(b.text) for b in blocks]
     return {"name": page.name, "journal": page.is_journal, "link": g.deep_link(page.name),
@@ -226,9 +227,9 @@ async def kb_page(name: str, request: Request, _: Source = Depends(require_appro
             "props": [pr for _, pr in shown],  # learned (a day), via (who said it), ...
             "digest": page.digest,  # the page as read (deleting or renaming it is refused once it changed)
             "updated": int(page.path.stat().st_mtime),
-            "links": sorted({g.resolve(to, names) for b in page.blocks for to in b.links}),
+            "links": sorted({g.resolve(to, names, aliases) for b in page.blocks for to in b.links}),
             "backlinks": sorted(p.name for p in pages if p.path != page.path
-                                and key in {g.resolve(t, names) for t in p.links})}
+                                and key in {g.resolve(t, names, aliases) for t in p.links})}
 
 
 class BlockDelete(BaseModel):

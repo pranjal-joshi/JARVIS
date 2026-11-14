@@ -239,3 +239,16 @@ def test_only_a_conflict_the_model_confirms_becomes_a_question(tmp_path):
     rep = asyncio.run(d.run(today=TODAY, force=True))
     assert len(rep.questions) == 1 and "Chiku" in rep.questions[0] and "Aarav" in rep.questions[0]
     assert not any("cloudcover" in q for q in rep.questions)  # an old job and a new one aren't a conflict
+
+
+def test_a_conflict_sharing_no_word_is_not_asked(tmp_path):
+    g = _graph(tmp_path)
+    (tmp_path / "kb" / "jarvis" / "family.md").write_text(
+        "- My wife's name is Sanika.\n- She used to work at xoriant as HR.\n", encoding="utf-8")
+
+    def decide(prompt):
+        e = [line.split(" ", 1)[0] for line in prompt.splitlines() if line.startswith("E")
+             and ("Sanika" in line or "xoriant" in line)]
+        return {"decisions": [], "conflicts": [e[:2]]}
+    rep = asyncio.run(Dreamer(g, None, FakeLLM(decide), tmp_path / "dreams.json").run(today=TODAY, force=True))
+    assert not any("xoriant" in q for q in rep.questions)
