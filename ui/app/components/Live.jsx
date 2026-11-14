@@ -274,46 +274,31 @@ export function LiveNote({ feed, pinned, focused, head }) {
 // ---------- 6. pop-ups that fade by importance ----------
 const LIFE = { info: 4000, done: 6000, warn: 12000 };
 
+// [kind, title, text] for a feed event worth telling the user about (a pop-up and a row under the bell)
+function noteOf(ev) {
+  const d = ev.data || {};
+  if (ev.type === "notify") return ["warn", d.title || "Notice", d.text];
+  if (ev.type === "hook_event") return ["info", `webhook · ${d.kind}`, d.text];
+  if (ev.type === "skill_done" && !d.dry_run) return ["done", `skill · ${String(d.skill || "").replace(/^skills\//i, "")}`, d.text];
+  if (ev.type === "timer") return ["warn", "Timer", `${d.label || "timer"} is done`];
+  if (ev.type === "job_state" && ["done", "failed"].includes(d.state)) return [d.state === "done" ? "done" : "warn", `job ${d.state}`, d.last || d.id];
+  if (ev.type === "watch" && d.kind === "fired") return ["warn", `watch · ${d.name}`, d.text || "something new"];
+  if (ev.type === "approval_request") return ["ask", "Needs you", d.says || d.tool];
+  return null;
+}
+
 export function Toasts({ feed }) {
   const [toasts, setToasts] = useState([]); // { id, kind, title, text }
-  const [missed, setMissed] = useState([]);
-  const [show, setShow] = useState(false);
   const add = useCallback((kind, title, text) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((t) => [{ id, kind, title, text, at: Date.now() }, ...t].slice(0, 5));
-    setTimeout(() => setToasts((t) => {
-      const gone = t.find((x) => x.id === id);
-      if (gone && !gone.seen) setMissed((m) => [{ ...gone, at: Date.now() }, ...m].slice(0, 30));
-      return t.filter((x) => x.id !== id);
-    }), LIFE[kind] * (document.hidden ? 0.3 : 1));
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), LIFE[kind] * (document.hidden ? 0.3 : 1));
   }, []);
-  useFeed(feed, (ev) => {
-    const d = ev.data || {};
-    if (ev.type === "notify") add("warn", d.title || "Notice", d.text);
-    if (ev.type === "hook_event") add("info", `webhook · ${d.kind}`, d.text);
-    if (ev.type === "skill_done" && !d.dry_run) add("done", `skill · ${String(d.skill || "").replace(/^skills\//i, "")}`, d.text);
-    if (ev.type === "timer") add("warn", "Timer", `${d.label || "timer"} is done`);
-    if (ev.type === "job_state" && ["done", "failed"].includes(d.state)) add(d.state === "done" ? "done" : "warn", `job ${d.state}`, d.last || d.id);
-    if (ev.type === "watch" && d.kind === "fired") add("warn", `watch · ${d.name}`, d.text || "something new");
-    if (ev.type === "approval_request") add("ask", "Needs you", d.says || d.tool);
-  });
+  useFeed(feed, (ev) => { const n = noteOf(ev); if (n) add(...n); });
   const keep = (id) => setToasts((t) => t.map((x) => (x.id === id ? { ...x, seen: true } : x)));
   const close = (id) => setToasts((t) => t.filter((x) => x.id !== id));
   return (
     <div className="toasts" aria-live="polite">
-      {missed.length > 0 && (
-        <div className="away">
-          <button type="button" className="away-chip" aria-expanded={show} onClick={() => setShow((s) => !s)}>
-            while you were away · {missed.length}
-          </button>
-          {show && (
-            <ul className="away-list">
-              {missed.map((m) => <li key={m.id} className={m.kind}><b>{m.title}</b> {m.text}</li>)}
-              <li><button type="button" onClick={() => { setMissed([]); setShow(false); }}>Clear</button></li>
-            </ul>
-          )}
-        </div>
-      )}
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.kind}`} onMouseEnter={() => keep(t.id)} onFocus={() => keep(t.id)} tabIndex={0}>
           <b>{t.title}</b><span>{t.text}</span>
@@ -321,6 +306,53 @@ export function Toasts({ feed }) {
           <button type="button" aria-label="Dismiss" onClick={() => close(t.id)}>×</button>
         </div>
       ))}
+    </div>
+  );
+}
+
+// every notification, newest first, under a bell in the top bar; the dot says something new came in
+// (red: a warning or something waiting on you, green: the rest) and clears when the list is opened
+const clock = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+export function Bell({ feed }) {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [dot, setDot] = useState(null); // null | "green" | "red"
+  const opened = useRef(false);
+  useFeed(feed, (ev) => {
+    const n = noteOf(ev);
+    if (!n) return;
+    setItems((l) => [{ id: `${Date.now()}-${Math.random()}`, kind: n[0], title: n[1], text: n[2], at: Date.now() }, ...l].slice(0, 50));
+    if (!opened.current) setDot((d) => (d === "red" || n[0] === "warn" || n[0] === "ask" ? "red" : "green"));
+  });
+  const toggle = () => { opened.current = !open; setOpen(!open); setDot(null); };
+  const drop = (id) => setItems((l) => l.filter((x) => x.id !== id));
+  return (
+    <div className="tools-pick">
+      <button type="button" className="chip bell" aria-expanded={open} onClick={toggle}
+        aria-label={`Notifications${items.length ? `, ${items.length}` : ""}${dot ? ", new" : ""}`} title="Notifications">
+        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></svg>
+        {items.length > 0 && <span className="bell-n">{items.length}</span>}
+        {dot && <i className={`bell-dot ${dot}`} aria-hidden="true" />}
+      </button>
+      {open && (
+        <div className="tools-list bell-list" role="dialog" aria-label="Notifications">
+          <div className="bell-head">
+            <span>{items.length ? `${items.length} notification${items.length > 1 ? "s" : ""}` : "Nothing yet"}</span>
+            <button type="button" disabled={!items.length} onClick={() => setItems([])}>Clear all</button>
+          </div>
+          <ul>
+            {items.map((m) => (
+              <li key={m.id} className={m.kind}>
+                <time>{clock(m.at)}</time>
+                <span><b>{m.title}</b>{m.text && <small>{m.text}</small>}</span>
+                <button type="button" aria-label={`Dismiss ${m.title}`} onClick={() => drop(m.id)}>×</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

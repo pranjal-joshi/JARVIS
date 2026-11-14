@@ -11,7 +11,7 @@ import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import MonitorsPanel from "./MonitorsPanel";
 import JobBox from "./JobBox";
-import { AGENT_TOOLS, Constellation, DreamDigest, Health, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
+import { AGENT_TOOLS, Bell, Constellation, DreamDigest, Health, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
 import { askToNotify, chime, heardSpeech, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
 
@@ -327,9 +327,18 @@ export default function Hud() {
   const [agentsOn, setAgentsOn] = useState(false);
   const [pinned, setPinned] = useState(null); // timeline | console | kb | watch | notes
   const togglePin = (id) => setPinned((p) => (p === id ? null : id));
+  // the left pane (timeline, console, notes) folds to a rail; folded, none of it renders or takes focus
+  const [leftShut, setLeftShut] = useState(null); // null = open, else the time (s) it was folded
+  useEffect(() => { try { const at = localStorage.getItem("hud.left.shut"); if (at) setLeftShut(Number(at)); } catch {} }, []);
+  const toggleLeft = () => {
+    const at = leftShut ? null : Date.now() / 1000;
+    setLeftShut(at);
+    if (at) setPinned((p) => (["timeline", "console", "notes"].includes(p) ? null : p));
+    try { at ? localStorage.setItem("hud.left.shut", String(at)) : localStorage.removeItem("hud.left.shut"); } catch {}
+  };
   const lastBusy = useRef(null);
   // any knowledge-base tool enlarges the map; a watcher or timer changing, the monitors; other tools the console
-  const busy = kbActive ? "kb" : monActive ? "watch" : consoleActive ? "console" : null;
+  const busy = kbActive ? "kb" : monActive ? "watch" : consoleActive && !leftShut ? "console" : null;
   const holding = state === "thinking" || state === "speaking";
   if (busy) lastBusy.current = busy;
   else if (!holding) lastBusy.current = null;
@@ -840,12 +849,13 @@ export default function Hud() {
     )}
     <Toasts feed={feed} />
     {kbView === "max" && <KbExplorer version={kbVersion} context={context} onAdd={addContext} onClose={closeKb} />}
-    <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}`}>
+    <div className={`hud tab-${tab}${shown.focus ? ` docked focus-${shown.focus}` : ""}${leftShut ? " left-shut" : ""}`}>
       <header className="reveal" style={{ "--i": 0 }}>
         <h1 className={link === "online" ? "" : "offline"} title={`hub link ${link}`}>J.A.R.V.I.S.</h1>
         <div className="chips">
           <button type="button" className="chip new-session" onClick={newSession}
             title="Clear this conversation and start fresh (JARVIS forgets the chat; memory pages stay)">⟲ new session</button>
+          <Bell feed={feed} />
           <Health />
           {models.length > 1 && (
             <label className={`chip model-pick${switching ? " busy" : ""}`}
@@ -929,7 +939,17 @@ export default function Hud() {
         </div>
       </header>
 
-      <div className="side left reveal" style={{ "--i": 2 }}>
+      <div className={`side left reveal${leftShut ? " shut" : ""}`} style={{ "--i": 2 }}>
+      {leftShut ? (
+        <button type="button" className="side-rail" aria-expanded="false" onClick={toggleLeft}
+          title="Show the action timeline and system console">
+          <span aria-hidden="true">›</span><em>activity</em>
+          {timeline.filter((e) => e.ts > leftShut).length > 0
+            && <b aria-label="new actions">{timeline.filter((e) => e.ts > leftShut).length}</b>}
+        </button>
+      ) : (<>
+      <button type="button" className="side-fold" aria-expanded="true" onClick={toggleLeft}
+        aria-label="Hide the action timeline and system console" title="Hide this pane">‹</button>
       <section className={`panel timeline${shown.focus === "timeline" ? " focused" : ""}`}>
         <h2 {...headProps(pinned === "timeline", () => togglePin("timeline"), "action timeline")}>
           Action timeline<b className="expand" aria-hidden="true" />
@@ -964,6 +984,7 @@ export default function Hud() {
         pinned={pinned === "console"} onToggle={() => togglePin("console")} />
       <LiveNote feed={feed} pinned={pinned === "notes"} focused={shown.focus === "notes"}
         head={headProps(pinned === "notes", () => togglePin("notes"), "notes being written")} />
+      </>)}
       </div>
 
       <section className="core reveal" style={{ "--i": 1 }}>
