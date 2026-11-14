@@ -1432,6 +1432,10 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
   .hud:not(.docked) .hero.has-job .orb-wrap { width: 168px; margin-left: 0; }
   .hud:not(.docked) .hero.has-job .state { width: 168px; letter-spacing: 0.3em; }
   .hud:not(.docked) .hero .job-stack { position: absolute; left: 188px; right: 0; top: 6px; bottom: 0; margin: 0; }
+  /* the agents orbit inside the orb's column: the wide ring swung them over the cards and under the side rail,
+     and the card already shows the job's steps, so the "job › step" line under the orb goes */
+  .hud:not(.docked) .hero.has-job .constellation { inset: -20px -8px; }
+  .hud:not(.docked) .hero.has-job .c-detail { display: none; }
   /* a panel has the focus and the orb is docked: the cards stay, under it */
   .hud.docked .hero .job-stack { max-height: 34vh; margin-top: 8px; }
   .hud.docked .hero.has-job .state { top: 48px; } /* beside the docked orb, not the middle of the taller hero */
