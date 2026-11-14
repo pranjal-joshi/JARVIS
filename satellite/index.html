@@ -322,8 +322,8 @@ async function converse(text) {
     if (!shown.trim()) voice.add(reply); else if (pending.trim()) voice.add(pending);
     await voice.done();
     if (mine !== turn) return;
-    // JARVIS asked something: keep listening for the answer, no wake word needed
-    if (/\?["')\]]?\s*$/.test(reply.trim()) && mic.ctx) return listen("followup");
+    // keep listening a moment after every reply, no wake word needed ("and the kitchen too", "yes")
+    if (mic.ctx) return listen("followup");
     setState("idle");
   } catch (e) {
     if (e.name === "AbortError" || mine !== turn) return;
@@ -411,7 +411,7 @@ function recordBlock(pcm, rms) {
   rec.pcm.push(pcm); rec.ms += 100;
   if (rms > Math.max(0.015, mic.floor * 3)) { rec.speech = true; rec.quiet = 0; } else rec.quiet += 100;
   if (rec.why === "ptt") return;
-  const giveUp = rec.why === "followup" ? 5000 : 4000;
+  const giveUp = rec.why === "followup" ? 7500 : 4000;
   if ((rec.speech && rec.quiet >= 900) || rec.ms >= 12000 || (!rec.speech && rec.ms >= giveUp)) finishRec();
 }
 async function finishRec() {

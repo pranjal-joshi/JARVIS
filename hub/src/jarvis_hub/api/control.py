@@ -609,6 +609,78 @@ async def status(request: Request, _: Source = Depends(require_source)) -> dict:
     }
 
 
+# ---------- what's running (the HUD's health strip) ----------
+# how to start each service again on the host (repo root), shown when it's down
+RESTART = {
+    "device bridge": "uv run --no-project python bridge/device_bridge.py",
+    "expert bridge": "uv run --no-project python -I bridge/expert_bridge.py",
+    "vector search": "docker compose up -d qdrant",
+    "speech": "docker compose up -d piper  (or voicestudio, whichever VOICE_ENGINE uses)",
+    "hearing": "docker compose up -d whisper",
+    "LAN proxy": "$env:LAN_ALLOW = '<phone IP>'; $env:UI_PORT = '3000'; node scripts/dev/lan-https.mjs",
+    "LLM": "ollama serve  (or pick another model in the llm menu)",
+}
+
+
+async def _listening(uri: str) -> bool:
+    """A Wyoming service (tcp://host:port) accepts a connection."""
+    u = httpx.URL(uri.replace("tcp://", "http://"))
+    try:
+        _, w = await asyncio.wait_for(asyncio.open_connection(u.host, u.port), 3)
+        w.close()
+        return True
+    except (OSError, asyncio.TimeoutError):
+        return False
+
+
+async def _answers(url: str) -> bool:
+    """Up when anything answers, even 401 or 404: down means nothing is listening."""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3, connect=2), verify=False) as c:
+            await c.get(url)
+        return True
+    except httpx.HTTPError:
+        return False
+
+
+async def _vs_up(voice) -> bool:
+    return (await voice.status()).get("voicestudio") == "up"
+
+
+async def _either(voice) -> bool:
+    return await _vs_up(voice) or await _listening(voice.piper_uri)
+
+
+@router.get("/services")
+async def services(request: Request, _: Source = Depends(require_source)) -> list[dict]:
+    """Each service JARVIS leans on: up, down or off (not set up), and the command that starts it again."""
+    s = request.app.state
+    st = s.settings
+    host = httpx.URL(st.device_bridge_url).host  # the machine the bridges run on (host.docker.internal in Docker)
+    token = st.device_bridge_token.get_secret_value()
+    checks = {
+        "LLM": s.llm.ping() if s.llm else None,
+        "vector search": _answers(st.qdrant_url.rstrip("/") + "/healthz"),
+        "device bridge": _answers(st.device_bridge_url) if token and token != "change-me" else None,
+        "expert bridge": _answers(st.expert_bridge_url),
+        # the engine that speaks: VoiceStudio (auto falls back to piper, so either will do) or piper
+        "speech": _either(s.voice) if s.voice.engine == "auto" else
+        _vs_up(s.voice) if s.voice.engine == "voicestudio" else _listening(s.voice.piper_uri),
+        "hearing": _listening(s.voice.whisper_uri),
+        "LAN proxy": _answers(f"https://{host}:3443/"),
+    }
+    names = [n for n, c in checks.items() if c is not None]
+    got = await asyncio.gather(*(checks[n] for n in names), return_exceptions=True)
+    out = [{"name": n, "state": "off"} for n, c in checks.items() if c is None]
+    for n, r in zip(names, got):
+        up = r is True
+        # the LAN proxy is only for the phone: not running is "off", not a fault
+        out.append({"name": n, "state": "up" if up else "off" if n == "LAN proxy" else "down",
+                    **({} if up else {"restart": RESTART.get(n, "")})})
+    order = list(checks)
+    return sorted(out, key=lambda x: order.index(x["name"]))
+
+
 # ---------- model choice ----------
 class ModelBody(BaseModel):
     model: str

@@ -338,13 +338,14 @@ class ToolAgent:
         fails stops the rest, and the reply says what wasn't done. convo: the first part's conversation,
         when it is resumed after a spoken yes."""
         t.parts, i, carry = list(done or []), start, []
+        ahead = self._read_ahead(steps, start, t) if convo is None else {}
         for i in range(start, len(steps)):
             t.halt, t.repeats = "", 0
             before, t.changed = t.changed, False  # claims are checked against this part's tools
             kinds, t.done = t.done, set()
             t.chain = {"base": base, "steps": steps, "i": i}
             if convo is None and self.fast and (plan := self.fast.match(steps[i])) \
-                    and (out := await self._fast(plan, t)) is not None:
+                    and (out := await self._fast(plan, t, await ahead.pop(i) if i in ahead else None)) is not None:
                 outcome = out
             else:
                 bare = i > 0 and bool(BARE_SAVE.match(steps[i]))  # "...then save it to my notes"
@@ -361,6 +362,8 @@ class ToolAgent:
             t.parts.append(outcome)
             if t.halt:
                 break
+        for task in ahead.values():  # parts not reached (an earlier one failed): their reads go unused
+            task.cancel()
         reply = " ".join(p.strip() for p in t.parts if p.strip())
         if t.halt == "fail" and i + 1 < len(steps):
             reply += f" So I haven't done the rest, sir: {'; '.join(steps[i + 1:])}."
@@ -834,12 +837,32 @@ class ToolAgent:
             return None
         return self._reply(t, "Noted, sir: " + "; ".join(s.rstrip(".") for s in saved) + ".")
 
-    async def _fast(self, plan: FastPlan, t: "_Turn") -> str | None:
-        """Run a fast-path plan through the gate; None (fall back to the model) if a step can't run."""
+    def _read_ahead(self, steps: list[str], start: int, t: "_Turn") -> dict[int, asyncio.Future]:
+        """Parts that are a quick read of their own ("what's the weather", "what time is it") start now, side by
+        side, so they are done by the time the parts before them are. Only reads with no side effects: a quick read
+        takes its arguments from its own words, so it never needs another part's result."""
+        ahead = {}
+        for j in range(start, len(steps)):
+            if not self.fast or not (plan := self.fast.match(steps[j])):
+                continue
+            tools = [(self.tools.get(name), args) for name, args in plan.steps]
+            if any(tool is None or tool.risk is not Risk.READ or tool.name in self.hidden or tool.name in t.hide
+                   for tool, _ in tools):
+                continue
+            ahead[j] = asyncio.gather(*(self._approve_and_run(tool, args, t) for tool, args in tools))
+        return ahead
+
+    async def _fast(self, plan: FastPlan, t: "_Turn", ran: list[str] | None = None) -> str | None:
+        """Run a fast-path plan through the gate; None (fall back to the model) if a step can't run.
+        ran: its results, when the steps were already run ahead (_read_ahead)."""
         tools = [(self.tools.get(name), args) for name, args in plan.steps]
         if any(tool is None or tool.name in self.hidden or tool.name in t.hide for tool, _ in tools):
             return None
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0, "route": "fast", "intent": plan.intent}))
+        if ran is not None:
+            if any((b := _unfence(r)) is None or b.startswith("ERROR") for r in ran):
+                return None
+            return self._fast_reply(plan, list(ran), t)
         results = []
         for tool, args in tools:
             if self._approve_later(tool, args, t):  # a satellite never waits on the HUD (a new skill, say)
@@ -852,6 +875,9 @@ class ToolAgent:
                 log.info("fast path %s fell back to the model: %.120s", plan.intent, body or result)
                 return None
             results.append(result)
+        return self._fast_reply(plan, results, t)
+
+    def _fast_reply(self, plan: FastPlan, results: list[str], t: "_Turn") -> str | None:
         try:
             reply = plan.say(results)
         except (ValueError, IndexError, KeyError) as e:

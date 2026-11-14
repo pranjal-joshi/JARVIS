@@ -98,3 +98,31 @@ def test_each_dream_change_can_be_undone_and_put_back(tmp_path):
     d.undo(0)  # put back
     assert ("jarvis/home", "The user's boiler is serviced on Saturdays.") in texts()
     assert json.loads((tmp_path / "dreams.json").read_text())["last"]["changes"][0]["undone"] is False
+
+
+def test_the_health_strip_says_what_is_down_and_how_to_start_it():
+    import asyncio
+    from types import SimpleNamespace
+
+    from jarvis_hub.api.control import services
+    from jarvis_hub.config import Settings
+
+    async def run():
+        server = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+
+        class LLM:
+            async def ping(self):
+                return True
+        st = SimpleNamespace(llm=LLM(), settings=Settings(device_bridge_token="t", qdrant_url="http://127.0.0.1:9",
+                                                           device_bridge_url="http://127.0.0.1:9",
+                                                           expert_bridge_url="http://127.0.0.1:9"),
+                             voice=SimpleNamespace(engine="piper", piper_uri=f"tcp://127.0.0.1:{port}",
+                                                   whisper_uri="tcp://127.0.0.1:9"))
+        rows = await services(SimpleNamespace(app=SimpleNamespace(state=st)), None)
+        server.close()
+        return {r["name"]: r for r in rows}
+    rows = asyncio.run(run())
+    assert rows["LLM"]["state"] == "up" and rows["speech"]["state"] == "up"
+    assert rows["device bridge"]["state"] == "down" and "device_bridge.py" in rows["device bridge"]["restart"]
+    assert rows["hearing"]["state"] == "down" and rows["LAN proxy"]["state"] != "down"  # optional: never a fault

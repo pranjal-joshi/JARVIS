@@ -1530,6 +1530,11 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
 .live-note { padding: 8px 12px 10px; margin-top: 10px; animation: rise var(--dur-med) var(--ease-out) both; }
 .live-note h2 { cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: #7dffb0; }
 .live-note h2 small { color: var(--cyan-dim); font-size: 10px; }
+.ln-head { display: flex; align-items: center; gap: 6px; }
+.ln-head h2 { flex: 1; min-width: 0; gap: 8px; margin: 0; }
+.ln-last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); color: var(--cyan); text-transform: none; letter-spacing: 0; }
+.ln-last small { margin-left: 6px; color: var(--cyan-dim); }
+.ln-close { background: none; border: 0; color: var(--cyan-dim); cursor: pointer; font-size: 14px; padding: 0 2px; }
 .hud.focus-notes .ln-lines { font-size: 13px; gap: 6px; }
 .ln-body { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 10px; }
 .ln-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
@@ -1643,3 +1648,16 @@ button.kbx-btn.kbx-page-del:hover, button.kbx-btn.kbx-page-del:focus-visible { c
   .widget, .toast, .c-node, .constellation line, .ln-lines li, .digest, .job-chip, .job-pill { animation: none !important; }
   .toast .life { display: none; }
 }
+
+/* 9. health strip */
+.chip.health.bad { color: var(--red); border-color: rgba(255, 92, 92, 0.6); }
+.chip.health .warm { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #6dffa8; margin-right: 5px; }
+.chip.health.bad .warm { background: var(--red); }
+.svc { display: grid; gap: 3px; padding: 5px 2px; border-bottom: 1px solid var(--panel-edge); }
+.svc > span { display: flex; align-items: center; gap: 7px; }
+.svc > span small { margin-left: auto; color: var(--cyan-dim); }
+.svc i { width: 7px; height: 7px; border-radius: 50%; background: #7dffb0; }
+.svc.down i { background: var(--red); } .svc.down > span small { color: var(--red); }
+.svc.off i { background: var(--cyan-dim); opacity: 0.5; }
+.svc-cmd { text-align: left; background: none; border: 1px dashed var(--panel-edge); padding: 3px 5px; cursor: copy; }
+.svc-cmd code { font: 10px var(--mono); color: var(--cyan-dim); white-space: pre-wrap; word-break: break-all; text-transform: none; letter-spacing: 0; }

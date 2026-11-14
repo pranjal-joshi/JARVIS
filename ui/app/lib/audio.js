@@ -164,3 +164,27 @@ export async function notifyApproval(data) {
     navigator.vibrate?.([200, 100, 200]);
   }
 }
+
+// Waits on a live mic analyser for someone to speak and then pause. Resolves true once speech is followed by
+// `quietMs` of quiet, false if nobody speaks within `giveUpMs`; `cancelled()` stops it early (resolves false).
+// The noise floor is learned from the first half second, so a fan or the TV doesn't count as speech.
+export function heardSpeech(analyser, { giveUpMs = 7500, quietMs = 900, cancelled = () => false } = {}) {
+  const buf = new Float32Array(analyser.fftSize);
+  const start = performance.now();
+  let floor = 0.01, spoke = false, lastLoud = start;
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (cancelled()) return resolve(false);
+      analyser.getFloatTimeDomainData(buf);
+      const rms = Math.sqrt(buf.reduce((a, x) => a + x * x, 0) / buf.length);
+      const now = performance.now();
+      if (now - start < 500) floor = Math.max(floor, rms);
+      else if (rms > Math.max(0.02, floor * 3)) { spoke = true; lastLoud = now; }
+      if (spoke && now - lastLoud >= quietMs) return resolve(true);
+      if (!spoke && now - start >= giveUpMs) return resolve(false);
+      if (now - start >= 15000) return resolve(spoke); // never record forever
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}

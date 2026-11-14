@@ -133,6 +133,9 @@ class FastPaths:
         return ""
 
     def match(self, utterance: str, today: date | None = None) -> Plan | None:
+        # a recorded phone routine (automation/phone_routines.py): its name may hold "and"
+        if m := re.fullmatch(r"replay the phone routine (.{2,60})", utterance.strip(), re.I):
+            return Plan("phone_routine", [("phone_replay", {"name": m[1].strip()})], lambda r: _body(r[0]))
         if plan := self._skills(utterance):  # skill steps may say "and": checked before that rule
             return plan
         text = _clean(utterance)

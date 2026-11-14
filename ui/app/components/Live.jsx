@@ -224,6 +224,7 @@ export function LiveNote({ feed, pinned, focused, head }) {
   const [open, setOpen] = useState(false);
   const pending = useRef(new Map());
   const timer = useRef(null);
+  const gone = useRef(null);
   useFeed(feed, (ev) => {
     const d = ev.data || {};
     if (ev.type === "tool_call" && NOTE_TOOLS[d.tool]) pending.current.set(`${ev.request_id}:${d.tool}`, NOTE_TOOLS[d.tool](d.arguments || {}));
@@ -236,17 +237,26 @@ export function LiveNote({ feed, pinned, focused, head }) {
         text: text.replace(/^\s*(\[ \]|TODO)\s*/i, "") }].slice(-8));
       setOpen(true);
       clearTimeout(timer.current);
-      timer.current = setTimeout(() => setOpen(false), 45000); // folds away when the writing stops
+      timer.current = setTimeout(() => setOpen(false), 45000); // folds to one line when the writing stops
+      clearTimeout(gone.current);
+      gone.current = setTimeout(() => setLines([]), 180000); // and leaves the HUD after a quiet while
     }
   });
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => () => { clearTimeout(timer.current); clearTimeout(gone.current); }, []);
   if (!lines.length) return null;
+  const last = lines[lines.length - 1];
+  const folded = !open && !pinned;
   const links = [...new Set(lines.flatMap((l) => [l.page, ...[...l.text.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1])]))];
   return (
     <section className={`panel live-note${open || pinned ? " open" : ""}${focused ? " focused" : ""}`}
       aria-label="Notes being written">
       {/* the heading expands it like the other panels (wider column, full height); expanded, it never folds */}
-      <h2 {...head}>Writing to notes <small>{lines.length}<b className="expand" aria-hidden="true" /></small></h2>
+      <div className="ln-head">
+        <h2 {...head}>Writing to notes{folded && <span className="ln-last">{last.text}<small>{last.page}</small></span>}
+          <small>{lines.length}<b className="expand" aria-hidden="true" /></small></h2>
+        <button type="button" className="ln-close" aria-label="Close the notes panel"
+          onClick={() => { clearTimeout(gone.current); setLines([]); }}>×</button>
+      </div>
       {(open || pinned) && (
         <div className="ln-body">
           <ol className="ln-lines">
@@ -468,6 +478,45 @@ export function WitPanel() {
         ))}
       </div>
       {err && <p className="tools-note">{err}</p>}
+    </div>
+  );
+}
+
+// ---------- 9. what's running: one chip, red when something JARVIS needs is down ----------
+export function Health() {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api("services").then((r) => (r.ok ? r.json() : null))
+      .then((x) => alive && setRows(x || [{ name: "hub", state: "down", restart: "the hub isn't answering" }]))
+      .catch(() => alive && setRows([{ name: "hub", state: "down", restart: "the hub isn't answering" }]));
+    load();
+    const t = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  if (!rows) return null;
+  const down = rows.filter((r) => r.state === "down");
+  const copy = (text) => navigator.clipboard?.writeText(text).catch(() => null);
+  return (
+    <div className="tools-pick">
+      <button type="button" className={`chip health${down.length ? " bad" : ""}`} aria-expanded={open}
+        onClick={() => setOpen((o) => !o)} title="What JARVIS needs, and whether it's running">
+        <span className="warm on" aria-hidden="true" />{down.length ? `${down.length} down` : "all up"} {open ? "▴" : "▾"}
+      </button>
+      {open && (
+        <div className="tools-list" role="dialog" aria-label="Services">
+          {rows.map((r) => (
+            <div key={r.name} className={`svc ${r.state}`}>
+              <span><i aria-hidden="true" />{r.name}<small>{r.state}</small></span>
+              {r.restart && r.state !== "up" && (
+                <button type="button" className="svc-cmd" onClick={() => copy(r.restart)} title="Copy the command">
+                  <code>{r.restart}</code></button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

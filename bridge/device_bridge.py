@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from android_comms import Comms
+import phone_routine as routine
 
 ROOT = Path(__file__).resolve().parent.parent
 log = logging.getLogger("device-bridge")
@@ -284,15 +285,131 @@ def adb_key(a: dict) -> str:
     key = str(a.get("key", ""))
     if key not in KEYS:
         raise ActionError(f"key must be one of {sorted(KEYS)}")
+    before = _screen_hash(s)
     adb("shell", "input", "keyevent", str(KEYS[key]), serial=s)
-    return f"Sent {key}."
+    return f"Sent {key}." + _settle(s, before)
 
 
 def adb_tap(a: dict) -> str:
     s = _device(a)
     x, y = int(a.get("x")), int(a.get("y"))
+    before = _screen_hash(s)
     adb("shell", "input", "tap", str(x), str(y), serial=s)
-    return f"Tapped {x},{y}."
+    return f"Tapped {x},{y}." + _settle(s, before)
+
+
+# ---------- unsticking: a pop-up in the way, or a screen that didn't move ----------
+def _screen_hash(s: str) -> str:
+    """A fingerprint of what's on screen (the clock or a blinking cursor can change it: equal means stuck)."""
+    try:
+        return adb("shell", "screencap | md5sum", serial=s)[:32]
+    except ActionError:
+        return ""
+
+
+def _clear_popup(s: str) -> str:
+    """Press the safe button of a known system pop-up on screen (phone_routine.POPUPS); what was pressed, or ""."""
+    try:
+        adb("shell", "uiautomator", "dump", "/sdcard/jarvis_ui.xml", serial=s)
+        hit = routine.find_popup(adb("shell", "cat", "/sdcard/jarvis_ui.xml", serial=s))
+    except ActionError:
+        return ""
+    if not hit:
+        return ""
+    label, x, y = hit
+    adb("shell", "input", "tap", str(x), str(y), serial=s)
+    time.sleep(0.8)
+    return label
+
+
+def _settle(s: str, before: str) -> str:
+    """After an action: a note when the screen didn't change, after closing a pop-up that was in the way."""
+    time.sleep(0.8)
+    if not before or _screen_hash(s) != before:
+        return ""
+    time.sleep(1.2)  # slow apps: one more look before calling it stuck
+    if _screen_hash(s) != before:
+        return ""
+    if label := _clear_popup(s):
+        return f' A pop-up was in the way; pressed "{label}". Try the action again.'
+    return " The screen didn't change: the tap may have missed or the app is stuck."
+
+
+# ---------- recording what the user does by hand, and replaying it ----------
+_recording: dict = {}
+
+
+def adb_record_start(a: dict) -> str:
+    s = _device(a)
+    if _recording.get("proc") and _recording["proc"].poll() is None:
+        raise ActionError("already recording; stop that first")
+    touch = routine.touch_range(adb("shell", "getevent", "-lp", serial=s))
+    if not touch:
+        raise ActionError("couldn't find the phone's touchscreen")
+    m = re.search(r"(\d+)x(\d+)\s*$", adb("shell", "wm", "size", serial=s))
+    if not m:
+        raise ActionError("couldn't read the screen size")
+    focus = adb("shell", "dumpsys", "window", serial=s)
+    app = re.search(r"mCurrentFocus=Window\{\S+ \S+ ([^}/ ]+)", focus)
+    out = SHOTS.parent / "routine-recording.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    f = open(out, "w", encoding="utf-8")
+    proc = subprocess.Popen([ADB, "-s", s, "shell", "getevent", "-lt"], stdout=f, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, text=True)
+    _recording.update(proc=proc, file=f, path=out, serial=s, touch=touch, size=(int(m[1]), int(m[2])),
+                      app=app[1] if app else "", started=time.time())
+    return (f"Recording what you do on the phone{f' (starting in {app[1]})' if app else ''}. "
+            "Say stop recording when you're done.")
+
+
+def adb_record_stop(_: dict) -> dict:
+    proc = _recording.get("proc")
+    if not proc:
+        raise ActionError("nothing is being recorded")
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    _recording["file"].close()
+    lines = _recording["path"].read_text(encoding="utf-8", errors="replace").splitlines()
+    steps = routine.parse_getevent(lines, _recording["touch"], _recording["size"])
+    if _recording.get("app") and "launcher" not in _recording["app"].lower():
+        steps = [f"open {_recording['app']}", "wait 2.0s"] + steps
+    took = round(time.time() - _recording["started"])
+    _recording.clear()
+    return {"steps": steps, "seconds": took}
+
+
+def adb_replay(a: dict) -> str:
+    """Do a recorded routine's steps; after each tap or swipe, a pop-up in the way is closed and the step tried
+    once more, and a screen that stays stuck stops the routine there."""
+    s = _device(a)
+    steps = routine.parse_steps([str(x) for x in a.get("steps") or []])
+    for i, step in enumerate(steps, 1):
+        kind, args = step[0], step[1:]
+        if kind == "wait":
+            time.sleep(args[0])
+            continue
+        if kind == "open":
+            adb_open_app({"package": args[0], "device": s})
+            continue
+        if kind == "key":
+            if args[0] not in KEYS:
+                raise ActionError(f"step {i}: unknown key {args[0]}")
+            adb("shell", "input", "keyevent", str(KEYS[args[0]]), serial=s)
+            continue
+        cmd = ["input", "tap", *map(str, args)] if kind == "tap" else             ["input", "swipe", *map(str, args[:4]), str(args[4] if len(args) > 4 else 300)]
+        before = _screen_hash(s)
+        adb("shell", *cmd, serial=s)
+        note = _settle(s, before)
+        if "pop-up" in note:
+            before = _screen_hash(s)
+            adb("shell", *cmd, serial=s)
+            note = _settle(s, before)
+        if "didn't change" in note:
+            return f"Stopped at step {i} of {len(steps)} ({kind} {' '.join(map(str, args))}): the screen didn't change."
+    return f"Done: {len(steps)} steps."
 
 
 def adb_type(a: dict) -> str:
@@ -825,7 +942,7 @@ ACTIONS = {f.__name__: f for f in (
     adb_shell, adb_install, adb_uninstall, adb_connect,
     adb_pair_start, adb_pair_status, adb_list, adb_allow, adb_disconnect,
     adb_notifications, adb_sms_read, adb_call_log, adb_contacts, adb_sms_send, adb_whatsapp_send,
-    adb_call, adb_call_answer, adb_call_end, adb_watch)}
+    adb_call, adb_call_answer, adb_call_end, adb_watch, adb_record_start, adb_record_stop, adb_replay)}
 
 
 class Handler(BaseHTTPRequestHandler):

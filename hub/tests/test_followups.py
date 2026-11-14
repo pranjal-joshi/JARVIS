@@ -357,3 +357,59 @@ def test_a_save_that_points_back_saves_the_earlier_plan_even_from_a_fresh_chat()
 
 async def _ret(text):
     return text
+
+
+def test_a_quick_read_part_runs_while_the_part_before_it_waits_on_the_model(tmp_path):
+    import asyncio as aio
+    from jarvis_hub.agent.fastpath import FastPaths
+    order = []
+
+    class SlowLLM(ScriptLLM):
+        async def chat(self, messages, tools=None):
+            order.append("model")
+            await aio.sleep(0.2)  # the first part thinks a while
+            order.append("model done")
+            return await super().chat(messages, tools)
+
+    llm = SlowLLM([call("notify", text="dinner at 8"), say("Sent, sir."), say("Done.")])
+    a, ran = setup(llm)
+
+    async def clock(args, ctx):
+        order.append("clock")
+        return "Saturday 14 November 2026, 09:30"
+    a.tools.add(Tool("get_time", "builtin", "time", {"type": "object", "properties": {}}, Risk.READ, clock))
+    a.fast = FastPaths(ObsidianVault(str(tmp_path)))
+    out = ask(a, "send a notification saying dinner at 8, then what time is it")
+    assert order.index("clock") < order.index("model done")  # the read ran while the model was thinking
+    assert "09:30" in out and [n for n, _ in ran] == ["notify"]
+
+
+def test_a_recorded_phone_routine_replays_without_the_model(tmp_path, monkeypatch):
+    from jarvis_hub.agent.fastpath import FastPaths
+    from jarvis_hub.automation.phone_routines import register_phone_routine_tools
+    from jarvis_hub.automation.skills import SkillEngine
+    from jarvis_hub.config import Settings
+    import jarvis_hub.automation.phone_routines as pr
+
+    sent = []
+
+    async def bridge(s, action, args, timeout=200):
+        sent.append((action, args))
+        if action == "adb_record_stop":
+            return True, {"steps": ["open com.frameo.app", "wait 2.0s", "tap 540 1210", "key back"], "seconds": 9}
+        return True, "Done: 4 steps." if action == "adb_replay" else "Recording."
+    monkeypatch.setattr(pr, "bridge_call", bridge)
+    g = ObsidianVault(str(tmp_path))
+    llm = ScriptLLM([])  # no model call may happen
+    a, _ = setup(llm)
+    a.fast = FastPaths(g)
+    engine = SkillEngine(g, EventBus(), a, Settings(), tmp_path / "skills.json")
+    register_phone_routine_tools(a.tools, engine, g)
+    ctx = None
+    out = asyncio.run(a.tools.get("phone_record_stop").call({"name": "Frameo kiosk"}, ctx))
+    assert "Saved the routine 'Frameo kiosk'" in out and g.page("skills/Frameo kiosk").properties["replay"] == "phone"
+    skill = next(x for x in engine.skills() if x["name"] == "skills/Frameo kiosk")
+    reply = asyncio.run(engine.run(skill, "asked to run it now", announce=False))
+    assert "Done: 4 steps." in reply and llm.seen == []  # straight to the phone, no model
+    assert sent[-1] == ("adb_replay", {"steps": ["open com.frameo.app", "wait 2.0s", "tap 540 1210", "key back"],
+                                       "device": ""})

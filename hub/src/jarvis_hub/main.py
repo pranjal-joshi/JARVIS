@@ -23,6 +23,7 @@ from jarvis_hub.events.bus import EventBus
 from jarvis_hub.guard.policy import Policy
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
+from jarvis_hub.automation.phone_routines import register_phone_routine_tools
 from jarvis_hub.automation.skill_tools import register_skill_tools
 from jarvis_hub.automation.skills import SkillEngine
 from jarvis_hub.devices.tools import register_device_tools
@@ -147,6 +148,8 @@ async def lifespan(app: FastAPI):
 
     st.skills = SkillEngine(st.kb_graph, st.bus, st.agent, s, Path(s.hub_db_path).with_name("skills.json"))
     register_skill_tools(st.tools, st.skills, st.kb_graph)
+    if st.tools.get("adb_tap"):  # the device bridge is set up: phone routines can be recorded and replayed
+        register_phone_routine_tools(st.tools, st.skills, st.kb_graph)
     st.hooks = Webhooks(s, Path(s.hub_db_path).with_name("webhooks.json"))
     st.watch = WatchEngine(st.bus, s, st.notifier, st.skills, Path(s.hub_db_path).with_name("watchers_state.json"))
     if s.agent != "echo":

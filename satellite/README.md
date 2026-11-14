@@ -20,8 +20,8 @@ Open http://127.0.0.1:8792 (localhost, so the browser allows the microphone with
 - Barge-in: the wake word or the button while it's thinking or talking stops it and listens.
 - Earcons: rising tones = listening, falling = heard you, a soft pulse while thinking, a tick when a
   tool starts (plus "One moment, sir." if nothing has been said yet), two low tones = something failed.
-- When JARVIS asks a question it keeps listening for about 5 s, no wake word needed ("Shall I go ahead,
-  sir?" → "yes").
+- After every reply it keeps listening for 7.5 s, no wake word needed ("Shall I go ahead, sir?" → "yes",
+  or "and the kitchen too"); silence puts it back to sleep.
 - Announcements from the hub (timers set here, skill results, incoming calls, `ask_claude` answers that
   ran in the background) arrive over the hub's event stream and are spoken when the satellite is idle.
 - Failures are spoken: "I can't reach my hub", "My hearing is offline" (Whisper down); if the hub's

@@ -8,11 +8,13 @@ import { Orb as DotOrb } from "@yogesharc/thinking-orbs";
 // per frame from the analyser level) and is tinted through CSS `color`. Base colour is blue; `accent`
 // flashes green (action done), orange (write / awaiting approval) or red (fault) and then fades back.
 const BASE = [110, 210, 255];
+// one colour per state, so the state reads at a glance: cyan idle, green listening, violet thinking,
+// gold speaking, red fault
 const COLORS = {
   idle: BASE,
-  listening: [127, 231, 255],
-  thinking: BASE,
-  speaking: [150, 225, 255],
+  listening: [90, 255, 150],
+  thinking: [170, 120, 255],
+  speaking: [255, 200, 90],
   error: [255, 92, 92],
 };
 const ACCENTS = { green: [60, 255, 110], orange: [255, 170, 60], red: [255, 92, 92] };

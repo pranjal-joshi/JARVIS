@@ -11,9 +11,9 @@ import { headProps } from "../lib/panel";
 import SystemConsole, { asCommand } from "./SystemConsole";
 import MonitorsPanel from "./MonitorsPanel";
 import JobBox from "./JobBox";
-import { AGENT_TOOLS, Constellation, DreamDigest, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
+import { AGENT_TOOLS, Constellation, DreamDigest, Health, LiveNote, Preview, Toasts, WitPanel, Widget } from "./Live";
 import { SOURCE, ago, describe, insight } from "../lib/timeline";
-import { askToNotify, chime, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
+import { askToNotify, chime, heardSpeech, notifyApproval, notifySystem, playAudio, startRecording, stopAudio } from "../lib/audio";
 
 // WebGL graph: client-only so the server build never touches three.js
 const KbGraph = dynamic(() => import("./KbGraph"), {
@@ -294,6 +294,7 @@ export default function Hud() {
   const flash = (color) => setAccent({ color, at: Date.now() });
   const consoleTimer = useRef(null);
   const recording = useRef(null);
+  const byVoice = useRef(false); // the current turn was spoken: its spoken reply gets a follow-up window
   const turn = useRef(0); // newest question; older replies show but never speak over it
   const sessionId = useRef(null); // this conversation's id: the hub keeps its turns under it (traces)
   if (sessionId.current === null) sessionId.current = newSessionId();
@@ -608,8 +609,9 @@ export default function Hud() {
     return () => { el.removeEventListener("scroll", onScroll); follow.disconnect(); };
   }, []);
 
-  const send = async (text) => {
+  const send = async (text, spoken = false) => {
     if (!text.trim()) return;
+    byVoice.current = spoken;
     const mine = ++turn.current;
     stopAudio(); // a new question cuts the previous answer short
     const attached = context;
@@ -673,7 +675,11 @@ export default function Hud() {
         else if (pending.trim()) voice.add(pending);
         await voice.done();
       }
-      if (mine === turn.current) setState("idle");
+      if (mine === turn.current) {
+        setState("idle");
+        // asked by voice and answered aloud: keep listening a moment, no button needed ("yes", "and the kitchen")
+        if (voice && byVoice.current) followUp(mine);
+      }
     } catch (e) {
       if (!added && e?.message) show(e.message);
       if (mine === turn.current) setState("error");
@@ -731,6 +737,25 @@ export default function Hud() {
     say(text, mine).then(() => mine === turn.current && setState("idle"));
   } : null;
 
+  // after a spoken reply, listen for up to 7.5 s; speech then a pause sends it, silence ends it quietly
+  const followUp = async (mine) => {
+    if (recording.current || !window.isSecureContext) return;
+    let rec;
+    try { rec = await startRecording(); } catch { return; }
+    if (mine !== turn.current) { rec.stop().catch(() => null); return; }
+    recording.current = rec;
+    setAnalyser(rec.analyser);
+    setState("listening");
+    const spoke = await heardSpeech(rec.analyser, { cancelled: () => recording.current !== rec });
+    if (recording.current !== rec) return; // the mic button or a typed message took over
+    if (spoke) return toggleMic(); // stop, transcribe, send
+    recording.current = null;
+    byVoice.current = false;
+    rec.stop().catch(() => null);
+    setAnalyser(null);
+    setState("idle");
+  };
+
   const toggleMic = async () => {
     if (recording.current) {
       const rec = recording.current;
@@ -747,7 +772,7 @@ export default function Hud() {
         setMessages((m) => [...m, { role: "assistant", text: detail || "I didn't catch that, sir." }]);
         return;
       }
-      return send(text);
+      return send(text, true);
     }
     const say_ = (text) => setMessages((m) => [...m, { role: "assistant", text }]);
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -819,6 +844,7 @@ export default function Hud() {
         <div className="chips">
           <button type="button" className="chip new-session" onClick={newSession}
             title="Clear this conversation and start fresh (JARVIS forgets the chat; memory pages stay)">⟲ new session</button>
+          <Health />
           {models.length > 1 && (
             <label className={`chip model-pick${switching ? " busy" : ""}`}
               title={`Language model${llmInfo?.loaded === false ? " · not loaded: the next reply waits ~13 s"
