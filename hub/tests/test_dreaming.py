@@ -142,6 +142,28 @@ def test_a_failed_model_keeps_the_best_as_said_and_dry_run_writes_nothing(tmp_pa
     assert 0 < len(rep.added) <= 3 and len(d.kept()) == len(before) + len(rep.added)  # at most 3 new a night
 
 
+def test_a_dream_model_rate_limited_briefly_is_waited_for(tmp_path, monkeypatch):
+    import jarvis_hub.kb.dreaming as dreaming
+
+    class Limited(FakeLLM):
+        async def json(self, messages, schema):
+            self.asked.append(self.model)
+            if self.model == "dreamer" and len(self.asked) == 1:
+                raise RuntimeError("dreamer is rate limited (try again in 0 s)")
+            return {"decisions": [], "themes": "", "conflicts": [], "questions": []}
+
+        async def chat(self, messages, tools=None):  # JSON in words: the same limit
+            raise RuntimeError("dreamer is rate limited (try again in 0 s)")
+
+    async def no_wait(s):
+        pass
+    monkeypatch.setattr(dreaming.asyncio, "sleep", no_wait)
+    llm = Limited(None)
+    d = Dreamer(_graph(tmp_path), None, llm, tmp_path / "dreams.json", days=3, model="dreamer")
+    rep = asyncio.run(d.run(today=TODAY, dry_run=True))
+    assert not rep.fallback and d.asked_model == "dreamer"  # never handed to the chat model
+
+
 def test_dreams_ride_in_the_system_prompt():
     from jarvis_hub.agent.tool_agent import KNOWN, ToolAgent
 

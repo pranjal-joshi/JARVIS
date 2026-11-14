@@ -52,7 +52,8 @@ MIN_SCORE = 0.35  # a candidate below this isn't put to the model
 MAX_CANDIDATES = 12
 MAX_CHANGES, MAX_NEW = 6, 3  # per night (Hermes)
 MAX_ENTRIES = 80  # shortcut: the model sees at most this many kept facts a night; page through them past that
-MAX_QUESTIONS = 50  # questions remembered (asked, answered, dismissed) so none is asked twice
+RATE_WAIT_S = 20  # a dream model rate limited for this long or less is waited for once, not swapped out
+MAX_QUESTIONS = 50 # questions remembered (asked, answered, dismissed) so none is asked twice
 CONTEXT_CHARS = 1300  # what rides in every conversation (about 300 tokens): enough for every CORE page
 # who the user is: these pages ride in every conversation first, in this order; the newest of the rest after
 CORE = ("jarvis/people", "jarvis/family", "jarvis/location", "jarvis/home", "jarvis/work")
@@ -470,10 +471,18 @@ class Dreamer:
         if self.model and self.model != getattr(self.llm, "model", ""):
             llm = copy.copy(self.llm)  # the same connections, another model; the chat model is left alone
             llm.model = self.model
-            try:
-                return await self._ask(llm, messages)
-            except Exception as e:
-                log.warning("dreaming: %s failed (%s); asking the chat model", self.model, e)
+            for attempt in (1, 2):
+                try:
+                    return await self._ask(llm, messages)
+                except Exception as e:
+                    # "rate limited (try again in 0 s)": a short wait beats a slow chat model on a long prompt
+                    wait = re.search(r"try again in (\d+) s", str(e))
+                    if attempt == 1 and wait and int(wait[1]) <= RATE_WAIT_S:
+                        log.info("dreaming: %s rate limited; trying again in %s s", self.model, int(wait[1]) + 1)
+                        await asyncio.sleep(int(wait[1]) + 1)
+                        continue
+                    log.warning("dreaming: %s failed (%s); asking the chat model", self.model, e)
+                    break
         return await self._ask(self.llm, messages)
 
     async def _ask(self, llm, messages: list[dict]) -> dict:
