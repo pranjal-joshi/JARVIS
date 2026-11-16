@@ -105,3 +105,28 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    do it, the reply is the truthful `UNDONE` line. A denial, timeout or policy block closes the contract; dry runs
    and Claude record it without enforcing. Each turn's trace lists its contract and whether it was met.
    Replaces the old `t.must` (explicit web, save part).
+7. **Forced call** [≤1 call a turn]: an unmet contract no longer runs the two-call constrained pick. Code
+   chooses the owed tool (the only one; remember for a save, routed to the named page/journal; else the closest to
+   the request) and ONE `LLMClient.json()` call fills only its arguments, with live enums (a tool without arguments
+   costs no call). The call goes through hooks, policy, approval, taint and audit; if it doesn't succeed, the reply is
+   the `UNDONE` truth. One forced call a turn (`EXTRA_CALLS`); after that, the truth without a call. The claim check
+   (`claims.py`, its pick and nudges) still covers what no contract does. Traces mark `forced` (`contract:<why>`),
+   and the counters say which mechanism fired (`forced`, `contract.*`, `pick.claim`, `nudge.claim`, `undone`).
+
+### What each mechanism costs in model calls (per turn)
+| Mechanism | Calls |
+|---|---|
+| Telemetry, actionable errors, anti-loop, live enums, session refs, contracts (derivation and accounting) | 0 |
+| Inline tool-call recovery | 0; saves the `FAKE_TOOL_NUDGE` call (4–8 s) when the text call is usable |
+| Forced call for an unmet contract | 1 (0 for a tool without arguments); was 2 with the pick |
+| Live HA names | 0 model calls; one audited GetLiveContext read a minute |
+| Unchanged, already there: plan split (≤1), memory capture (1), claim pick (2), each nudge (1), escalation | as before |
+
+### Pruning candidates (check `GET /v1/harness/stats` after a week of real use)
+- `nudge.fake`: inline recovery should take most of these; if it rarely fires, the nudge and `fake.failed` can go.
+- `pick` (the claim pick, 2 calls): contracts now cover saves, web, parts and skills; if `pick.claim` is rare, make it
+  a forced call or drop it for `UNDONE`.
+- `hook.needless_time` vs `hide.get_time`: the tool is hidden before the hook can fire; the hook is likely dead.
+- `hook.once`, `hook.keep_links`, `route_note`, `plan.restated`, `nudge.part`: narrow fixes for single incidents.
+- `escalate` reasons and `circles`: with the anti-loop guard, "went in circles" should be rarer.
+- `wants.search` vs `wants.web`: the broad `search` rule may be what fires; check whether `wants.web` adds anything.

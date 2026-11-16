@@ -176,6 +176,10 @@ ARGS_PROMPT = "(system) Fill in the arguments for {name} ({desc}). Use the user'
 # The same call again this turn (it has its answer above), or a tool that has failed the same way twice: denied,
 # never run, and audited as rejected.
 REPEAT = "ERROR: same call again. Do not repeat it. Do the next step or answer."
+# The forced call (agent/contracts.py): the tool is chosen by code, the model only fills its arguments
+FORCE_PROMPT = ("(system) You must call {name} now ({desc}). Fill in its arguments from what the user asked, in their "
+                "own words, names, dates and numbers.")
+EXTRA_CALLS = 1  # model calls a turn may spend on forced calls
 
 
 class ToolAgent:
@@ -486,12 +490,15 @@ class ToolAgent:
                 else:
                     pool = self._pool(kind, offered)
                 can = pool and not (need and need.on_missing == "undone") and hasattr(self.llm, "json")
-                calls = await self._pick_tool(convo, pool, t) if can else []
-                t.loops[-1]["calls"][-1]["picked"] = [c["function"] for c in calls]  # the constrained pick
-                if can:
-                    hit(t, "pick", "contract" if need else "claim")
-                    if not calls:
-                        hit(t, "pick.none")
+                if need:  # one call for the owed tool's arguments (none for a tool without any)
+                    calls = await self._force(convo, need, pool, t) if can else []
+                else:
+                    calls = await self._pick_tool(convo, pool, t) if can else []
+                    if can:
+                        hit(t, "pick", "claim")
+                        if not calls:
+                            hit(t, "pick.none")
+                t.loops[-1]["calls"][-1]["picked"] = [c["function"] for c in calls]  # the forced call or the pick
                 if not calls and (claims or need):  # nothing fits: don't pass the claim (or the skip) on
                     if streamed:
                         t.on_text(None)
@@ -864,6 +871,44 @@ class ToolAgent:
         "tell me a joke" included, scores high against something.) Local models only."""
         return claims and not self._is_claude() and hasattr(self.llm, "json")
 
+    def _owed_tool(self, pool: list[Tool], t: "_Turn") -> Tool:
+        """Which of the tools a contract allows is called, chosen by code: the only one; for a save, remember
+        (_route_note sends it to the page or journal the user named); else the one closest to the request."""
+        if len(pool) == 1:
+            return pool[0]
+        if (remember := next((x for x in pool if x.name == "kb_remember"), None)) is not None:
+            return remember
+        scores = t.ranking.scores if t.ranking else {}
+        offered = [x.name for x in t.ranking.tools] if t.ranking else []
+        return max(pool, key=lambda x: (scores.get(x.name, -1.0), x.name in offered))
+
+    async def _force(self, convo: list[dict], need: Need, pool: list[Tool], t: "_Turn") -> list[dict]:
+        """The owed tool as a call: its arguments from ONE schema-constrained model call that sees only that
+        tool's arguments (with their live values), or none for a tool without arguments. It then goes the normal
+        way (hooks, policy, approval, taint, audit). [] when the turn's budget is spent or the call fails."""
+        tool = self._owed_tool(pool, t)
+        params = (await self._schemas([tool], t))[0]["function"].get("parameters") or {}
+        args = {}
+        if params.get("properties"):
+            if t.extra >= EXTRA_CALLS:
+                hit(t, "contract", "budget")
+                return []
+            t.extra += 1
+            try:
+                args = await self.llm.json(
+                    [*convo, {"role": "user", "content": FORCE_PROMPT.format(name=tool.model_name,
+                                                                             desc=tool.description[:300])}],
+                    {"type": "object", "properties": params["properties"], "required": params.get("required", [])})
+            except LLMError as e:
+                log.info("forced call unavailable: %s", e)
+                return []
+        log.info("forced call (%s): %s %s", need.why, tool.name, json.dumps(args)[:200])
+        hit(t, "forced", tool.name)
+        t.trace.append({"tool": tool.name, "decision": "forced", "rule": f"contract:{need.why}",
+                        "why": "a text reply left it undone"})
+        return [{"id": "forced-1", "type": "function",
+                 "function": {"name": tool.model_name, "arguments": json.dumps(args if isinstance(args, dict) else {})}}]
+
     async def _pick_tool(self, convo: list[dict], offered: list[Tool], t: "_Turn") -> list[dict]:
         """Make the model name one offered tool (or none) and fill its arguments, both under a JSON schema
         Ollama enforces while decoding: a valid call, or [] when it picks none or can't."""
@@ -1179,8 +1224,11 @@ class ToolAgent:
             except Exception as e:
                 log.exception("tool %s failed", name)
                 output, status = actionable(f"ERROR: {tool.model_name} failed ({e})"), "error"
+                hit(t, "actionable", "exception")
         if status == "error":  # every error says what to do next (guard/validate.py actionable)
-            output = actionable(output)
+            if (fixed := actionable(output)) != output:
+                hit(t, "actionable")
+            output = fixed
         output = output[:MAX_TOOL_RESULT_CHARS]
         t.called = True
         if status == "ok":  # what a contract counts (agent/contracts.py): not errors, refusals or dry runs
@@ -1312,6 +1360,7 @@ class _Turn:
     succeeded: Counter = field(default_factory=Counter)  # internal tool name -> calls that ran and succeeded
     declined: set = field(default_factory=set)  # tools a human, a timeout or the policy turned down this turn
     noted_needs: set = field(default_factory=set)  # needs already counted as not enforced
+    extra: int = 0  # model calls spent on forced calls this turn (EXTRA_CALLS)
     messages_in: list = field(default_factory=list)  # what the client sent
     loops: list = field(default_factory=list)  # each model loop: part, tools offered, calls, conversation
     hits: list = field(default_factory=list)  # harness mechanisms that fired this turn (audit/harness.py)

@@ -528,13 +528,13 @@ def test_a_save_part_that_only_talks_is_made_to_pick_a_note_write():
     # "...then save it to my notes": the save part answered in words; it must still write the note
     llm = ScriptLLM([call("search_notes", query="name"), say("Your name is Pranjal, sir."),
                      say("Your name is Pranjal, sir."), say("Saved, sir.")],
-                    [{"tool": "remember"}, {"fact": "My name is Pranjal"}])
+                    [{"fact": "My name is Pranjal"}])
     a, ran = setup(llm)
     a.tools.add(Tool("kb_remember", "builtin", "remember a fact", {"type": "object", "properties": {
         "fact": {"type": "string"}}, "required": ["fact"]}, Risk.WRITE, lambda args, ctx: _ran(ran, "kb_remember", args)))
     ask(a, "search my notes for my name, then save it to my notes")
     assert [r[0] for r in ran] == ["kb_search", "kb_remember"], ran
-    assert llm.schemas[0]["properties"]["tool"]["enum"][:1] == ["remember"]
+    assert llm.schemas == [{"type": "object", "properties": {"fact": {"type": "string"}}, "required": ["fact"]}]
 
 
 async def _ran(ran, name, args):
@@ -1041,7 +1041,7 @@ def test_an_unknown_ref_or_a_raw_id_gets_an_error_it_can_recover_from():
 
 
 # ---------- before-done contracts (agent/contracts.py) ----------
-from jarvis_hub.agent.contracts import Need, part_need  # noqa: E402
+from jarvis_hub.agent.contracts import part_need  # noqa: E402
 
 
 def run_with(a, text, **kw):
@@ -1061,8 +1061,7 @@ def test_a_parts_verb_says_what_it_must_do():
 
 
 def test_a_part_that_skips_its_tool_silently_is_held_to_it():
-    llm = ScriptLLM([call("media_control", key="play_pause"), say("Okay.")],
-                    [{"tool": "send_notification"}, {"text": "stand up"}])
+    llm = ScriptLLM([call("media_control", key="play_pause"), say("Okay.")], [{"text": "stand up"}])
     a, ran = setup(llm)
     ask(a, "pause the music and notify me saying stand up")
     assert ran[-1] == ("notify", {"text": "stand up"})
@@ -1071,7 +1070,7 @@ def test_a_part_that_skips_its_tool_silently_is_held_to_it():
 
 def test_a_skill_mandatory_tool_is_forced_or_reported_undone():
     must = [{"name": "notify", "min_calls": 1, "on_missing": "force"}, {"name": "no_such_tool"}]
-    llm = ScriptLLM([say("Here is the summary, sir.")], [{"tool": "send_notification"}, {"text": "summary"}])
+    llm = ScriptLLM([say("Here is the summary, sir.")], [{"text": "summary"}])
     a, ran = setup(llm)
     run_with(a, "summarise my day", contract=must)
     assert ran[-1] == ("notify", {"text": "summary"}) and _hits(a)["contract.skill"] == 1
@@ -1087,8 +1086,7 @@ def test_a_skill_mandatory_tool_is_forced_or_reported_undone():
 
 def test_only_successful_calls_meet_a_contract_and_a_denial_closes_it():
     # the forced call errors: not met, so the truth, not the model's words
-    llm = ScriptLLM([say("Here is the summary, sir."), say("All done, sir.")],
-                    [{"tool": "send_notification"}, {"text": "summary"}])
+    llm = ScriptLLM([say("Here is the summary, sir."), say("All done, sir.")], [{"text": "summary"}])
     a, ran = setup(llm)
 
     async def broken(args, ctx):
@@ -1097,8 +1095,7 @@ def test_only_successful_calls_meet_a_contract_and_a_denial_closes_it():
     assert run_with(a, "summarise my day", contract=[{"name": "notify"}]) == "I haven't actually done that, sir."
     assert _hits(a)["contract.undone"] == 1
     # the user turned the call down: the contract is closed, nothing is forced again
-    llm = ScriptLLM([say("Here is the summary, sir."), say("Understood, sir; I won't send it.")],
-                    [{"tool": "send_notification"}, {"text": "summary"}])
+    llm = ScriptLLM([say("Here is the summary, sir."), say("Understood, sir; I won't send it.")], [{"text": "summary"}])
     a, ran = setup(llm)
     a.gate = ApprovalGate(EventBus(), 0.05)
     a.ask_for = frozenset({Risk.WRITE})
@@ -1121,7 +1118,7 @@ def test_a_failed_fast_path_action_is_owed_by_the_model():
     class Fast:
         def match(self, said):
             return FastPlan("notify", [("notify", {"text": "hi"})], lambda r: "Shown, sir.") if "notify" in said else None
-    llm = ScriptLLM([say("Okay."), say("Shown, sir.")], [{"tool": "send_notification"}, {"text": "hi"}])
+    llm = ScriptLLM([say("Okay."), say("Shown, sir.")], [{"text": "hi"}])
     a, ran = setup(llm)
     a.fast = Fast()
     a.tools.get("notify").call = flaky
@@ -1130,7 +1127,7 @@ def test_a_failed_fast_path_action_is_owed_by_the_model():
 
 
 def test_contracts_are_kept_in_the_trace():
-    llm = ScriptLLM([say("Here is the summary, sir.")], [{"tool": "send_notification"}, {"text": "summary"}])
+    llm = ScriptLLM([say("Here is the summary, sir.")], [{"text": "summary"}])
     a, _ = setup(llm)
     a.traces = TraceStore(":memory:")
     run_with(a, "summarise my day", contract=[{"name": "notify"}])
@@ -1169,3 +1166,98 @@ def test_skill_pages_carry_mandatory_tools_and_adding_one_needs_re_approval(tmp_
     assert s["changed"]  # a hand edit that adds a contract is a change like any other
     asyncio.run(eng.run(s, "asked to run it now"))
     assert agent.kw[1]["contract"] == s["mandatory_tools"]
+
+
+# ---------- the forced call ----------
+def test_an_unmet_contract_costs_one_call_with_only_the_owed_tools_arguments():
+    llm = ScriptLLM([say("Here is the summary, sir.")], [{"text": "summary"}])
+    a, ran = setup(llm)
+    a.traces = TraceStore(":memory:")
+    reply = run_with(a, "summarise my day", contract=[{"name": "notify"}])
+    assert reply == 'I\'ve sent the notification "summary", sir.' and ran == [("notify", {"text": "summary"})]
+    assert llm.schemas == [{"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}]
+    [turn] = a.traces.session(a.traces.sessions()[0]["session"])
+    assert any(x["decision"] == "forced" and x["rule"] == "contract:skill" for x in turn["data"]["trace"])
+    assert _hits(a)["forced"] == 1 and _hits(a).get("pick", 0) == 0  # the forced call, not the pick
+    assert a.audit.recent()[0]["status"] == "ok"  # through the normal gate and audit
+
+
+def test_a_tool_with_no_arguments_is_forced_without_a_model_call():
+    llm = ScriptLLM([say("It's about noon, sir."), say("It's 12:00, sir.")])
+    a, ran = setup(llm)
+    run_with(a, "what time is it, roughly", contract=[{"name": "get_time"}])
+    assert ran == [("get_time", {})] and llm.schemas == []
+
+
+def test_the_forced_call_sees_the_live_values():
+    try:
+        llm = ScriptLLM([say("Okay."), say("Cancelled, sir.")], [{"label": "tea"}])
+        a, ran = setup(llm)
+        _timers(a, ran, ["pasta", "tea"])
+        run_with(a, "stop the tea one", contract=[{"name": "cancel_timer"}])
+        assert llm.schemas[0]["properties"]["label"]["enum"] == ["pasta", "tea"]
+        assert ran[-1] == ("cancel_timer", {"label": "tea"})
+    finally:
+        LIVE.pop("cancel_timer", None)
+
+
+def test_one_forced_call_a_turn_then_the_truth():
+    # two parts that each skip their tool: the first is forced, the second gets the truth without another call
+    llm = ScriptLLM([say("Okay."), say("Okay.")], [{"text": "stand up"}])
+    a, ran = setup(llm)
+    reply = ask(a, "notify me saying stand up and then pause the music")
+    assert ran == [("notify", {"text": "stand up"})] and len(llm.schemas) == 1
+    assert "I haven't actually changed anything, sir." in reply and _hits(a)["contract.budget"] == 1
+
+
+def test_the_claim_check_still_backs_up_what_no_contract_covers():
+    llm = ScriptLLM([say("I'll set a notification for you, sir.")],
+                    [{"tool": "send_notification"}, {"text": "stand up"}])
+    a, ran = setup(llm)
+    ask(a, "ping my laptop saying stand up")
+    assert ran == [("notify", {"text": "stand up"})] and _hits(a)["pick.claim"] == 1
+
+
+# ---------- every new mechanism shows on the stats endpoint ----------
+def test_the_stats_endpoint_shows_each_new_mechanism_firing(client):
+    from conftest import auth
+    a, ran = setup(ScriptLLM([]))
+    client.app.state.agent = a
+    _timers(a, ran, ["pasta", "tea"])
+    _jobs(a, ran)
+    refs = Refs()
+    ref = refs.ref(JOB_IDS[0])
+    a._refs["web-r1"] = refs
+
+    def turn(chats, jsons=(), text="hello there", **kw):
+        a.llm = ScriptLLM(chats, jsons)
+        run_with(a, text, **kw)
+
+    async def boom(args, ctx):
+        raise RuntimeError("socket closed")
+    try:
+        # 2 inline recovery, 4 anti-loop (identical), 5 live enum fixed and refused, refs mapped and hidden
+        turn([say('<tool_call>{"name": "send_notification", "arguments": {"text": "hi"}}</tool_call>')],
+             text="notify me hi")
+        turn([call("search_notes", query="x"), call("search_notes", query="x"), say("Nothing, sir.")],
+             text="find x in notes")
+        turn([call("cancel_timer", label="TEA"), say("ok")], text="cancel tea timer")
+        turn([call("cancel_timer", label="eggs"), say("No eggs timer, sir.")], text="cancel eggs timer")
+        turn([call("job_status"), call("cancel_job", job=ref), say("Cancelled, sir.")], text="cancel the job")
+        # 4 anti-loop (failing the same way), 3 the run-time next step
+        a.tools.get("kb_correct").call = boom
+        turn([call("correct_memory", wrong="a", fact="b"), call("correct_memory", wrong="c", fact="d"),
+              call("correct_memory", wrong="e", fact="f"), say("It failed, sir.")], text="fix it: b not a")
+        # 6 a contract, 7 its forced call
+        turn([say("Here is the summary, sir.")], [{"text": "summary"}], text="summarise my day",
+             contract=[{"name": "notify"}])
+    finally:
+        for name in ("job_status", "cancel_job", "cancel_timer"):
+            OPAQUE.pop(name, None)
+            LIVE.pop(name, None)
+    r = client.get("/v1/harness/stats", headers=auth("web-token")).json()
+    counts = {c["name"]: c["count"] for c in r["counters"]}
+    for name in ("inline.recovered", "repeat.identical", "repeat.failing", "actionable", "live_offered",
+                 "live.fixed", "live.error", "ref.mapped", "ref.hidden", "contract.skill", "forced"):
+        assert counts.get(name, 0) >= 1, name
+    assert all(c["last"] for c in r["counters"] if c["count"])
