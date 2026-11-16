@@ -170,8 +170,9 @@ ABOUT_PAGE = "jarvis/people"  # what JARVIS has learned about the user and their
 PICK_PROMPT = ("(system) Which tool does what the user just asked? Answer with one tool name, or none if the "
                "request needs no tool.")
 ARGS_PROMPT = "(system) Fill in the arguments for {name} ({desc}). Use the user's own words, names, dates and numbers."
-REPEAT = ("ERROR: you already called {name} with these arguments this turn; its result is above. Answer from it "
-          "now, or call a different tool.")
+# The same call again this turn (it has its answer above), or a tool that has failed the same way twice: denied,
+# never run, and audited as rejected.
+REPEAT = "ERROR: same call again. Do not repeat it. Do the next step or answer."
 
 
 class ToolAgent:
@@ -471,7 +472,7 @@ class ToolAgent:
                     hit(t, "fake.detected")
                     if faked and self._can_escalate(t) and not t.changed:  # twice: the bigger model tries afresh
                         self._escalate(t, "the model wrote tool calls as text")
-                        t.calls_made, t.repeats = set(), 0
+                        t.calls_made, t.repeats, t.failed = set(), 0, Counter()
                         return await self._loop(start, t, part, budget, only)
                     if faked:
                         t.halt = "fail"
@@ -512,12 +513,16 @@ class ToolAgent:
             answers, final, done = [], None, []
             for call in calls:
                 sig = _signature(call)
-                if sig in t.calls_made:  # the same call again: it has its answer already
+                named = self.tools.get(call.get("function", {}).get("name", ""))
+                loop = "identical" if sig in t.calls_made else \
+                    "failing" if named and max((n for (x, _), n in t.failed.items() if x == named.name), default=0) >= 2 \
+                    else ""
+                if loop:  # the same call again, or a tool that keeps failing the same way: never run
                     t.repeats += 1
-                    hit(t, "repeat")
+                    hit(t, "repeat", loop)
                     if t.repeats > 1:
                         break
-                    prep, hold = REPEAT.format(name=call.get("function", {}).get("name", "")), ""
+                    prep, hold = REPEAT, ""
                 else:
                     t.calls_made.add(sig)
                     prep, hold = self._prepare(call), ""
@@ -578,6 +583,8 @@ class ToolAgent:
                     final = body if not body.startswith("(dry run") else \
                         f"(dry run) {tool.model_name} would answer here."
                 ok = tool and body is not None and not body.startswith("ERROR") and not isinstance(prep, str)
+                if not ok and tool and prep != REPEAT:  # how it failed, without the values in it
+                    t.failed[(tool.name, _gist(body if body is not None else result))] += 1
                 done.append(None if not ok else _done(tool.name, prep[1], body.startswith("(dry run"))
                             if tool.name in _DONE else _status(tool.name, prep[1], body))
             if t.repeats > 1:
@@ -590,7 +597,7 @@ class ToolAgent:
             t.bus.publish(Event("thinking", t.source, t.request_id, {"step": step + 1}))
         if self._can_escalate(t) and not t.changed:  # nothing was done yet: the bigger model tries it afresh
             self._escalate(t, "the model went in circles")
-            t.calls_made, t.repeats = set(), 0
+            t.calls_made, t.repeats, t.failed = set(), 0, Counter()
             return await self._loop(start, t, part, budget, only)
         # Claude only when the user asks for it
         claude = " Or say \"ask Claude\" and I'll put it to Claude." if any(
@@ -1169,6 +1176,7 @@ class _Turn:
     use_model: str = ""  # this turn's model when it was sent to the bigger one (LLM_ESCALATE_MODEL)
     escalated: bool = False  # sent once already: never twice
     repeats: int = 0
+    failed: Counter = field(default_factory=Counter)  # (tool, how it failed) -> times this turn (anti-loop)
     parts: list[str] | None = None  # outcomes of the parts done so far, while a request with several runs
     chain: dict | None = None  # the part running now: {"base", "steps", "i"} (kept with a spoken confirmation)
     halt: str = ""  # why the parts after this one don't run: "fail", or "ask" (waiting for a spoken yes)
@@ -1211,6 +1219,11 @@ def _keywords(said: str) -> str:
 def _personal(said: str) -> bool:
     """The earlier question was about the user's life or someone in it ("who is Pranav", "my sister")."""
     return bool(TOPIC.search(said) or ABOUT_ME.search(said) or re.search(r"\bwho(?:'s| is| was)\b", said, re.I))
+
+
+def _gist(error: str) -> str:
+    """An error's first sentence without the quoted values and numbers in it: "the same way" for the loop guard."""
+    return re.sub(r"'[^']*'|\"[^\"]*\"|\d+", "_", (error or "").split(". ")[0])[:160]
 
 
 def _signature(call: dict) -> tuple[str, str]:

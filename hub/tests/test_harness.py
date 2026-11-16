@@ -797,3 +797,48 @@ def test_a_tool_error_with_no_next_step_gets_one():
     ask(a, "notify me hi")
     sent = reg_llm.seen[1][-1]["content"]
     assert "socket closed" in sent and ACTIONABLE.search(sent)
+
+
+# ---------- anti-loop ----------
+from jarvis_hub.agent.tool_agent import REPEAT  # noqa: E402
+
+
+def test_an_identical_call_is_denied_never_run_and_audited():
+    assert REPEAT == "ERROR: same call again. Do not repeat it. Do the next step or answer."
+    llm = ScriptLLM([call("search_notes", query="gate code"), call("search_notes", query="gate code"),
+                     say("The gate code is 4411, sir.")])
+    a, ran = setup(llm)
+    assert ask(a, "find gate code in notes") == "The gate code is 4411, sir."
+    assert ran == [("kb_search", {"query": "gate code"})]
+    assert llm.seen[2][-1] == {"role": "tool", "tool_call_id": "c1", "content": REPEAT}
+    assert a.audit.recent()[0]["status"] == "rejected" and a.audit.recent()[0]["result"] == REPEAT
+    assert _hits(a)["repeat"] == 1 and _hits(a)["repeat.identical"] == 1
+
+
+def test_a_tool_failing_the_same_way_twice_is_not_called_a_third_time():
+    llm = ScriptLLM([call("send_notification", text="a"), call("send_notification", text="b"),
+                     call("send_notification", text="c"), say("The laptop is offline, sir.")])
+    a, ran = setup(llm)
+
+    async def offline(args, ctx):
+        ran.append(("notify", args))
+        return "ERROR: the laptop is offline. Tell the user; don't retry."
+    a.tools.get("notify").call = offline
+    assert ask(a, "notify me a") == "The laptop is offline, sir."
+    assert ran == [("notify", {"text": "a"}), ("notify", {"text": "b"})]  # the third never ran
+    assert llm.seen[3][-1]["content"] == REPEAT
+    assert _hits(a)["repeat.failing"] == 1
+
+
+def test_a_different_failure_or_a_success_doesnt_block_the_tool():
+    replies = iter(["ERROR: x is wrong. Call it again with y.", "ERROR: z is wrong. Call it again with w.", "ok"])
+    llm = ScriptLLM([call("send_notification", text="a"), call("send_notification", text="b"),
+                     call("send_notification", text="c"), say("Done, sir.")])
+    a, ran = setup(llm)
+
+    async def flaky(args, ctx):
+        ran.append(args)
+        return next(replies)
+    a.tools.get("notify").call = flaky
+    ask(a, "notify me a")
+    assert len(ran) == 3

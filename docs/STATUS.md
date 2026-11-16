@@ -80,3 +80,7 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    5 nearest (`guard/validate.py options()`: enums, timers, reminders, skills, pages, checks, tools). Errors whose
    text comes from elsewhere (exceptions, MCP servers, the bridge) get a plain next step at run time (`actionable()`).
    `test_every_error_names_the_next_action` scans the source so a new error can't skip it.
+4. **Anti-loop** [0 calls]: a call identical to one already made this turn (`_signature`), or any call to a tool
+   that has failed the same way twice this turn (same first sentence, values masked), gets
+   `ERROR: same call again. Do not repeat it. Do the next step or answer.`; it never runs and is audited as
+   `rejected`. A second such repeat ends the loop as before (escalate, or "going in circles").
