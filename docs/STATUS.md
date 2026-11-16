@@ -96,3 +96,12 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    `guard/refs.py`), in tool output after the audit has kept the real text; a ref in a call is mapped back before
    the checks, the run and the audit. An unknown ref or a raw id gets an error naming the ref to use; a raw id the
    user said themselves (off the HUD) is accepted. Approval ids never reach the model, so they need no ref.
+6. **Before-done contracts** [0 calls of their own]: what a turn must do is derived by code (`agent/contracts.py`):
+   a web search asked for by name, a save ("remember it", "remember that…", a save part), one part of a
+   request with several by its verb (timer, message, notes, a change), a fast-path action that failed, and a skill's
+   hand-written `mandatory_tools: [{name, min_calls, on_missing: force|undone|ignore}]` (YAML frontmatter; part of the
+   skill's pin, so adding it needs approval). Only calls that ran and succeeded count. A text reply with a contract
+   unmet doesn't end the turn: the tool is forced (the existing constrained pick in this step), and if that doesn't
+   do it, the reply is the truthful `UNDONE` line. A denial, timeout or policy block closes the contract; dry runs
+   and Claude record it without enforcing. Each turn's trace lists its contract and whether it was met.
+   Replaces the old `t.must` (explicit web, save part).

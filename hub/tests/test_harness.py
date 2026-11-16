@@ -1038,3 +1038,134 @@ def test_an_unknown_ref_or_a_raw_id_gets_an_error_it_can_recover_from():
     finally:
         for name in ("job_status", "cancel_job"):
             OPAQUE.pop(name, None)
+
+
+# ---------- before-done contracts (agent/contracts.py) ----------
+from jarvis_hub.agent.contracts import Need, part_need  # noqa: E402
+
+
+def run_with(a, text, **kw):
+    return asyncio.run(a.run(messages=[{"role": "user", "content": text}], source=Source.WEB,
+                             request_id="r1", bus=EventBus(), **kw))
+
+
+def test_a_parts_verb_says_what_it_must_do():
+    a, _ = setup(ScriptLLM([]))
+    offered = a.visible()
+    assert part_need("notify me saying stand up", offered).tools >= {"notify"}
+    assert part_need("remind me to stretch in 5 minutes", offered).kind == "timer"
+    assert part_need("save it to my notes", offered).kind == "notes"
+    assert part_need("pause the music", offered).tools == {"notify", "win_media", "kb_correct"}  # what changes things
+    assert part_need("tell me a joke", offered) is None and part_need("what time is it?", offered) is None
+    assert part_need("remind me what my name is", offered) is None
+
+
+def test_a_part_that_skips_its_tool_silently_is_held_to_it():
+    llm = ScriptLLM([call("media_control", key="play_pause"), say("Okay.")],
+                    [{"tool": "send_notification"}, {"text": "stand up"}])
+    a, ran = setup(llm)
+    ask(a, "pause the music and notify me saying stand up")
+    assert ran[-1] == ("notify", {"text": "stand up"})
+    assert _hits(a)["contract.part"] == 1
+
+
+def test_a_skill_mandatory_tool_is_forced_or_reported_undone():
+    must = [{"name": "notify", "min_calls": 1, "on_missing": "force"}, {"name": "no_such_tool"}]
+    llm = ScriptLLM([say("Here is the summary, sir.")], [{"tool": "send_notification"}, {"text": "summary"}])
+    a, ran = setup(llm)
+    run_with(a, "summarise my day", contract=must)
+    assert ran[-1] == ("notify", {"text": "summary"}) and _hits(a)["contract.skill"] == 1
+    llm = ScriptLLM([say("Here is the summary, sir.")])
+    a, ran = setup(llm)
+    reply = run_with(a, "summarise my day", contract=[{"name": "notify", "on_missing": "undone"}])
+    assert reply == "I haven't actually done that, sir." and ran == [] and llm.schemas == []
+    llm = ScriptLLM([say("Here is the summary, sir.")])
+    a, ran = setup(llm)
+    assert run_with(a, "summarise my day", contract=[{"name": "notify", "on_missing": "ignore"}]) == \
+        "Here is the summary, sir."
+
+
+def test_only_successful_calls_meet_a_contract_and_a_denial_closes_it():
+    # the forced call errors: not met, so the truth, not the model's words
+    llm = ScriptLLM([say("Here is the summary, sir."), say("All done, sir.")],
+                    [{"tool": "send_notification"}, {"text": "summary"}])
+    a, ran = setup(llm)
+
+    async def broken(args, ctx):
+        return "ERROR: the laptop is offline. Tell the user; don't retry."
+    a.tools.get("notify").call = broken
+    assert run_with(a, "summarise my day", contract=[{"name": "notify"}]) == "I haven't actually done that, sir."
+    assert _hits(a)["contract.undone"] == 1
+    # the user turned the call down: the contract is closed, nothing is forced again
+    llm = ScriptLLM([say("Here is the summary, sir."), say("Understood, sir; I won't send it.")],
+                    [{"tool": "send_notification"}, {"text": "summary"}])
+    a, ran = setup(llm)
+    a.gate = ApprovalGate(EventBus(), 0.05)
+    a.ask_for = frozenset({Risk.WRITE})
+    assert run_with(a, "summarise my day", contract=[{"name": "notify"}]) == "Understood, sir; I won't send it."
+    assert _hits(a)["contract.declined"] == 1
+    # a dry run records the contract, nothing more
+    llm = ScriptLLM([say("Here is the summary, sir.")])
+    a, ran = setup(llm)
+    assert run_with(a, "summarise my day", contract=[{"name": "notify"}], dry_run=True) == "Here is the summary, sir."
+    assert _hits(a)["contract.dry_run"] == 1
+
+
+def test_a_failed_fast_path_action_is_owed_by_the_model():
+    tries = []
+
+    async def flaky(args, ctx):
+        tries.append(args)
+        return "ERROR: busy. Call it again." if len(tries) == 1 else "shown"
+
+    class Fast:
+        def match(self, said):
+            return FastPlan("notify", [("notify", {"text": "hi"})], lambda r: "Shown, sir.") if "notify" in said else None
+    llm = ScriptLLM([say("Okay."), say("Shown, sir.")], [{"tool": "send_notification"}, {"text": "hi"}])
+    a, ran = setup(llm)
+    a.fast = Fast()
+    a.tools.get("notify").call = flaky
+    ask(a, "notify me hi")
+    assert tries == [{"text": "hi"}, {"text": "hi"}] and _hits(a)["contract.fastpath"] == 1
+
+
+def test_contracts_are_kept_in_the_trace():
+    llm = ScriptLLM([say("Here is the summary, sir.")], [{"tool": "send_notification"}, {"text": "summary"}])
+    a, _ = setup(llm)
+    a.traces = TraceStore(":memory:")
+    run_with(a, "summarise my day", contract=[{"name": "notify"}])
+    [turn] = a.traces.session(a.traces.sessions()[0]["session"])
+    assert turn["data"]["contract"][0]["tools"] == ["notify"] and turn["data"]["contract"][0]["met"]
+
+
+def test_skill_pages_carry_mandatory_tools_and_adding_one_needs_re_approval(tmp_path):
+    from jarvis_hub.automation.skills import SkillEngine
+    from jarvis_hub.config import Settings
+    from jarvis_hub.kb.graph import ObsidianVault
+
+    class Agent:
+        def __init__(self):
+            self.kw = []
+
+        async def run(self, **kw):
+            self.kw.append(kw)
+            return "done"
+    g = ObsidianVault(str(tmp_path / "kb"))
+    page = tmp_path / "kb" / "skills" / "Digest.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("---\ntrigger: manual\n---\n- Send me a digest.\n")
+    agent = Agent()
+    eng = SkillEngine(g, EventBus(), agent, Settings(_env_file=None), tmp_path / "skills.json")
+    eng.pin("skills/Digest")
+    [s] = eng.skills()
+    assert s["mandatory_tools"] == [] and not s["changed"]
+    asyncio.run(eng.run(s, "asked to run it now"))
+    assert "contract" not in agent.kw[0]  # nothing asked: agents without contracts work as before
+    page.write_text("---\ntrigger: manual\nmandatory_tools:\n  - name: notify\n    min_calls: 1\n"
+                    "    on_missing: force\n---\n- Send me a digest.\n")
+    g.reload() if hasattr(g, "reload") else None
+    [s] = eng.skills()
+    assert s["mandatory_tools"] == [{"name": "notify", "min_calls": 1, "on_missing": "force"}]
+    assert s["changed"]  # a hand edit that adds a contract is a change like any other
+    asyncio.run(eng.run(s, "asked to run it now"))
+    assert agent.kw[1]["contract"] == s["mandatory_tools"]

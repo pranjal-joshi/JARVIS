@@ -62,7 +62,9 @@ KNOWN: dict[str, str] = {
     "fake.detected": "tool markup written as text",
     "inline.recovered": "tool call written as text, run as a real call (agent/inline_calls.py)",
     "inline.unusable": "tool call written as text that couldn't be used: nudged (.unparsed / .not offered / .arguments)",
-    "pick": "constrained tool pick after a skipped tool (.claim / .must)",
+    "pick": "constrained tool pick after a skipped tool (.claim / .contract)",
+    "contract": "a text reply left a before-done contract unmet (.explicit_web / .save / .part / .fastpath / .skill;"
+                " .undone = the truth instead; .declined / .dry_run / .unenforced = not enforced)",
     "pick.none": "constrained pick found no tool",
     "repeat": "the same call again this turn",
     "escalate": "turn sent to the bigger model (.reason)",

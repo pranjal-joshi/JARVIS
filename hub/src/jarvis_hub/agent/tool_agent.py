@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from jarvis_hub.agent.claims import ACTION_CLAIM, KINDS, claimed_kind, kind_of
+from jarvis_hub.agent.contracts import NOTE_SAVES, Need, part_need, skill_needs
 from jarvis_hub.agent.fastpath import FastPaths
 from jarvis_hub.agent.fastpath import Plan as FastPlan
 from jarvis_hub.agent.inline_calls import BARE_CALL, parse_inline
@@ -247,14 +248,16 @@ class ToolAgent:
                   bus: EventBus, on_text: Callable[[str], None] | None = None,
                   on_event: Callable[[dict], None] | None = None, session: str | None = None,
                   dry_run: bool = False, untrusted: list[str] | None = None,
-                  trace_session: str | None = None, exclude: frozenset[str] = frozenset()) -> str:
+                  trace_session: str | None = None, exclude: frozenset[str] = frozenset(),
+                  contract: list | None = None) -> str:
         """on_text, if given, receives the reply as it is generated (new text only). The returned
         string is still the full, final reply; a tool-produced answer is never streamed.
         on_event receives voice cues: {"tool": name} when a tool starts, {"say": text} for a line to
         speak at once (an approval to give elsewhere). session names a satellite's conversation.
         dry_run: tools that change anything or send data out are not run, only recorded (evals, new skills).
         trace_session: the conversation this turn is kept under (audit/traces.py); None = a turn of its own.
-        exclude: tools this turn may not offer or call (a skill run can't manage skills)."""
+        exclude: tools this turn may not offer or call (a skill run can't manage skills).
+        contract: a skill's mandatory_tools ([{name, min_calls, on_missing}], agent/contracts.py)."""
         turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session, dry_run=dry_run,
                      model=str(getattr(self.llm, "model", "")), hide=frozenset(exclude))
         turn.trace_session = trace_session or f"{source}-{request_id[:12]}"
@@ -265,6 +268,8 @@ class ToolAgent:
         self._switch_back(turn)
         turn.messages_in = [dict(m) for m in messages]
         turn.tainted.extend(untrusted or [])  # an automation's event text (guard/hooks.py taint)
+        if contract:
+            self._owe(turn, skill_needs(contract, lambda name: self._usable(name, turn)))
         if session and self.sessions and (p := self.sessions.take(session)):
             yes = answer(_last_user(messages))
             if yes is not None:  # the answer to "Shall I go ahead, sir?"
@@ -291,6 +296,10 @@ class ToolAgent:
         if self.fast and (plan := self.fast.match(said)):
             if (reply := await self._fast(plan, turn)) is not None:
                 return reply
+            # an action the fast path knew but couldn't finish: the model owes it now
+            acts = [x for name, _ in plan.steps if (x := self._usable(name, turn)) and x.risk is not Risk.READ]
+            if acts:
+                self._owe(turn, [Need(frozenset(x.name for x in acts), "fastpath", kind_of(acts[0].name, False))])
         corrects = bool(CORRECTS.search(said)) and self.tools.get("kb_correct") is not None
         turn.correcting = corrects
         # a question isn't a statement, "?" or not ("which area of Pune do I live in" says "I live")
@@ -299,6 +308,8 @@ class ToolAgent:
         if states and not self._is_claude() and (reply := await self._capture(said, turn)):
             return reply
         hint = CORRECT_HINT if corrects else FACT_HINT if states else ""
+        if REMEMBER_THAT.match(said) and not corrects and (saves := self._usable_set(NOTE_SAVES, turn)):
+            self._owe(turn, [Need(saves, "save", "notes")])  # "remember that...", and capture didn't save it
         convo = [{"role": "system", "content": system_prompt(self._wit(turn), self.address) + "\n"
                   + source_hint(source) + self._known()}]
         convo += [dict(m) for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
@@ -340,7 +351,8 @@ class ToolAgent:
                                      *(f"The user said: {w}" for w in words)] if x).strip()
 
     async def _chain(self, base: list[dict], steps: list[str], t: "_Turn", start: int = 0,
-                     done: list[str] | None = None, convo: list[dict] | None = None) -> str:
+                     done: list[str] | None = None, convo: list[dict] | None = None,
+                     counted: Counter | None = None) -> str:
         """A request with several parts: each part is a short turn of its own, with the tools that match
         that part, told what is done and what to do now. The parts' outcomes make the reply; a part that
         fails stops the rest, and the reply says what wasn't done. convo: the first part's conversation,
@@ -357,7 +369,8 @@ class ToolAgent:
             else:
                 bare = i > 0 and bool(BARE_SAVE.match(steps[i]))  # "...then save it to my notes"
                 outcome = await self._loop(convo or _part_convo(base, steps, i, t.parts, carry), t, part=steps[i],
-                                           budget=PART_STEPS, only=NOTE_WRITES if bare else None)
+                                           budget=PART_STEPS, only=NOTE_WRITES if bare else None,
+                                           counted=counted if convo is not None else None)
                 # a part an earlier one already did ("tell me X, then notify me with it": the model notified in
                 # the first part) calls nothing and restates that outcome; saying it twice reads as two actions
                 if not t.halt and not any(c["tool_calls"] for c in t.loops[-1]["calls"]) and _restates(outcome, t.parts):
@@ -378,7 +391,7 @@ class ToolAgent:
         return self._reply(t, reply)
 
     async def _loop(self, convo: list[dict], t: "_Turn", part: str = "", budget: int = MAX_STEPS,
-                    only: frozenset[str] | None = None) -> str:
+                    only: frozenset[str] | None = None, counted: Counter | None = None) -> str:
         """part: one part of a request with several (see _chain): tools are matched on it alone, and
         nothing streams, since the reply is put together from every part. only: offer just these tools."""
         if t.route != "confirm":
@@ -403,13 +416,20 @@ class ToolAgent:
             convo += looked
             hit(t, "look_first")
         faked = claimed = forced = emptied = ahead = False
-        web = self.tools.get("web_search")
-        t.must = "web_search" if web and web.name not in self.hidden and not only and \
-            EXPLICIT_WEB.search(part or t.said) else ""
-        if only and part:  # "...then save it to notes": a part that is only the save, so one note write must happen
-            t.must = "a note write"
-        if t.must == "web_search":
+        # what this loop must do before a text reply may end it (agent/contracts.py)
+        needs = []
+        if not only and EXPLICIT_WEB.search(part or t.said) and (web := self._usable_set({"web_search"}, t)):
+            needs.append(Need(web, "explicit_web", "web"))  # "search ... on github": asked for by name
             hit(t, "explicit_web")
+        if only and (saves := self._usable_set(only, t)):  # "remember it", "...then save it to my notes"
+            needs.append(Need(saves, "save", "notes"))
+        elif part and (pn := part_need(part, offered)):
+            needs.append(pn)
+        for n in needs:
+            n.base = n.done(counted if counted is not None else t.succeeded)  # a part counts its own calls
+        t.contract += needs
+        last = not t.chain or t.chain["i"] == len(t.chain["steps"]) - 1
+        needs = needs + (t.needs if last else [])  # the turn's own (skill, fast path) at its end
         for step in range(budget):
             streamed = []
             gate = SentenceGate(lambda x: (streamed.append(x), t.on_text(x)), t.source, self._wit(t),
@@ -447,28 +467,39 @@ class ToolAgent:
                 convo.append({"role": "user", "content": PART_NUDGE.format(n=t.chain["i"] + 1 if t.chain else 1)})
                 continue
             claims = kind is not None
-            # asked for a web search by name and answered without one (said, or asked for a link instead)
-            must = not calls and not forced and bool(t.must) and not claims and self._skipped_tool("x", True, t) \
-                and t.must not in {name for name, _ in t.calls_made} \
-                and not (t.must == "a note write" and any(c["tool_calls"] for c in t.loops[-1]["calls"][:-1]))
+            need = self._unmet(needs, t) if not calls and not _fakes_tool_use(raw) else None
+            if need and forced:  # the one forced call didn't do it: the truth, not the model's words
+                if streamed:
+                    t.on_text(None)
+                t.halt = "fail"
+                hit(t, "contract", "undone")
+                return self._reply(t, need.undone)
             skipped = not calls and not forced and not _fakes_tool_use(raw) and \
-                (self._skipped_tool(raw, claims, t) or must)
+                (need is not None or self._skipped_tool(raw, claims, t))
             if gate and not calls and not _fakes_tool_use(raw) and not claims and not skipped:
                 gate.flush()
             if skipped:
                 forced = True
-                calls = await self._pick_tool(convo, (offered if t.must == "a note write" else [web]) if must
-                                              else self._pool(kind, offered), t)
+                if need:
+                    hit(t, "contract", need.why)
+                    pool = [x for name in sorted(need.tools) if (x := self._usable(name, t))]
+                else:
+                    pool = self._pool(kind, offered)
+                can = pool and not (need and need.on_missing == "undone") and hasattr(self.llm, "json")
+                calls = await self._pick_tool(convo, pool, t) if can else []
                 t.loops[-1]["calls"][-1]["picked"] = [c["function"] for c in calls]  # the constrained pick
-                hit(t, "pick", "must" if must else "claim")
-                if not calls:
-                    hit(t, "pick.none")
-                if not calls and claims:  # it claimed an action and no tool fits: don't pass the claim on
+                if can:
+                    hit(t, "pick", "contract" if need else "claim")
+                    if not calls:
+                        hit(t, "pick.none")
+                if not calls and (claims or need):  # nothing fits: don't pass the claim (or the skip) on
                     if streamed:
                         t.on_text(None)
                     t.halt = "fail"
                     hit(t, "undone", kind or "")
-                    return self._reply(t, UNDONE.get(kind, NOT_DONE))
+                    if need:
+                        hit(t, "contract", "undone")
+                    return self._reply(t, need.undone if need else UNDONE.get(kind, NOT_DONE))
             if calls and streamed or (not calls and _fakes_tool_use(raw) and streamed):
                 t.on_text(None)  # what streamed was not the answer after all: tell the client to drop it
             if not calls:
@@ -627,6 +658,7 @@ class ToolAgent:
         if tool.origin in SLOW_ORIGINS:
             self._background(tool, p.args, "voice", t)
             return self._reply(t, "Right away, sir. I'll tell you when the answer is in.")
+        counted = Counter(t.succeeded)  # the confirmed call counts for the part it belongs to
         result = await self._run(tool, p.args, "voice", t)
         convo = [*p.convo, {"role": "tool", "tool_call_id": p.call_id, "content": result}]
         if p.chain:  # a part of a request with several: finish it, then the parts after it
@@ -634,8 +666,9 @@ class ToolAgent:
             t.said, t.heard = c["said"], c["heard"]  # what the checks on the later parts go by
             t.tainted.extend(c["tainted"])  # outside text read before the pause still counts
             t.read_outside.extend(c.get("read_outside", []))
-            return await self._chain(c["base"], c["steps"], t, start=c["i"], done=c["done"], convo=convo)
-        return await self._loop(convo, t)
+            return await self._chain(c["base"], c["steps"], t, start=c["i"], done=c["done"], convo=convo,
+                                     counted=counted)
+        return await self._loop(convo, t, counted=counted)
 
     async def run_orphan(self, p) -> None:
         """An approval left over from before a restart was approved: run it now and say what happened."""
@@ -783,6 +816,35 @@ class ToolAgent:
             hit(t, "route_note", "journal")
             return journal, {"text": text}
         return prep
+
+    def _usable(self, name: str, t: "_Turn") -> Tool | None:
+        """The tool, if this turn may call it."""
+        tool = self.tools.get(name)
+        return tool if tool and tool.name not in self.hidden and tool.name not in t.hide else None
+
+    def _usable_set(self, names, t: "_Turn") -> frozenset[str]:
+        return frozenset(x.name for n in names if (x := self._usable(n, t)))
+
+    def _owe(self, t: "_Turn", needs: list[Need]) -> None:
+        """Needs of the whole turn: checked when its last model loop answers in words."""
+        t.needs += needs
+        t.contract += needs
+
+    def _unmet(self, needs: list[Need], t: "_Turn") -> Need | None:
+        """The first need a text reply leaves unmet and that is enforced here; None when there is none. A need is
+        not enforced once the user, a timeout or the policy turned its tool down, in a dry run, or with Claude."""
+        for n in needs:
+            if n.on_missing == "ignore" or n.met(t.succeeded):
+                continue
+            why = "declined" if n.closed(t.declined) else "dry_run" if t.dry_run else \
+                "unenforced" if self._is_claude() else ""
+            if why:
+                if id(n) not in t.noted_needs:
+                    t.noted_needs.add(id(n))
+                    hit(t, "contract", why)
+                continue
+            return n
+        return None
 
     def _pool(self, kind: str | None, offered: list[Tool]) -> list[Tool]:
         """The tools a claimed action needs: every tool of that kind, offered or not ("I've saved that" picks from
@@ -1075,6 +1137,7 @@ class ToolAgent:
             d = PolicyDecision("ask", hold, "hook")
         t.trace.append({"tool": name, "decision": d.action, "rule": d.rule, "why": d.why})
         if d.action == "deny":
+            t.declined.add(name)
             self.audit.record(request_id=t.request_id, source=t.source, tool=name, risk=tool.risk, arguments=args,
                               status="blocked", approved_by=None, result=d.why or d.rule)
             t.bus.publish(Event("tool_result", t.source, t.request_id, {"tool": name, "status": "blocked"}))
@@ -1093,6 +1156,7 @@ class ToolAgent:
         if decision.approved:
             return decision.by
         status = "timeout" if decision.by == "timeout" else "denied"
+        t.declined.add(name)
         self.audit.record(request_id=t.request_id, source=t.source, tool=name,
                           risk=tool.risk, arguments=args, status=status, approved_by=None)
         t.bus.publish(Event("tool_result", t.source, t.request_id, {"tool": name, "status": status}))
@@ -1119,6 +1183,8 @@ class ToolAgent:
             output = actionable(output)
         output = output[:MAX_TOOL_RESULT_CHARS]
         t.called = True
+        if status == "ok":  # what a contract counts (agent/contracts.py): not errors, refusals or dry runs
+            t.succeeded[name] += 1
         for hook in POST_TOOL:  # guard/hooks.py: records outside text (taint)
             output = hook(tool, args, output, t)
         t.seen.append(output)
@@ -1180,7 +1246,9 @@ class ToolAgent:
                 said=t.said, reply=text,
                 data={"messages": t.messages_in, "loops": [self._kept(loop) for loop in t.loops],
                       "trace": t.trace, "intent": t.intent, "dry_run": t.dry_run, "tainted": bool(t.tainted),
-                      "hits": dict(Counter(t.hits))})
+                      "hits": dict(Counter(t.hits)),
+                      "contract": [{**n.view(), "met": n.met(t.succeeded), "declined": n.closed(t.declined)}
+                                   for n in t.contract]})
         except Exception:
             log.exception("turn %s not traced", t.request_id)
 
@@ -1239,7 +1307,11 @@ class _Turn:
     halt: str = ""  # why the parts after this one don't run: "fail", or "ask" (waiting for a spoken yes)
     trace_session: str = ""  # the conversation this turn is kept under (audit/traces.py)
     links: list = field(default_factory=list)  # links to keep in a note saved this turn (guard/hooks.py)
-    must: str = ""  # a tool the user asked for by name ("search ... on github"): picked if the model skips it
+    needs: list = field(default_factory=list)  # the turn's own contract (skill, fast path, remember that)
+    contract: list = field(default_factory=list)  # every need this turn, for the trace (agent/contracts.py)
+    succeeded: Counter = field(default_factory=Counter)  # internal tool name -> calls that ran and succeeded
+    declined: set = field(default_factory=set)  # tools a human, a timeout or the policy turned down this turn
+    noted_needs: set = field(default_factory=set)  # needs already counted as not enforced
     messages_in: list = field(default_factory=list)  # what the client sent
     loops: list = field(default_factory=list)  # each model loop: part, tools offered, calls, conversation
     hits: list = field(default_factory=list)  # harness mechanisms that fired this turn (audit/harness.py)
