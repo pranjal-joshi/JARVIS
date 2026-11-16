@@ -84,3 +84,11 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    that has failed the same way twice this turn (same first sentence, values masked), gets
    `ERROR: same call again. Do not repeat it. Do the next step or answer.`; it never runs and is audited as
    `rejected`. A second such repeat ends the loop as before (escalate, or "going in circles").
+5. **Live enums** [0 model calls; at most one audited GetLiveContext read a minute]: offered tools carry the
+   current valid values of live arguments as a JSON-schema `enum` when there are 1–30 (running timer labels for
+   cancel_timer, page names for read_page, skill names for the skill tools, Home Assistant device names for its
+   Assist tools' `name`, by domain). Above 30, or with Claude (tool list kept stable), nothing is added and the
+   resolvers work as before. The argument check holds the call to what was shown: a case slip is fixed, a value the
+   resolver doesn't place gets the 5 nearest (timers, pages, skills; HA names pass through, as the cache can lag).
+   HA names are read only when the policy lets GetLiveContext run unasked, are audited (`harness:live-enum`), and
+   mark the turn as having read Home Assistant's data, so a change naming a device the user didn't say still asks.

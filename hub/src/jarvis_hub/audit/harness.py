@@ -28,6 +28,9 @@ KNOWN: dict[str, str] = {
     "hook.after_outside_text": "change after reading outside text held for a human",
     # resolvers (guard/validate.py)
     "resolver": "a live-value resolver ran (.fixed / .error / .none and .<tool>)",
+    # live enums (guard/validate.py live_enum)
+    "live_offered": "current values offered as an enum (.tool)",
+    "live": "a live value fixed (.fixed, case) or refused (.error, not among them)",
     # tool selection (agent/tool_select.py)
     "wants.url": "a link in the request offered fetch_page and web_search",
     "wants.web": "web words offered web_search",

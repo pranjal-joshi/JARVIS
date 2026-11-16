@@ -127,7 +127,7 @@ def carried(args: dict, tainted: list[str], heard: str) -> str:
 # ---------- the hooks ----------
 def arguments(tool, args, t) -> Verdict | None:
     """Types, enum spelling and live names (guard/validate.py), fixed where that needs no guessing."""
-    fixed, error = check(tool, args, getattr(t, "hits", None))
+    fixed, error = check(tool, args, getattr(t, "hits", None), (getattr(t, "live", None) or {}).get(tool.name))
     if error:
         return Verdict("error", error)
     if fixed is not None:

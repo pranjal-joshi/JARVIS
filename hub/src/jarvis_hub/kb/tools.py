@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.events.bus import Event
-from jarvis_hub.guard.validate import actionable, best_name, resolver
+from jarvis_hub.guard.validate import actionable, best_name, live_enum, resolver
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
@@ -262,6 +262,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         hit = best_name(wanted, [p.name for p in graph.pages()])
         return {**args, "page": hit} if hit else None
     resolver("kb_read_page", page_name)
+    live_enum("kb_read_page", "page", lambda: [p.name for p in graph.pages()])  # only offered with 30 or fewer
 
     def undated(args: dict) -> dict | None:  # the journal entry is dated already: drop today's date copied in
         text = str(args.get("text", ""))

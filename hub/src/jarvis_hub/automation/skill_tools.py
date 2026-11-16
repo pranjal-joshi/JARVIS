@@ -11,7 +11,7 @@ import time
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.automation.skills import DAILY, EVERY, NS, RUN_SOURCE, TRIGGERS, SkillEngine
 from jarvis_hub.events.bus import Event
-from jarvis_hub.guard.validate import best_name, options, resolver
+from jarvis_hub.guard.validate import best_name, live_enum, options, resolver
 from jarvis_hub.kb.graph import ObsidianVault, frontmatter
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
@@ -218,6 +218,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: Obsidian
         return {**args, "name": s["name"]} if s else None
     for name in ("update_skill", "delete_skill", "enable_skill", "run_skill"):
         resolver(name, known)
+        live_enum(name, "name", lambda: [s["name"][len(NS):] for s in engine.skills()])
 
     named = {"name": {"type": "string", "description": "the skill's name, e.g. hello world"}}
     shape = {"trigger": {"type": "string", "enum": sorted(TRIGGERS),

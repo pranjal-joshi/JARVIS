@@ -26,7 +26,7 @@ import httpx
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event
-from jarvis_hub.guard.validate import actionable, best_name, options, resolver
+from jarvis_hub.guard.validate import actionable, best_name, live_enum, options, resolver
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.kb.tools import missing_page
@@ -457,6 +457,7 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         hit = best_name(str(args.get("label", "")), [t["label"] for t in timers.active.values()])
         return {**args, "label": hit} if hit else None
     resolver("cancel_timer", running_label)
+    live_enum("cancel_timer", "label", lambda: [t["label"] for t in timers.active.values()])
     reg.add(Tool("kb_forget", "builtin",
                  "Forget a whole page of your memories. Use for: 'forget your preferences page'. Needs approval.",
                  _obj({"page": {"type": "string", "description": "e.g. jarvis/preferences"}}, ["page"]),

@@ -29,7 +29,8 @@ from jarvis_hub.guard.hooks import (ABOUT_TIME, CURRENT, LINK, POST_TOOL, PRE_TO
                                      unsaid)
 from jarvis_hub.guard.policy import Decision as PolicyDecision
 from jarvis_hub.guard.policy import Policy
-from jarvis_hub.guard.validate import actionable, check, options
+from jarvis_hub.devices.ha_names import OUTSIDE as HA_NAMES, HANames
+from jarvis_hub.guard.validate import LIVE, actionable, check, live_values, options, with_enums
 from jarvis_hub.llm.client import LLMClient, LLMError, RateLimited
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.persona.jarvis import source_hint, system_prompt
@@ -214,6 +215,7 @@ class ToolAgent:
         # each conversation's last turn: what the tools returned, for "remember it" next turn
         self._last: dict[str, dict] = {}
         self.stats = HarnessStats(traces)  # harness counters (audit/harness.py)
+        self.ha_names = HANames(self._live_read)  # Home Assistant's device names, for live enums (devices/ha_names.py)
 
     @property
     def ask_for(self) -> frozenset[Risk]:
@@ -387,7 +389,7 @@ class ToolAgent:
                 and t.ranking.best[1] < self.escalate_below:
             self._escalate(t, f"tool selection unsure (best {t.ranking.best[0]} {t.ranking.best[1]:.2f})")
         offered = t.ranking.tools
-        schemas = [tool.openai_schema() for tool in offered]
+        schemas = await self._schemas(offered, t)
         # for the trace: convo is kept by reference, so it ends as the model last saw it
         t.loops.append({"part": part, "offered": [x.model_name for x in offered], "convo": convo, "calls": []})
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0}))
@@ -820,6 +822,49 @@ class ToolAgent:
         t.trace.append({"tool": tool.name, "decision": "picked", "rule": "harness", "why": "the model skipped the tool"})
         return [{"id": "pick-1", "type": "function", "function": {"name": name, "arguments": json.dumps(args or {})}}]
 
+    async def _schemas(self, offered: list[Tool], t: "_Turn") -> list[dict]:
+        """The offered tools' schemas, with the current valid values of live arguments as enums (guard/validate.py
+        live_enum; Home Assistant's device names for its Assist tools). What was shown is kept on the turn, and the
+        argument check holds the call to it. Claude's tool list stays as it is (and cacheable)."""
+        if self._is_claude():
+            return [x.openai_schema() for x in offered]
+        out = []
+        for tool in offered:
+            fns = dict(LIVE.get(tool.name, {}))
+            if (ha := self._ha_live(tool)) is not None:
+                fns.setdefault("name", ha)
+            live = await live_values(fns, t) if fns else {}
+            if live:
+                t.live[tool.name] = live
+                hit(t, "live_offered", tool.name)
+                if ha is not None and "name" in live and HA_NAMES not in t.read_outside:
+                    t.read_outside.append(HA_NAMES)  # Home Assistant's data: outside text (guard/hooks.py)
+            out.append(with_enums(tool.openai_schema(), live))
+        return out
+
+    def _ha_live(self, tool: Tool):
+        """(values fn, not strict) for a Home Assistant Assist tool's name, or None."""
+        server, _, action = tool.name.partition("__")
+        context = self.tools.get(f"{server}__GetLiveContext")
+        if tool.origin != "homeassistant" or not action.startswith("Hass") or context is None \
+                or context.name in self.hidden or "name" not in ((tool.parameters or {}).get("properties") or {}):
+            return None
+        return (lambda turn: self.ha_names.names(context, action, turn)), False
+
+    async def _live_read(self, tool: Tool, t: "_Turn") -> str | None:
+        """A read for live values: only when the policy lets it run unasked; audited like any call."""
+        if self.policy.decide(tool, {}, t.source, self.audit).action != "allow":
+            return None
+        try:
+            out = await tool.call({}, ToolCtx(t.bus, t.source, t.request_id, session=t.session or "", said=t.said or ""))
+            status = "error" if out.startswith("ERROR") else "ok"
+        except Exception as e:
+            log.warning("live values from %s failed: %s", tool.name, e)
+            out, status = actionable(f"ERROR: {e}"), "error"
+        self.audit.record(request_id=t.request_id, source=t.source, tool=tool.name, risk=tool.risk, arguments={},
+                          status=status, approved_by="harness:live-enum", result=audit_text(tool, out))
+        return out if status == "ok" else None
+
     def _recover(self, text: str, offered: list[Tool], t: "_Turn") -> list[dict]:
         """Tool calls the model wrote as text, as real calls, when every one names a tool offered this turn and
         its arguments pass the same checks a real call's do (_prepare, then coerce and the resolvers). They then
@@ -840,7 +885,7 @@ class ToolAgent:
                 hit(t, "inline.unusable", "not offered")
                 return []
             prep = self._prepare(call)
-            if isinstance(prep, str) or check(*prep)[1]:
+            if isinstance(prep, str) or check(*prep, live=t.live.get(prep[0].name))[1]:
                 hit(t, "inline.unusable", "arguments")
                 return []
             calls.append(call)
@@ -1176,6 +1221,7 @@ class _Turn:
     use_model: str = ""  # this turn's model when it was sent to the bigger one (LLM_ESCALATE_MODEL)
     escalated: bool = False  # sent once already: never twice
     repeats: int = 0
+    live: dict = field(default_factory=dict)  # tool -> {arg: (values, strict)} offered as enums this turn
     failed: Counter = field(default_factory=Counter)  # (tool, how it failed) -> times this turn (anti-loop)
     parts: list[str] | None = None  # outcomes of the parts done so far, while a request with several runs
     chain: dict | None = None  # the part running now: {"base", "steps", "i"} (kept with a spoken confirmation)
