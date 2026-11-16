@@ -15,6 +15,7 @@ from datetime import datetime
 from jarvis_hub.agent.claims import ACTION_CLAIM, KINDS, claimed_kind, kind_of
 from jarvis_hub.agent.fastpath import FastPaths
 from jarvis_hub.agent.fastpath import Plan as FastPlan
+from jarvis_hub.agent.inline_calls import BARE_CALL, parse_inline
 from jarvis_hub.agent.plan import plan_steps
 from jarvis_hub.agent.style import SentenceGate, address, tidy
 from jarvis_hub.agent.tool_select import Ranking, ToolSelector
@@ -28,6 +29,7 @@ from jarvis_hub.guard.hooks import (ABOUT_TIME, CURRENT, LINK, POST_TOOL, PRE_TO
                                      unsaid)
 from jarvis_hub.guard.policy import Decision as PolicyDecision
 from jarvis_hub.guard.policy import Policy
+from jarvis_hub.guard.validate import check
 from jarvis_hub.llm.client import LLMClient, LLMError, RateLimited
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.persona.jarvis import source_hint, system_prompt
@@ -421,6 +423,9 @@ class ToolAgent:
                 {"name": c.get("function", {}).get("name"), "arguments": c.get("function", {}).get("arguments")}
                 for c in calls]})
             raw = _strip_think(msg.get("content") or "").strip()
+            if not calls and (calls := self._recover(raw, offered, t)):
+                # a call written as text: run it as the real call it is (agent/inline_calls.py)
+                t.loops[-1]["calls"][-1]["recovered"] = [c["function"]["name"] for c in calls]
             kind = _claimed(raw, t)  # "that's committed to memory", "timer set" with nothing done
             if kind and part and not calls and any(c["tool_calls"] for c in t.loops[-1]["calls"][:-1]):
                 # a part that did its own work and talks ahead ("searched it and saved it to your notes"): the
@@ -806,6 +811,37 @@ class ToolAgent:
         log.info("constrained pick: %s %s", name, json.dumps(args)[:200])
         t.trace.append({"tool": tool.name, "decision": "picked", "rule": "harness", "why": "the model skipped the tool"})
         return [{"id": "pick-1", "type": "function", "function": {"name": name, "arguments": json.dumps(args or {})}}]
+
+    def _recover(self, text: str, offered: list[Tool], t: "_Turn") -> list[dict]:
+        """Tool calls the model wrote as text, as real calls, when every one names a tool offered this turn and
+        its arguments pass the same checks a real call's do (_prepare, then coerce and the resolvers). They then
+        go through the normal path: hooks, policy, approval, taint and audit. [] when there are none or any can't
+        be used: a fake is then nudged as before."""
+        parsed = parse_inline(text)
+        if parsed is None:
+            if _fakes_tool_use(text):
+                hit(t, "inline.unusable", "unparsed")
+            return []
+        offered_names = {x.name for x in offered}
+        calls = []
+        for i, p in enumerate(parsed, 1):
+            tool = self.tools.get(p["name"])
+            call = {"id": f"inline-{i}", "type": "function",
+                    "function": {"name": tool.model_name if tool else p["name"], "arguments": json.dumps(p["arguments"])}}
+            if tool is None or tool.name not in offered_names or tool.name in t.hide:
+                hit(t, "inline.unusable", "not offered")
+                return []
+            prep = self._prepare(call)
+            if isinstance(prep, str) or check(*prep)[1]:
+                hit(t, "inline.unusable", "arguments")
+                return []
+            calls.append(call)
+        hit(t, "inline.recovered")
+        for c in calls:
+            log.info("ran a tool call written as text: %s", c["function"]["name"])
+            t.trace.append({"tool": self.tools.get(c["function"]["name"]).name, "decision": "recovered",
+                            "rule": "inline tool call", "why": "written as text; run as a real call"})
+        return calls
 
     def _rejected(self, call: dict, why: str, t: "_Turn") -> None:
         """A call refused before it ran (unknown tool, bad arguments, a hook): kept in the audit, so the
@@ -1336,7 +1372,7 @@ def _unfence(result: str) -> str | None:
 def _fakes_tool_use(text: str) -> bool:
     """True when a reply imitates tool markup instead of using the tools interface."""
     lowered = text.lower()
-    return any(m in lowered for m in FAKE_TOOL_MARKERS)
+    return any(m in lowered for m in FAKE_TOOL_MARKERS) or bool(BARE_CALL.match(text))
 
 
 def _speakable_stream(emit: Callable[[str], None]) -> Callable[[str], None]:
@@ -1354,6 +1390,11 @@ def _speakable_stream(emit: Callable[[str], None]) -> Callable[[str], None]:
         if "<think>" in full and "</think>" not in full:
             return
         visible = _strip_think(full).lstrip()
+        if visible.startswith("{"):  # maybe a tool call written as bare JSON (agent/inline_calls.py)
+            if BARE_CALL.match(visible):
+                dead = True
+            if dead or len(visible) < 16:
+                return
         if (lt := visible.rfind("<")) > -1 and lt >= len(visible) - 16 and ">" not in visible[lt:]:
             visible = visible[:lt]
         if len(visible) > sent:

@@ -646,3 +646,78 @@ def test_harness_stats_endpoint(client):
     rows = {c["name"]: c for c in r.json()["counters"]}
     assert rows["hook.arguments"]["count"] == 1 and rows["hook.arguments"]["about"]
     assert client.get("/v1/harness/stats", headers=auth("sat-token")).status_code == 403
+
+
+# ---------- inline tool calls (agent/inline_calls.py) ----------
+from jarvis_hub.agent.inline_calls import parse_inline  # noqa: E402
+from jarvis_hub.agent.tool_agent import FAKE_TOOL_NUDGE, _speakable_stream  # noqa: E402
+
+
+def test_inline_calls_parse_in_every_shape_a_small_model_writes():
+    want = [{"name": "send_notification", "arguments": {"text": "hi"}}]
+    assert parse_inline('<tool_call>\n{"name": "send_notification", "arguments": {"text": "hi"}}\n</tool_call>') == want
+    assert parse_inline('Sure, sir. {"name": "send_notification", "arguments": "{\\"text\\": \\"hi\\"}"}') == want
+    assert parse_inline('{"name": "send_notification", "parameters": {"text": "hi"}}') == want
+    assert parse_inline('<function=send_notification>\n<parameter=text>\nhi\n</parameter>\n</function>') == want
+    assert parse_inline('<function=send_notification>{"text": "hi"}</function>') == want
+    assert parse_inline('<function_call>{"function": {"name": "send_notification", "arguments": {"text": "hi"}}}'
+                        '</function_call>') == want
+    assert parse_inline("<tool_call>\n{\"name\": \"send_notification\", \"arguments\": {\"text\": \"hi\"}}\n"
+                        "</tool_call>\n<tool_call>{\"name\": \"get_time\", \"arguments\": {}}</tool_call>") == \
+        want + [{"name": "get_time", "arguments": {}}]
+    assert parse_inline('<tool_result tool="notify">Sent.</tool_result> Done, sir.') is None  # a result, no call
+    assert parse_inline("<tool_call>{broken json</tool_call>") is None
+    assert parse_inline('The JSON is {"a": 1}.') is None  # JSON, but not a call
+    assert parse_inline("Plain answer, sir.") is None
+
+
+def test_an_inline_call_runs_as_a_real_one_through_the_gate_and_audit():
+    for text in ('<tool_call>{"name": "send_notification", "arguments": {"text": "stand up"}}</tool_call>',
+                 '{"name": "send_notification", "arguments": {"text": "stand up"}}',
+                 "<function=send_notification><parameter=text>stand up</parameter></function>"):
+        llm = ScriptLLM([say(text)])
+        a, ran = setup(llm)
+        a.traces = TraceStore(":memory:")
+        reply = ask(a, "ping my laptop saying stand up")
+        assert reply == 'I\'ve sent the notification "stand up", sir.', text
+        assert ran == [("notify", {"text": "stand up"})]
+        assert a.audit.recent()[0]["status"] == "ok" and a.audit.recent()[0]["approved_by"] == "policy"
+        [turn] = a.traces.session(a.traces.sessions()[0]["session"])
+        assert turn["data"]["loops"][0]["calls"][0]["recovered"] == ["send_notification"]
+        assert any(x["decision"] == "recovered" for x in turn["data"]["trace"])
+        assert _hits(a)["inline.recovered"] == 1 and _hits(a).get("nudge.fake", 0) == 0
+
+
+def test_an_inline_call_still_needs_approval_when_the_policy_asks():
+    llm = ScriptLLM([say('<tool_call>{"name": "send_notification", "arguments": {"text": "hi"}}</tool_call>'),
+                     say("It wasn't approved, sir.")])
+    a, ran = setup(llm)
+    a.gate = ApprovalGate(EventBus(), 0.05)
+    a.ask_for = frozenset({Risk.WRITE})
+    assert ask(a, "notify me hi") == "It wasn't approved, sir."
+    assert ran == [] and a.audit.recent()[0]["status"] == "timeout"
+
+
+def test_an_inline_call_that_cant_run_is_nudged_not_run():
+    cases = ['<tool_call>{"name": "get_time", "arguments": {}}</tool_call>',  # hidden this turn (not about time)
+             '<tool_call>{"name": "rm_rf", "arguments": {}}</tool_call>',  # no such tool
+             '<tool_call>{"name": "media_control", "arguments": {"key": "louder"}}</tool_call>',  # invalid value
+             '<tool_call>{"name": "send_notification", "arguments": {}}</tool_call>',  # missing a required one
+             '<tool_call>{"name": "send_notification", "arguments": {"text": "hi"}</tool_call>']  # broken JSON
+    for text in cases:
+        llm = ScriptLLM([say(text), say("Hello, sir.")])
+        a, ran = setup(llm)
+        assert ask(a, "hello there") == "Hello, sir.", text
+        assert ran == [] and llm.seen[1][-1]["content"] == FAKE_TOOL_NUDGE, text
+        assert _hits(a)["nudge.fake"] == 1 and _hits(a)["inline.unusable"] == 1, text
+
+
+def test_a_bare_json_call_is_not_streamed_to_the_client():
+    out = []
+    feed = _speakable_stream(out.append)
+    for piece in ('{"name": "send_', '{"name": "send_notification", "arguments": {}}'):
+        feed(piece)
+    assert out == []
+    feed2 = _speakable_stream(out.append)
+    feed2("Hello, sir.")
+    assert out == ["Hello, sir."]

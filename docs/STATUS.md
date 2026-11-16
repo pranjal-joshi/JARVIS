@@ -70,3 +70,8 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    escalation and fake-tool detection counts its hits per turn (`hits` in the turn's trace) and in total
    (`harness_hits` in traces.db, kept even with `TRACE_DAYS=0`: names and counts only).
    `GET /v1/harness/stats` lists every counter with its last hit; `never_hit` names the candidates to prune.
+2. **Inline tool-call recovery** [saves the nudge call]: a call written as text (`<tool_call>`, bare
+   `{"name", "arguments"}`, `<function=..>` with JSON or `<parameter=..>`, `<function_call>`) is parsed
+   (`agent/inline_calls.py`) and, if every call names a tool offered this turn and passes `_prepare` + `check`,
+   run as a real call through hooks, policy, approval, taint and audit. Marked `recovered` in the trace;
+   otherwise `FAKE_TOOL_NUDGE` as before. A reply starting as bare call JSON is no longer streamed.

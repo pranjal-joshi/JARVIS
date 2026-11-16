@@ -55,6 +55,8 @@ KNOWN: dict[str, str] = {
     "nudge.part": "a part talked ahead of later parts: asked again",
     # detections and recoveries
     "fake.detected": "tool markup written as text",
+    "inline.recovered": "tool call written as text, run as a real call (agent/inline_calls.py)",
+    "inline.unusable": "tool call written as text that couldn't be used: nudged (.unparsed / .not offered / .arguments)",
     "pick": "constrained tool pick after a skipped tool (.claim / .must)",
     "pick.none": "constrained pick found no tool",
     "repeat": "the same call again this turn",
