@@ -560,3 +560,89 @@ def test_notes_accept_other_words_for_saving_and_a_fair_rewording():
                                                       "all based in Pune."}, T) is None
     made_up = {"page": "Sanika", "text": "Xoriant is a Silicon Valley product engineering firm founded in 1990."}
     assert "nobody said" in own_words(page, made_up, T).message  # still not the model's own knowledge
+
+
+# ---------- telemetry (audit/harness.py) ----------
+from jarvis_hub.agent.fastpath import Plan as FastPlan  # noqa: E402
+from jarvis_hub.audit.harness import KNOWN, HarnessStats  # noqa: E402
+from jarvis_hub.audit.traces import TraceStore  # noqa: E402
+
+
+class ChatOnly(ScriptLLM):
+    json = None  # a server without schema-constrained output
+
+    def __getattribute__(self, name):
+        if name == "json":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
+def _hits(a):
+    return {c["name"]: c["count"] for c in a.stats.snapshot()["counters"]}
+
+
+def test_each_turn_keeps_the_mechanisms_that_fired_and_the_totals_add_up():
+    llm = ScriptLLM([call("media_control", key="Next"), say("ok")])
+    a, _ = setup(llm)
+    a.traces = TraceStore(":memory:")
+    a.stats = HarnessStats(a.traces)
+    ask(a, "next song")
+    [turn] = a.traces.session(a.traces.sessions()[0]["session"])
+    assert turn["data"]["hits"]["hook.arguments"] == 1 and turn["data"]["hits"]["hook.arguments.fix"] == 1
+    llm.chats = [say("Noted, sir.")]  # a claim with nothing done: the constrained pick finds no tool
+    llm.jsons.append({"tool": "none"})
+    ask(a, "the gate code is 4411")
+    h = _hits(a)
+    assert h["hook.arguments"] == 1 and h["pick.claim"] == 1 and h["pick.none"] == 1 and h["undone.notes"] == 1
+    a.llm = ChatOnly([say("Noted, sir."), say("Noted, sir.")])  # no constrained output: nudged, then undone
+    ask(a, "the gate code is 4411")
+    h = _hits(a)
+    assert h["nudge.claim"] == 1 and h["nudge.claim.notes"] == 1 and h["undone"] == 2
+    assert h["hide.get_time"] == 3  # none of the three turns was about the time
+    snap = a.stats.snapshot()
+    assert "hook.taint" in snap["never_hit"] and "nudge.claim" not in snap["never_hit"]
+    assert next(c for c in snap["counters"] if c["name"] == "nudge.claim")["last"] > 0
+
+
+def test_fast_path_hits_selector_rules_and_resolvers_are_counted():
+    class Fast:
+        def match(self, said):
+            return FastPlan("time", [("get_time", {})], lambda r: "It's late, sir.") if "time" in said else None
+    a, _ = setup(ScriptLLM([]))
+    a.fast = Fast()
+    assert ask(a, "what time is it") == "It's late, sir."
+    assert _hits(a)["fastpath.hit.time"] == 1
+    sel = ToolSelector(WordEmbedder(), "m", k=1)
+    a, _ = setup(ScriptLLM([say("Here you are, sir.")]), sel)
+    ask(a, "search the web for news")
+    assert _hits(a)["wants.web"] == 1
+    resolver("notify", lambda args: {**args, "text": args["text"].strip("!")})
+    try:
+        a, ran = setup(ScriptLLM([call("send_notification", text="hi!"), say("ok")]))
+        ask(a, "notify me hi")
+        assert _hits(a)["resolver.fixed"] == 1 and _hits(a)["resolver.notify"] == 1
+    finally:
+        RESOLVERS.pop("notify")
+
+
+def test_totals_survive_a_restart_and_are_kept_with_traces_off(tmp_path):
+    path = str(tmp_path / "traces.db")
+    s = HarnessStats(TraceStore(path, days=0))
+    s.add(["nudge.fake", "nudge.fake", "repeat"])
+    s = HarnessStats(TraceStore(path, days=0))
+    s.add(["repeat"])
+    h = {c["name"]: c["count"] for c in s.snapshot()["counters"]}
+    assert h["nudge.fake"] == 2 and h["repeat"] == 2 and h["circles"] == 0
+    assert set(KNOWN) <= set(h)
+
+
+def test_harness_stats_endpoint(client):
+    from conftest import auth
+    a, _ = setup(ScriptLLM([call("media_control", key="Next"), say("ok")]))
+    client.app.state.agent = a
+    ask(a, "next song")
+    r = client.get("/v1/harness/stats", headers=auth("web-token"))
+    assert r.status_code == 200
+    rows = {c["name"]: c for c in r.json()["counters"]}
+    assert rows["hook.arguments"]["count"] == 1 and rows["hook.arguments"]["about"]
+    assert client.get("/v1/harness/stats", headers=auth("sat-token")).status_code == 403

@@ -29,6 +29,7 @@ WANTS = ((URL, ("fetch_page", "web_search")),
 # job..." matched skills and dreaming, and remember wasn't offered).
 WANTS += ((re.compile(r"\b(?:remember|note (?:that|down)|jot (?:that |this |it )?down|keep (?:that|this|it) in mind|"
                       r"don'?t forget|for the record)\b", re.I), ("kb_remember",)),)
+WANTS_NAMES = ("url", "web", "search", "remember")  # for the harness counters (audit/harness.py), in WANTS order
 # "remind me what I'm called" asks what the notes say, not for a reminder: the timer and reminder tools stay out
 RECALL = re.compile(r"\bremind me (?:what|who|whose|where|which|how)\b", re.I)
 # Experts only when the user names them (the system prompt's rule): a 2B model otherwise sends anything it
@@ -47,6 +48,7 @@ class Ranking:
     """What selection found: the tools to offer, and how sure it is that the request wants one of them."""
     tools: list[Tool]
     scores: dict[str, float] = field(default_factory=dict)  # internal name -> best similarity
+    hits: list[str] = field(default_factory=list)  # selector rules that fired (audit/harness.py)
 
     @property
     def best(self) -> tuple[str, float]:
@@ -85,20 +87,23 @@ class ToolSelector:
         scores = {t.name: max(_dot(q, self._vectors[x]) for x in _texts(t)) for t in tools}
         said = _latest(messages)
         tools = [t for t in tools if t.name not in NAMED or NAMED[t.name].search(said)]
-        wanted = {n for rx, names in WANTS if rx.search(said) for n in names} | \
-                 {n for n, rx in NAMED.items() if rx.search(said)}
+        fired = [i for i, (rx, _) in enumerate(WANTS) if rx.search(said)]
+        named = [n for n, rx in NAMED.items() if rx.search(said)]
+        hits = [f"wants.{WANTS_NAMES[i]}" for i in fired] + [x for n in named for x in ("named", f"named.{n}")]
+        wanted = {n for i in fired for n in WANTS[i][1]} | set(named)
         if RECALL.search(said):
+            hits.append("recall")
             tools = [t for t in tools if family_of(t.name) != "timers"]
             scores = {n: v for n, v in scores.items() if family_of(n) != "timers"}  # not a fit to weigh either
             wanted |= {"kb_search"}
         if self.k <= 0 or len(tools) <= self.k + len(self.core):
-            return Ranking(tools, scores)
+            return Ranking(tools, scores, hits)
         ranked = sorted((t for t in tools if t.name not in self.core), key=lambda t: -scores[t.name])
         keep = {t.name for t in ranked[:self.k]} | set(self.core) | wanted
         best = ranked[0].name if ranked else ""
         if fam := family_of(best):  # the best tool's siblings: set / list / cancel a timer
             keep |= {t.name for t in tools if family_of(t.name) == fam}
-        return Ranking([t for t in tools if t.name in keep], scores)
+        return Ranking([t for t in tools if t.name in keep], scores, hits)
 
     async def _embed(self, texts: list[str]) -> None:
         todo = list(dict.fromkeys(x for x in texts if x not in self._vectors))

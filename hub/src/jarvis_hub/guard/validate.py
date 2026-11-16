@@ -83,13 +83,16 @@ def _number(text: str) -> float | None:
     return None
 
 
-def check(tool, args: dict) -> tuple[dict | None, str]:
-    """(fixed arguments or None if unchanged, ERROR message or "")."""
+def check(tool, args: dict, hits: list | None = None) -> tuple[dict | None, str]:
+    """(fixed arguments or None if unchanged, ERROR message or ""). hits: where to count resolver outcomes."""
     fixed, problems = coerce(tool.parameters or {}, args)
     if problems:
         return None, (f"ERROR: {tool.model_name}: " + "; ".join(problems) + ". Call it again with valid values.")
     if (fn := RESOLVERS.get(tool.name)) and tool.risk is not Risk.DESTRUCTIVE:
         res = fn(fixed)
+        if hits is not None:
+            outcome = "error" if isinstance(res, str) else "fixed" if isinstance(res, dict) and res != fixed else "none"
+            hits += ["resolver", f"resolver.{outcome}", f"resolver.{tool.name}"]
         if isinstance(res, str):
             return None, res
         if isinstance(res, dict):

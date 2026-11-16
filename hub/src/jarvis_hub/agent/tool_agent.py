@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,6 +19,7 @@ from jarvis_hub.agent.plan import plan_steps
 from jarvis_hub.agent.style import SentenceGate, address, tidy
 from jarvis_hub.agent.tool_select import Ranking, ToolSelector
 from jarvis_hub.approval.gate import ApprovalGate, Risk
+from jarvis_hub.audit.harness import HarnessStats, hit
 from jarvis_hub.audit.store import AuditStore
 from jarvis_hub.audit.traces import TraceStore
 from jarvis_hub.config import Source
@@ -208,6 +210,7 @@ class ToolAgent:
         self.fast = fast  # requests answered by code, no model call (agent/fastpath.py)
         # each conversation's last turn: what the tools returned, for "remember it" next turn
         self._last: dict[str, dict] = {}
+        self.stats = HarnessStats(traces)  # harness counters (audit/harness.py)
 
     @property
     def ask_for(self) -> frozenset[Risk]:
@@ -264,8 +267,10 @@ class ToolAgent:
         # the time rides on every message already: get_time is only a detour here ("good morning" is a greeting)
         if not ABOUT_TIME.search(re.sub(r"\bgood (?:morning|afternoon|evening|night)\b", "", said, flags=re.I)):
             turn.hide = turn.hide | {"get_time"}
+            hit(turn, "hide.get_time")
         if TEXTBOOK.search(said) and not CURRENT.search(said) and not EXPLICIT_WEB.search(said):
             turn.hide = turn.hide | {"web_search"}  # "the capital of Australia": answered, not searched
+            hit(turn, "hide.web_search")
         users = [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
         turn.before = users[-2] if len(users) > 1 else ""
         turn.last_reply = next((str(m.get("content") or "") for m in reversed(messages[:-1])
@@ -293,8 +298,10 @@ class ToolAgent:
         if BARE_SAVE.match(said) and (material := self._material(messages, turn)):
             convo[-1]["content"] += SAVE_HINT.format(material=material[:1500])
             turn.intent = "save what came before"
+            hit(turn, "bare_save")
             return await self._loop(convo, turn, only=NOTE_WRITES)
         if not self._is_claude() and len(steps := await plan_steps(self.llm, said)) > 1:
+            hit(turn, "plan.split", str(len(steps)))
             return await self._chain(convo, steps, turn)
         return await self._loop(convo, turn)
 
@@ -344,6 +351,7 @@ class ToolAgent:
                 # the first part) calls nothing and restates that outcome; saying it twice reads as two actions
                 if not t.halt and not any(c["tool_calls"] for c in t.loops[-1]["calls"]) and _restates(outcome, t.parts):
                     log.info("part %d only restated an earlier part: %.80s", i + 1, outcome)
+                    hit(t, "plan.restated")
                     outcome = ""
                 # what this part's tools returned goes to the parts after it ("search X, then save it")
                 carry += [m for m in t.loops[-1]["convo"][len(base):] if m.get("tool_calls") or m["role"] == "tool"]
@@ -370,6 +378,7 @@ class ToolAgent:
             t.ranking = await self.ranked([{"role": "user", "content": part}] if part else convo)
         if t.hide:
             t.ranking.tools = [x for x in t.ranking.tools if x.name not in t.hide]
+        t.hits += t.ranking.hits
         start = list(convo)  # as it came in: a turn sent to the bigger model starts from here
         if self._can_escalate(t) and self.escalate_below and t.ranking.scores \
                 and t.ranking.best[1] < self.escalate_below:
@@ -381,12 +390,15 @@ class ToolAgent:
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0}))
         if t.route == "model" and not part and (looked := await self._look_first(t)):
             convo += looked
+            hit(t, "look_first")
         faked = claimed = forced = emptied = ahead = False
         web = self.tools.get("web_search")
         t.must = "web_search" if web and web.name not in self.hidden and not only and \
             EXPLICIT_WEB.search(part or t.said) else ""
         if only and part:  # "...then save it to notes": a part that is only the save, so one note write must happen
             t.must = "a note write"
+        if t.must == "web_search":
+            hit(t, "explicit_web")
         for step in range(budget):
             streamed = []
             gate = SentenceGate(lambda x: (streamed.append(x), t.on_text(x)), t.source, self._wit(t),
@@ -416,6 +428,7 @@ class ToolAgent:
                 if ahead:
                     return self._reply(t, "")
                 ahead = True
+                hit(t, "nudge.part")
                 convo.append({"role": "assistant", "content": raw})
                 convo.append({"role": "user", "content": PART_NUDGE.format(n=t.chain["i"] + 1 if t.chain else 1)})
                 continue
@@ -433,10 +446,14 @@ class ToolAgent:
                 calls = await self._pick_tool(convo, (offered if t.must == "a note write" else [web]) if must
                                               else self._pool(kind, offered), t)
                 t.loops[-1]["calls"][-1]["picked"] = [c["function"] for c in calls]  # the constrained pick
+                hit(t, "pick", "must" if must else "claim")
+                if not calls:
+                    hit(t, "pick.none")
                 if not calls and claims:  # it claimed an action and no tool fits: don't pass the claim on
                     if streamed:
                         t.on_text(None)
                     t.halt = "fail"
+                    hit(t, "undone", kind or "")
                     return self._reply(t, UNDONE.get(kind, NOT_DONE))
             if calls and streamed or (not calls and _fakes_tool_use(raw) and streamed):
                 t.on_text(None)  # what streamed was not the answer after all: tell the client to drop it
@@ -446,14 +463,17 @@ class ToolAgent:
                     # Small models sometimes write a tool call or result as text instead of calling
                     # the tool. Nothing ran, so never pass that on as if it had: ask once more.
                     log.warning("model wrote tool markup as text: %.200s", text)
+                    hit(t, "fake.detected")
                     if faked and self._can_escalate(t) and not t.changed:  # twice: the bigger model tries afresh
                         self._escalate(t, "the model wrote tool calls as text")
                         t.calls_made, t.repeats = set(), 0
                         return await self._loop(start, t, part, budget, only)
                     if faked:
                         t.halt = "fail"
+                        hit(t, "fake.failed")
                         return self._reply(t, "My apologies, sir, I couldn't carry that out. Nothing was changed.")
                     faked = True
+                    hit(t, "nudge.fake")
                     convo.append({"role": "assistant", "content": text})
                     convo.append({"role": "user", "content": FAKE_TOOL_NUDGE})
                     continue
@@ -464,13 +484,16 @@ class ToolAgent:
                         t.on_text(None)
                     if claimed:
                         t.halt = "fail"
+                        hit(t, "undone", kind)
                         return self._reply(t, UNDONE.get(kind, NOT_DONE))
                     claimed = True
+                    hit(t, "nudge.claim", kind)
                     convo.append({"role": "assistant", "content": text})
                     convo.append({"role": "user", "content": KIND_NUDGE[kind]})
                     continue
                 if not text and not emptied and not t.changed:  # nothing said: ask once for what came of it
                     emptied = True
+                    hit(t, "nudge.empty")
                     convo.append({"role": "user", "content": EMPTY_NUDGE})
                     continue
                 if not text:  # nothing to say and nothing done: never answer "Done"
@@ -486,6 +509,7 @@ class ToolAgent:
                 sig = _signature(call)
                 if sig in t.calls_made:  # the same call again: it has its answer already
                     t.repeats += 1
+                    hit(t, "repeat")
                     if t.repeats > 1:
                         break
                     prep, hold = REPEAT.format(name=call.get("function", {}).get("name", "")), ""
@@ -498,6 +522,7 @@ class ToolAgent:
                     prep = self._route_note(prep, t)
                     for hook in PRE_TOOL:  # guard/hooks.py: arguments, needless search, unsaid names/dates, taint
                         if v := hook(prep[0], prep[1], t):
+                            hit(t, f"hook.{hook.__name__}", v.kind)
                             if v.kind == "error":
                                 prep = v.message
                                 break
@@ -565,6 +590,7 @@ class ToolAgent:
         claude = " Or say \"ask Claude\" and I'll put it to Claude." if any(
             x.name == "ask_claude" for x in self.visible()) else ""
         t.halt = "fail"
+        hit(t, "circles")
         return self._reply(t, "I seem to be going in circles, sir. Shall we try that differently?" + claude)
 
     async def _resume(self, p: PendingTool, yes: bool, t: "_Turn") -> str:
@@ -654,6 +680,7 @@ class ToolAgent:
         """Send the rest of this turn to the bigger model (LLM_ESCALATE_MODEL); the picker stays put."""
         log.info("escalating to %s: %s", self.escalate, why)
         t.use_model, t.escalated, t.model = self.escalate, True, self.escalate
+        hit(t, "escalate", why.split(" (")[0].replace(" ", "_"))
         t.trace.append({"tool": "", "decision": "escalate", "rule": why, "why": f"sent to {self.escalate}"})
         t.bus.publish(Event("llm_escalated", t.source, t.request_id, {"to": self.escalate, "why": why}))
 
@@ -725,12 +752,14 @@ class ToolAgent:
         if (m := NAMED_PAGE.search(said)) and (page := self.tools.get("kb_append_to_page")):
             name = m[1].strip(" '\"")
             if tool.name != page.name or args.get("page") != name:
+                hit(t, "route_note", "page")
                 t.trace.append({"tool": page.name, "decision": "fixed", "rule": "named page", "why": f"page={name!r}"})
             return page, {"page": name, "text": text}
         if tool.name == "kb_remember" and t.correcting and t.last_reply:  # "no, update it": what JARVIS last said
             return tool, {**args, "corrects": t.last_reply[:400]}         # is the claim being corrected
         if JOURNAL_ASK.search(said) and (journal := self.tools.get("kb_journal")) and tool.name != journal.name:
             t.trace.append({"tool": journal.name, "decision": "fixed", "rule": "named page", "why": "journal"})
+            hit(t, "route_note", "journal")
             return journal, {"text": text}
         return prep
 
@@ -813,6 +842,7 @@ class ToolAgent:
         if not facts:
             return None
         t.route = "memory"
+        hit(t, "capture")
         t.bus.publish(Event("thinking", t.source, t.request_id, {"step": 0, "route": "memory"}))
         t.via = "said by you"
         saved = []
@@ -840,14 +870,17 @@ class ToolAgent:
             body = _unfence(result)
             if body is None or body.startswith("ERROR"):
                 log.info("fast path %s fell back to the model: %.120s", plan.intent, body or result)
+                hit(t, "fastpath.fallback", plan.intent)
                 return None
             results.append(result)
         try:
             reply = plan.say(results)
         except (ValueError, IndexError, KeyError) as e:
             log.warning("fast path %s couldn't word the reply: %s", plan.intent, e)
+            hit(t, "fastpath.fallback", plan.intent)
             return None
         log.info("fast path: %s", plan.intent)
+        hit(t, "fastpath.hit", plan.intent)
         t.route, t.intent = "fast", plan.intent
         return self._reply(t, reply)
 
@@ -1031,6 +1064,7 @@ class ToolAgent:
             "route": t.route, "intent": t.intent, "model": t.model if t.route in ("model", "plan") else "",
             "seconds": round(time.time() - t.started, 1), "tools": t.trace, "dry_run": t.dry_run}))
         self._record(t, text)
+        self.stats.add(t.hits)
         return text
 
     def _record(self, t: "_Turn", text: str) -> None:
@@ -1043,7 +1077,8 @@ class ToolAgent:
                 source=str(t.source), route=t.route, model=t.model, seconds=round(time.time() - t.started, 2),
                 said=t.said, reply=text,
                 data={"messages": t.messages_in, "loops": [self._kept(loop) for loop in t.loops],
-                      "trace": t.trace, "intent": t.intent, "dry_run": t.dry_run, "tainted": bool(t.tainted)})
+                      "trace": t.trace, "intent": t.intent, "dry_run": t.dry_run, "tainted": bool(t.tainted),
+                      "hits": dict(Counter(t.hits))})
         except Exception:
             log.exception("turn %s not traced", t.request_id)
 
@@ -1102,6 +1137,7 @@ class _Turn:
     must: str = ""  # a tool the user asked for by name ("search ... on github"): picked if the model skips it
     messages_in: list = field(default_factory=list)  # what the client sent
     loops: list = field(default_factory=list)  # each model loop: part, tools offered, calls, conversation
+    hits: list = field(default_factory=list)  # harness mechanisms that fired this turn (audit/harness.py)
 
 
 _FILLER = set("""a an the and or of to in on at for about is are was were be been am do does did have has had i i'm

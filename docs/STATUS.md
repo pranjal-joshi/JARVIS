@@ -61,3 +61,12 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
 | 8 | 3D knowledge graph panel (3d-force-graph) from `/v1/kb/graph`, lighting up `kb_retrieved` pages |
 | 9 | Phone tools (HA Companion notifications, later ADB MCP); R3F/GLSL orb, bloom, tool-call beams, passkey auth, Tailscale |
 | 10 | Proxmox migration guide (LXC vs VM, GPU passthrough, headless Obsidian vault sync) |
+
+## Harness reliability (branch `dgx`, 2026-11-16)
+
+The harness, not the 2B model, carries reliability. Each step below is one commit; model-call cost per turn in brackets.
+
+1. **Telemetry** [0 calls]: every guard, nudge, fast path, selector rule (WANTS/RECALL/NAMED), resolver,
+   escalation and fake-tool detection counts its hits per turn (`hits` in the turn's trace) and in total
+   (`harness_hits` in traces.db, kept even with `TRACE_DAYS=0`: names and counts only).
+   `GET /v1/harness/stats` lists every counter with its last hit; `never_hit` names the candidates to prune.
