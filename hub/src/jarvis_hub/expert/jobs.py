@@ -24,6 +24,7 @@ from jarvis_hub.events.bus import Event, EventBus
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.files import write_atomic
+from jarvis_hub.guard.refs import opaque
 from jarvis_hub.guard.validate import actionable
 
 log = logging.getLogger(__name__)
@@ -251,6 +252,9 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
     token = jobs.s.expert_bridge_token.get_secret_value()
     if not token or token == "change-me":
         return False
+
+    # job ids reach the model as this conversation's refs (guard/refs.py)
+    opaque(["start_job", "job_status", "cancel_job"], "job", lambda: [j["id"] for j in jobs.recent])
 
     def _pick(jid: str) -> dict | None:
         jid = (jid or "").strip().lower()

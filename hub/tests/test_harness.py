@@ -974,3 +974,67 @@ def test_timers_pages_and_skills_register_their_live_values():
         assert check(t, {"name": "Bye"}, live={"name": (["Hello"], False)}) == (None, "")
     finally:
         RESOLVERS.pop("t_skill")
+
+
+# ---------- session refs for opaque ids ----------
+from jarvis_hub.guard.refs import OPAQUE, Refs, opaque  # noqa: E402
+
+JOB_IDS = ["9f3c2a71e0b84d55", "41d07be2aa9c4e10"]
+
+
+def _jobs(a, ran):
+    async def status(args, ctx):
+        ran.append(("job_status", args))
+        return "\n".join(f"{j} · task · running" for j in JOB_IDS) + f"\nStarted ({JOB_IDS[0][:4]})."
+
+    async def cancel(args, ctx):
+        ran.append(("cancel_job", args))
+        return f"Cancelled the background job ({args['job'][:4]})."
+    a.tools.add(Tool("job_status", "builtin", "jobs", {"type": "object", "properties": {"job": {"type": "string"}}},
+                     Risk.READ, status))
+    a.tools.add(Tool("cancel_job", "builtin", "cancel a job", {"type": "object", "properties": {
+        "job": {"type": "string"}}, "required": ["job"]}, Risk.WRITE, cancel))
+    opaque(["job_status", "cancel_job"], "job", lambda: list(JOB_IDS))
+
+
+def test_opaque_ids_are_shown_as_session_refs_and_mapped_back():
+    try:
+        refs = Refs()
+        ref = refs.ref(JOB_IDS[0])
+        assert re.fullmatch(r"ref_[0-9a-f]{4}", ref) and refs.ref(JOB_IDS[0]) == ref
+        llm = ScriptLLM([call("job_status"), call("cancel_job", job=ref), say("Cancelled, sir.")])
+        a, ran = setup(llm)
+        _jobs(a, ran)
+        a._refs["web-r1"] = refs
+        ask(a, "cancel the running job")
+        shown = llm.seen[1][-1]["content"]
+        assert JOB_IDS[0] not in shown and JOB_IDS[0][:4] not in shown and ref in shown
+        assert ran[-1] == ("cancel_job", {"job": JOB_IDS[0]})  # the real id reached the tool
+        row = next(r for r in a.audit.recent() if r["tool"] == "cancel_job")
+        assert json.loads(row["arguments"]) == {"job": JOB_IDS[0]}  # the audit keeps the real id
+        assert _hits(a)["ref.mapped"] == 1 and _hits(a)["ref.hidden"] >= 1
+    finally:
+        for name in ("job_status", "cancel_job"):
+            OPAQUE.pop(name, None)
+
+
+def test_an_unknown_ref_or_a_raw_id_gets_an_error_it_can_recover_from():
+    try:
+        for bad, said in (("ref_dead", "cancel the job"), (JOB_IDS[1][:4], "cancel the job")):
+            llm = ScriptLLM([call("job_status"), call("cancel_job", job=bad), say("Which job, sir?")])
+            a, ran = setup(llm)
+            _jobs(a, ran)
+            a._refs["web-r1"] = Refs()
+            ask(a, said)
+            err = llm.seen[2][-1]["content"]
+            assert not any(n == "cancel_job" for n, _ in ran), bad
+            assert err.startswith("ERROR") and ACTIONABLE.search(err) and "ref_" in err, err
+        # the user read the id off the HUD and said it: that one is theirs to use
+        llm = ScriptLLM([call("cancel_job", job=JOB_IDS[1][:4]), say("ok")])
+        a, ran = setup(llm)
+        _jobs(a, ran)
+        ask(a, f"cancel job {JOB_IDS[1][:4]}")
+        assert ran[-1] == ("cancel_job", {"job": JOB_IDS[1][:4]})
+    finally:
+        for name in ("job_status", "cancel_job"):
+            OPAQUE.pop(name, None)

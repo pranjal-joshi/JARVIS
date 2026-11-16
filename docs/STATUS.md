@@ -92,3 +92,7 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    resolver doesn't place gets the 5 nearest (timers, pages, skills; HA names pass through, as the cache can lag).
    HA names are read only when the policy lets GetLiveContext run unasked, are audited (`harness:live-enum`), and
    mark the turn as having read Home Assistant's data, so a change naming a device the user didn't say still asks.
+   **Session refs** [0 calls]: background job ids reach the model as this conversation's refs (`ref_9f3c`,
+   `guard/refs.py`), in tool output after the audit has kept the real text; a ref in a call is mapped back before
+   the checks, the run and the audit. An unknown ref or a raw id gets an error naming the ref to use; a raw id the
+   user said themselves (off the HUD) is accepted. Approval ids never reach the model, so they need no ref.

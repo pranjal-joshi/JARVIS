@@ -29,6 +29,7 @@ from jarvis_hub.guard.hooks import (ABOUT_TIME, CURRENT, LINK, POST_TOOL, PRE_TO
                                      unsaid)
 from jarvis_hub.guard.policy import Decision as PolicyDecision
 from jarvis_hub.guard.policy import Policy
+from jarvis_hub.guard.refs import Refs
 from jarvis_hub.devices.ha_names import OUTSIDE as HA_NAMES, HANames
 from jarvis_hub.guard.validate import LIVE, actionable, check, live_values, options, with_enums
 from jarvis_hub.llm.client import LLMClient, LLMError, RateLimited
@@ -215,6 +216,7 @@ class ToolAgent:
         # each conversation's last turn: what the tools returned, for "remember it" next turn
         self._last: dict[str, dict] = {}
         self.stats = HarnessStats(traces)  # harness counters (audit/harness.py)
+        self._refs: dict[str, Refs] = {}  # each conversation's refs for opaque ids (guard/refs.py)
         self.ha_names = HANames(self._live_read)  # Home Assistant's device names, for live enums (devices/ha_names.py)
 
     @property
@@ -256,6 +258,10 @@ class ToolAgent:
         turn = _Turn(source, request_id, bus, on_text, on_event or (lambda e: None), session, dry_run=dry_run,
                      model=str(getattr(self.llm, "model", "")), hide=frozenset(exclude))
         turn.trace_session = trace_session or f"{source}-{request_id[:12]}"
+        turn.refs = self._refs.pop(turn.trace_session, None) or Refs()
+        self._refs[turn.trace_session] = turn.refs  # newest last: the oldest conversation's refs go first
+        while len(self._refs) > LAST_KEPT:
+            self._refs.pop(next(iter(self._refs)))
         self._switch_back(turn)
         turn.messages_in = [dict(m) for m in messages]
         turn.tainted.extend(untrusted or [])  # an automation's event text (guard/hooks.py taint)
@@ -1127,6 +1133,10 @@ class ToolAgent:
                           result=audit_text(tool, output))
         t.bus.publish(Event("tool_result", t.source, t.request_id,
                             {"tool": name, "status": status, "preview": output[:300]}))
+        if t.refs is not None:  # opaque ids as this conversation's refs, after the audit kept the real ones
+            output, n = t.refs.hide(name, output)
+            if n:
+                hit(t, "ref", "hidden")
         # Fence results so the model treats them as data, not instructions.
         return f"<tool_result tool=\"{tool.model_name}\">\n{output}\n</tool_result>"
 
@@ -1221,6 +1231,7 @@ class _Turn:
     use_model: str = ""  # this turn's model when it was sent to the bigger one (LLM_ESCALATE_MODEL)
     escalated: bool = False  # sent once already: never twice
     repeats: int = 0
+    refs: Refs | None = None  # this conversation's refs for opaque ids (guard/refs.py)
     live: dict = field(default_factory=dict)  # tool -> {arg: (values, strict)} offered as enums this turn
     failed: Counter = field(default_factory=Counter)  # (tool, how it failed) -> times this turn (anti-loop)
     parts: list[str] | None = None  # outcomes of the parts done so far, while a request with several runs

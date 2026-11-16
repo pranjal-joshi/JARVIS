@@ -26,6 +26,8 @@ KNOWN: dict[str, str] = {
     "hook.slots": "write with names/numbers/months the user didn't say refused",
     "hook.taint": "change carrying outside text held for a human",
     "hook.after_outside_text": "change after reading outside text held for a human",
+    "hook.session_refs": "a session ref mapped back to an opaque id, or refused",
+    "ref": "session refs for opaque ids (.hidden in output / .mapped / .unknown / .raw)",
     # resolvers (guard/validate.py)
     "resolver": "a live-value resolver ran (.fixed / .error / .none and .<tool>)",
     # live enums (guard/validate.py live_enum)
