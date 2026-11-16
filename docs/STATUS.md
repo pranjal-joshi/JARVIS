@@ -75,3 +75,8 @@ The harness, not the 2B model, carries reliability. Each step below is one commi
    (`agent/inline_calls.py`) and, if every call names a tool offered this turn and passes `_prepare` + `check`,
    run as a real call through hooks, policy, approval, taint and audit. Marked `recovered` in the trace;
    otherwise `FAKE_TOOL_NUDGE` as before. A reply starting as bare call JSON is no longer streamed.
+3. **Actionable errors** [0 calls]: every `ERROR` the model can get back (≈85 in 16 modules) states what's wrong
+   and the next step in a sentence starting Call/Ask/Answer/Tell/Use/Say/Give/Don't/Try/…; finite choices list the
+   5 nearest (`guard/validate.py options()`: enums, timers, reminders, skills, pages, checks, tools). Errors whose
+   text comes from elsewhere (exceptions, MCP servers, the bridge) get a plain next step at run time (`actionable()`).
+   `test_every_error_names_the_next_action` scans the source so a new error can't skip it.

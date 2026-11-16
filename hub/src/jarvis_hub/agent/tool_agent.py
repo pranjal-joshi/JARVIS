@@ -29,7 +29,7 @@ from jarvis_hub.guard.hooks import (ABOUT_TIME, CURRENT, LINK, POST_TOOL, PRE_TO
                                      unsaid)
 from jarvis_hub.guard.policy import Decision as PolicyDecision
 from jarvis_hub.guard.policy import Policy
-from jarvis_hub.guard.validate import check
+from jarvis_hub.guard.validate import actionable, check, options
 from jarvis_hub.llm.client import LLMClient, LLMError, RateLimited
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.persona.jarvis import source_hint, system_prompt
@@ -522,7 +522,8 @@ class ToolAgent:
                     t.calls_made.add(sig)
                     prep, hold = self._prepare(call), ""
                 if not isinstance(prep, str) and prep[0].name in t.hide:
-                    prep = f"ERROR: {prep[0].model_name} can't be used here; carry out the steps with other tools."
+                    prep = (f"ERROR: {prep[0].model_name} can't be used here. Use the other tools offered for this, or "
+                            "answer without it.")
                 if not isinstance(prep, str):
                     prep = self._route_note(prep, t)
                     for hook in PRE_TOOL:  # guard/hooks.py: arguments, needless search, unsaid names/dates, taint
@@ -1055,7 +1056,9 @@ class ToolAgent:
                 status = "error" if output.startswith("ERROR") else "ok"
             except Exception as e:
                 log.exception("tool %s failed", name)
-                output, status = f"ERROR: {e}", "error"
+                output, status = actionable(f"ERROR: {tool.model_name} failed ({e})"), "error"
+        if status == "error":  # every error says what to do next (guard/validate.py actionable)
+            output = actionable(output)
         output = output[:MAX_TOOL_RESULT_CHARS]
         t.called = True
         for hook in POST_TOOL:  # guard/hooks.py: records outside text (taint)
@@ -1077,9 +1080,10 @@ class ToolAgent:
 
     def _unknown_tool(self, name: str) -> str:
         names = [t.model_name for t in self.visible()]
-        near = difflib.get_close_matches(name, names, n=3, cutoff=0.5)
-        hint = f" Did you mean: {', '.join(near)}?" if near else " Answer without it, or say you can't do that."
-        return f"ERROR: there is no tool called {name!r}.{hint}"
+        near = difflib.get_close_matches(name, names, n=5, cutoff=0.5)
+        if near:
+            return f"ERROR: there is no tool called {name!r}. Call one of these instead: {options(name, near)}."
+        return f"ERROR: there is no tool called {name!r}. Answer without it, or tell the user you can't do that."
 
     def _wit(self, t: "_Turn") -> int:
         return self.wit.level(t.session or "") if self.wit else 1

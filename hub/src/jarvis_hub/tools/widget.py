@@ -74,8 +74,8 @@ def show(bus, request_id: str, spec: dict) -> bool:
 def register_widget_tool(reg: ToolRegistry) -> None:
     async def show_widget(args: dict, ctx: ToolCtx) -> str:
         if not show(ctx.bus, ctx.request_id, args):
-            return ("ERROR: a widget needs widget (list, compare, stats or progress), a title, and items "
-                    "[{label, value}] or for compare columns and rows.")
+            return ("ERROR: the widget is incomplete. Call show_widget again with widget (list, compare, stats or "
+                    "progress), a title, and items [{label, value}], or columns and rows for compare.")
         return "Shown on the HUD. Now answer in a sentence; don't repeat the table."
 
     reg.add(Tool("show_widget", "builtin",

@@ -23,6 +23,32 @@ Resolver = Callable[[dict], "dict | str | None"]
 RESOLVERS: dict[str, Resolver] = {}  # internal tool name -> resolver
 
 
+# An error the model gets back says what to do next, in a sentence that starts with one of these (tested over the
+# whole source: tests/test_harness.py). Where the valid values are few, it lists the nearest five (options()).
+ACTIONABLE = re.compile(r"(?:^|[.;:!?)]\s+)(?:Call|Ask|Answer|Tell|Use|Say|Give|Don't|Do not|Try|Pick|Search|Save|"
+                        r"Wait|Make|Check)\b")
+NEXT_STEP = " Tell the user briefly that it failed and why, in plain words; don't call it again with the same arguments."
+
+
+def actionable(output: str) -> str:
+    """A tool's ERROR with a next step: one whose text doesn't say (an exception, an MCP server's error) gets the
+    plain one. Anything else is returned as it is."""
+    if not output.startswith("ERROR") or ACTIONABLE.search(output):
+        return output
+    return output.rstrip().rstrip(".") + "." + NEXT_STEP
+
+
+def options(wanted: str, choices, n: int = 5) -> str:
+    """The n choices closest to wanted, nearest first, as "a, b, c": what an error lists as valid."""
+    choices = [str(c) for c in dict.fromkeys(choices)]
+    w = str(wanted or "").lower()
+
+    def score(c: str) -> float:
+        low = c.lower()
+        return difflib.SequenceMatcher(None, w, low).ratio() + (0.5 if w and (w in low or low in w) else 0)
+    return ", ".join(sorted(choices, key=lambda c: -score(c))[:n])
+
+
 def resolver(tool: str, fn: Resolver) -> None:
     RESOLVERS[tool] = fn
 
@@ -64,7 +90,7 @@ def coerce(schema: dict, args: dict) -> tuple[dict, list[str]]:
                 close = difflib.get_close_matches(str(value).lower(), [str(e).lower() for e in enum], n=1, cutoff=0.8)
                 match = next((e for e in enum if close and str(e).lower() == close[0]), None)
             if match is None:
-                problems.append(f"{key} must be one of {', '.join(map(str, enum))}")
+                problems.append(f"{key} must be one of {options(str(value), enum)}")
                 continue
             value = match
         out[key] = value

@@ -721,3 +721,79 @@ def test_a_bare_json_call_is_not_streamed_to_the_client():
     feed2 = _speakable_stream(out.append)
     feed2("Hello, sir.")
     assert out == ["Hello, sir."]
+
+
+# ---------- actionable errors ----------
+import ast  # noqa: E402
+import re  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from jarvis_hub.guard.validate import ACTIONABLE, actionable, options  # noqa: E402
+
+SRC = Path(__file__).resolve().parents[1] / "src" / "jarvis_hub"
+
+
+def _error_strings():
+    """Every error text the hub can hand the model, as written in the source: string literals, f-strings and +
+    chains that start with "ERROR", with "{}" where a value goes."""
+    def text(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return text(node.left) + text(node.right)
+        return "{}"
+    found = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree, inside = ast.parse(path.read_text()), set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "actionable":
+                for sub in ast.walk(node):  # given a next step at run time if it has none (guard/validate.py)
+                    inside.add(id(sub))
+            if isinstance(node, ast.BinOp | ast.JoinedStr) and id(node) not in inside:
+                for sub in ast.walk(node):
+                    if sub is not node:
+                        inside.add(id(sub))
+            if id(node) in inside or not isinstance(node, ast.Constant | ast.JoinedStr | ast.BinOp):
+                continue
+            if isinstance(node, ast.BinOp) and not isinstance(node.op, ast.Add):
+                continue
+            s = text(node)
+            if s.startswith("ERROR") and len(s) > 8:
+                found.append((f"{path.relative_to(SRC)}:{node.lineno}", s))
+    return found
+
+
+def test_every_error_names_the_next_action():
+    errors = _error_strings()
+    assert len(errors) > 60  # the scan sees them
+    bad = [f"{where}: {s}" for where, s in errors if not ACTIONABLE.search(s)]
+    assert not bad, "errors that don't say what to do next:\n" + "\n".join(bad)
+
+
+def test_errors_list_the_nearest_valid_options_at_most_five():
+    assert set(options("pasat", ["tea", "pasta", "eggs", "past", "toast", "rice", "beans"]).split(", ")[:2]) == \
+        {"pasta", "past"}
+    assert len(options("x", [str(i) for i in range(20)]).split(", ")) == 5
+    _, problems = coerce({"properties": {"key": {"type": "string", "enum": [
+        "play_pause", "next", "previous", "stop", "mute", "volume_up", "volume_down"]}}}, {"key": "volume up loud"})
+    listed = problems[0].split("one of ")[1].split(", ")
+    assert len(listed) == 5 and listed[0] in ("volume_up", "volume_down")
+    a, _ = setup(ScriptLLM([call("media_contrl", key="next"), say("ok")]))
+    assert "media_control" in a._unknown_tool("media_contrl") and ACTIONABLE.search(a._unknown_tool("media_contrl"))
+
+
+def test_a_tool_error_with_no_next_step_gets_one():
+    assert ACTIONABLE.search(actionable("ERROR: ConnectTimeout"))
+    assert actionable("ERROR: x. Call foo again.") == "ERROR: x. Call foo again."
+    assert actionable("Fine.") == "Fine."
+    reg_llm = ScriptLLM([call("send_notification", text="hi"), say("It failed, sir.")])
+    a, _ = setup(reg_llm)
+
+    async def boom(args, ctx):
+        raise RuntimeError("socket closed")
+    a.tools.get("notify").call = boom
+    ask(a, "notify me hi")
+    sent = reg_llm.seen[1][-1]["content"]
+    assert "socket closed" in sent and ACTIONABLE.search(sent)
