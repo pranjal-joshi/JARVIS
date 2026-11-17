@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from jarvis_hub.approval.gate import Risk
+from jarvis_hub.audit.harness import hit
 from jarvis_hub.guard.validate import check
 from jarvis_hub.tools.when import clock, day_words, repeat_of
 
@@ -125,9 +126,22 @@ def carried(args: dict, tainted: list[str], heard: str) -> str:
 
 
 # ---------- the hooks ----------
+def session_refs(tool, args, t) -> Verdict | None:
+    """A ref the model was shown (ref_9f3c) back to the opaque id it stands for (guard/refs.py)."""
+    refs = getattr(t, "refs", None)
+    if refs is None:
+        return None
+    fixed, error, what = refs.resolve(tool.name, args, getattr(t, "said", "") or "")
+    if what:
+        hit(t, "ref", what)
+    if error:
+        return Verdict("error", error)
+    return Verdict("fix", "", fixed) if fixed else None
+
+
 def arguments(tool, args, t) -> Verdict | None:
     """Types, enum spelling and live names (guard/validate.py), fixed where that needs no guessing."""
-    fixed, error = check(tool, args)
+    fixed, error = check(tool, args, getattr(t, "hits", None), (getattr(t, "live", None) or {}).get(tool.name))
     if error:
         return Verdict("error", error)
     if fixed is not None:
@@ -333,7 +347,7 @@ def record_taint(tool, args, output: str, t) -> str:
     return output
 
 
-PRE_TOOL: list[Callable] = [arguments, needless_search, needless_time, clock_time, keep_links, once, own_words, slots, taint,
+PRE_TOOL: list[Callable] = [session_refs, arguments, needless_search, needless_time, clock_time, keep_links, once, own_words, slots, taint,
                             after_outside_text]
 POST_TOOL: list[Callable] = [record_taint]
 

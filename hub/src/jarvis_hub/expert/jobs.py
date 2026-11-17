@@ -24,6 +24,8 @@ from jarvis_hub.events.bus import Event, EventBus
 from jarvis_hub.kb.graph import ObsidianVault, frontmatter
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.files import write_atomic
+from jarvis_hub.guard.refs import opaque
+from jarvis_hub.guard.validate import actionable
 
 log = logging.getLogger(__name__)
 LIVE, ENDED = ("queued", "running"), ("done", "failed", "cancelled")
@@ -295,6 +297,9 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
     if not token or token == "change-me":
         return False
 
+    # job ids reach the model as this conversation's refs (guard/refs.py)
+    opaque(["start_job", "job_status", "cancel_job"], "job", lambda: [j["id"] for j in jobs.recent])
+
     def _pick(jid: str) -> dict | None:
         jid = (jid or "").strip().lower()
         live = [j for j in jobs.recent if j["state"] in LIVE]
@@ -306,7 +311,7 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
     async def start_job(args: dict, ctx: ToolCtx) -> str:
         goal = str(args.get("goal") or args.get("task") or "").strip()
         if not goal:
-            return "ERROR: say what the job should do (goal), in the user's words"
+            return "ERROR: goal is missing. Call start_job again with goal: what the job should do, in the user's words."
         skill = skill_name(str(args.get("skill") or ""))
         if skill and not jobs.skills:
             await jobs.refresh()
@@ -314,7 +319,7 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
             skill = ""  # a guessed skill name: run it as a plain task rather than fail
         ok, j = await jobs.start(skill, goal, str(args.get("target") or "").strip())
         if not ok:
-            return f"ERROR: the job didn't start: {j.get('detail')}"
+            return f"ERROR: the job didn't start: {j.get('detail')}. Tell the user why; don't retry."
         return (f"Started a background job ({j['id'][:4]}){f' with the {skill} skill' if skill else ''}. It runs on the "
                 f"laptop for up to {j.get('timeout_s', 3600) // 60} minutes (at most ${j.get('budget_usd')}); you can "
                 f"follow its steps on the HUD, and I'll tell you when it's done and save the result to your notes.")
@@ -322,7 +327,7 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
     async def job_status(args: dict, ctx: ToolCtx) -> str:
         await jobs.refresh()
         if jobs.error:
-            return f"ERROR: {jobs.error}"
+            return actionable(f"ERROR: {jobs.error}")
         if not jobs.recent:
             return "No background jobs have run yet."
         j = _pick(str(args.get("job") or ""))
@@ -333,9 +338,9 @@ def register_job_tools(reg: ToolRegistry, jobs: Jobs) -> bool:
         j = _pick(str(args.get("job") or ""))
         if not j or j["state"] not in LIVE:
             live = [x["id"][:4] for x in jobs.recent if x["state"] in LIVE]
-            return "No background job is running." if not live else f"ERROR: say which job: {', '.join(live)}"
+            return "No background job is running." if not live else f"ERROR: say which job. Running: {', '.join(live)}. Call cancel_job with one of those, or ask the user which."
         ok, data = await jobs.cancel(j["id"])
-        return f"Cancelled the background job ({j['id'][:4]})." if ok else f"ERROR: {data.get('detail')}"
+        return f"Cancelled the background job ({j['id'][:4]})." if ok else actionable(f"ERROR: {data.get('detail')}")
 
     reg.add(Tool(
         name="start_job", origin="expert",

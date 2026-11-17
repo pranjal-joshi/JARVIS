@@ -11,7 +11,7 @@ import time
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.automation.skills import DAILY, EVERY, NS, RUN_SOURCE, TRIGGERS, SkillEngine
 from jarvis_hub.events.bus import Event
-from jarvis_hub.guard.validate import best_name, resolver
+from jarvis_hub.guard.validate import best_name, live_enum, options, resolver
 from jarvis_hub.kb.graph import ObsidianVault, frontmatter
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 
@@ -71,11 +71,12 @@ def _webhook_from_steps(steps: list[str]) -> tuple[str, list[str]]:
 
 def _check(trigger: str, schedule: str, steps: list[str]) -> str | None:
     if trigger not in TRIGGERS:
-        return f"ERROR: trigger must be one of: {TRIGGER_HELP}"
+        return f"ERROR: trigger must be one of: {TRIGGER_HELP}. Call it again with one of those, or ask the user when it should run."
     if trigger == "schedule" and not (EVERY.match(schedule) or DAILY.match(schedule)):
-        return "ERROR: a scheduled skill needs schedule, a daily time like 07:30 or an interval like every 30m"
+        return ("ERROR: a scheduled skill needs schedule. Call it again with schedule: a daily time like 07:30 or an "
+                "interval like every 30m.")
     if not steps:
-        return "ERROR: say what the skill should do (instructions, one step per line)"
+        return "ERROR: instructions are missing. Call it again with instructions: what the skill does, one step per line."
     return None
 
 
@@ -104,9 +105,10 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: Obsidian
         return next((s for s in skills if s["name"].lower() == (hit or "").lower()), None)
 
     def missing(name: str) -> str:
-        names = ", ".join(s["name"][len(NS):] for s in engine.skills())
-        return (f"ERROR: no skill called {name!r}. Skills: {names}." if names
-                else "ERROR: there are no skills yet; make one with create_skill.")
+        names = options(name, [s["name"][len(NS):] for s in engine.skills()])
+        return (f"ERROR: no skill called {name!r}. Closest skills: {names}. Call it again with one of those names, or "
+                "ask the user which skill." if names
+                else "ERROR: there are no skills yet. Tell the user; call create_skill only if they ask for a new one.")
 
     async def list_skills(args: dict, ctx: ToolCtx) -> str:
         skills = engine.skills()
@@ -119,7 +121,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: Obsidian
     async def create_skill(args: dict, ctx: ToolCtx) -> str:
         name = str(args.get("name") or "").strip()
         if len(name) < 2:
-            return "ERROR: give the skill a short name"
+            return "ERROR: name is missing. Call create_skill again with a short name for the skill."
         trigger = str(args.get("trigger") or "manual").strip().lower()
         schedule, match = str(args.get("schedule") or "").strip(), str(args.get("match") or "").strip()
         steps = _steps(str(args.get("instructions") or ""))
@@ -131,7 +133,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: Obsidian
             return err
         page = _page(name)
         if graph.page(page) is not None:
-            return f"ERROR: there's already a skill called {page[len(NS):]!r}; change it with update_skill"
+            return f"ERROR: there's already a skill called {page[len(NS):]!r}. Call update_skill to change it."
         graph.replace_page(page, _text(trigger, match, schedule, steps))
         engine.set_enabled(page, True, pin=True)  # JARVIS wrote it: pinned and on (even a name once switched off)
         when = _when({"trigger": trigger, "schedule": schedule, "match": match})
@@ -142,8 +144,9 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: Obsidian
         if s is None:
             return missing(str(args.get("name", "")))
         if not any(args.get(k) for k in ("instructions", "add_steps", "trigger", "schedule", "match")):
-            return ("ERROR: say what to change: instructions (all the new steps), add_steps (steps to add at the "
-                    f"end), trigger, schedule or match. Its steps now: {_listed(_steps(s['instructions']))}")
+            return ("ERROR: nothing to change was given. Call update_skill again with instructions (all the new "
+                    "steps), add_steps (steps to add at the end), trigger, schedule or match. "
+                    f"Its steps now: {_listed(_steps(s['instructions']))}")
         added = _steps(str(args.get("add_steps") or ""))
         # with a step to add, instructions is ignored: a model adding a step tends to also put a placeholder
         # ("[the previous instructions] + ...") into it
@@ -215,6 +218,7 @@ def register_skill_tools(reg: ToolRegistry, engine: SkillEngine, graph: Obsidian
         return {**args, "name": s["name"]} if s else None
     for name in ("update_skill", "delete_skill", "enable_skill", "run_skill"):
         resolver(name, known)
+        live_enum(name, "name", lambda: [s["name"][len(NS):] for s in engine.skills()])
 
     named = {"name": {"type": "string", "description": "the skill's name, e.g. hello world"}}
     shape = {"trigger": {"type": "string", "enum": sorted(TRIGGERS),

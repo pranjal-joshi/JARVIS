@@ -1019,7 +1019,7 @@ def register_dream_tool(reg: ToolRegistry, dreamer: Dreamer) -> None:
             rep = await dreamer.run(days=int(args["days"]) if str(args.get("days") or "").isdigit() else None)
         except Exception as e:
             log.exception("dream failed")
-            return f"ERROR: the dream failed: {e}"
+            return f"ERROR: the dream failed: {e}. Tell the user it failed; don't retry now."
         return summary(rep)
 
     reg.add(Tool("dream", "builtin",

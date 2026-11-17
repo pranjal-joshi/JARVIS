@@ -106,11 +106,11 @@ def test_claims_are_checked_against_the_kind_of_tool_that_ran():
 def test_a_promise_to_save_becomes_a_pick_from_the_note_writes_only():
     # the capture step finds nothing it can keep, so the model answers, promises and is held to it
     llm = ScriptLLM([say("Understood, sir. Let me save that."), say("Saved, sir.")],
-                    [{"facts": []}, {"tool": "remember"}, {"fact": "configure ESP Home modules in the new home"}])
+                    [{"facts": []}, {"fact": "configure ESP Home modules in the new home"}])
     a, ran = setup(llm)
     reply = ask(a, "Remember that we need to configure ESP Home modules in the new home")
     assert ran[-1] == ("kb_remember", {"fact": "configure ESP Home modules in the new home"})
-    assert "search_notes" not in llm.schemas[1]["properties"]["tool"]["enum"]  # never a search for a save
+    assert "fact" in llm.schemas[1]["properties"] and "tool" not in llm.schemas[1]["properties"]  # forced, no pick
     assert "Saved" in reply or "configure" in reply
 
 
@@ -266,11 +266,11 @@ def test_move_note_moves_matching_notes_with_their_children(tmp_path):
 # ---------- web searches asked for by name; empty replies ----------
 def test_a_search_asked_for_by_name_is_made_when_the_model_asks_for_a_link_instead():
     llm = ScriptLLM([say("Could you share the repository URL, sir?"), say("Found it, sir: x/atomberg on GitHub.")],
-                    [{"tool": "web_search"}, {"query": "Atomberg SL1 Home Assistant integration github"}])
+                    [{"query": "Atomberg SL1 Home Assistant integration github"}])
     a, ran = setup(llm)
     reply = ask(a, "search home assistant integration for Atomberg SL1 locks on github")
     assert ran == [("web_search", {"query": "Atomberg SL1 Home Assistant integration github"})]
-    assert llm.schemas[0]["properties"]["tool"]["enum"] == ["web_search", "none"] and "GitHub" in reply
+    assert list(llm.schemas[0]["properties"]) == ["query"] and len(llm.schemas) == 1 and "GitHub" in reply
 
 
 def test_an_empty_reply_after_a_search_is_asked_for_once_more():

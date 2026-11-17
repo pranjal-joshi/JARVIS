@@ -9,7 +9,9 @@ Resolvers check an argument against live values (running timers, notes pages). T
 the code that owns those values and return one of: the corrected arguments, an ERROR string, or None
 (nothing to say). A resolver only ever picks a value when exactly one fits."""
 
+import copy
 import difflib
+import inspect
 import re
 from collections.abc import Callable
 
@@ -21,6 +23,72 @@ _NUMBER_WORDS = {w: i for i, w in enumerate(
                                                       "ninety": 90, "half": 0.5, "a": 1, "an": 1}
 Resolver = Callable[[dict], "dict | str | None"]
 RESOLVERS: dict[str, Resolver] = {}  # internal tool name -> resolver
+
+
+# An error the model gets back says what to do next, in a sentence that starts with one of these (tested over the
+# whole source: tests/test_harness.py). Where the valid values are few, it lists the nearest five (options()).
+ACTIONABLE = re.compile(r"(?:^|[.;:!?)]\s+)(?:Call|Ask|Answer|Tell|Use|Say|Give|Don't|Do not|Try|Pick|Search|Save|"
+                        r"Wait|Make|Check)\b")
+NEXT_STEP = " Tell the user briefly that it failed and why, in plain words; don't call it again with the same arguments."
+
+
+def actionable(output: str) -> str:
+    """A tool's ERROR with a next step: one whose text doesn't say (an exception, an MCP server's error) gets the
+    plain one. Anything else is returned as it is."""
+    if not output.startswith("ERROR") or ACTIONABLE.search(output):
+        return output
+    return output.rstrip().rstrip(".") + "." + NEXT_STEP
+
+
+def options(wanted: str, choices, n: int = 5) -> str:
+    """The n choices closest to wanted, nearest first, as "a, b, c": what an error lists as valid."""
+    choices = [str(c) for c in dict.fromkeys(choices)]
+    w = str(wanted or "").lower()
+
+    def score(c: str) -> float:
+        low = c.lower()
+        return difflib.SequenceMatcher(None, w, low).ratio() + (0.5 if w and (w in low or low in w) else 0)
+    return ", ".join(sorted(choices, key=lambda c: -score(c))[:n])
+
+
+# ---------- live enums: valid values that change (running timers, pages, skills, Home Assistant's devices) ----------
+LIVE_CAP = 30  # more values than this: no enum (a long list costs context); the resolver handles it
+LiveFn = Callable[..., "list[str] | object"]  # () or (turn) -> values, or an awaitable of them
+LIVE: dict[str, dict[str, tuple[LiveFn, bool]]] = {}  # internal tool name -> arg -> (values, strict)
+
+
+def live_enum(tool: str, arg: str, fn: LiveFn, strict: bool = True) -> None:
+    """Offer arg's current values as a JSON-schema enum. strict: a value outside them is an error (the list is
+    the truth: running timers); not strict: it goes through as it is (a cached list that may be out of date)."""
+    LIVE.setdefault(tool, {})[arg] = (fn, strict)
+
+
+async def live_values(fns: dict[str, tuple[LiveFn, bool]], turn=None) -> dict[str, tuple[list[str], bool]]:
+    """{arg: (values, strict)} for the args with 1..LIVE_CAP current values."""
+    out = {}
+    for arg, (fn, strict) in fns.items():
+        try:
+            got = fn(turn) if len(inspect.signature(fn).parameters) else fn()
+            if inspect.isawaitable(got):
+                got = await got
+        except Exception:  # a value source that fails leaves the argument as it was
+            continue
+        values = [str(v) for v in dict.fromkeys(got or []) if str(v).strip()]
+        if 0 < len(values) <= LIVE_CAP:
+            out[arg] = (values, strict)
+    return out
+
+
+def with_enums(schema: dict, live: dict[str, tuple[list[str], bool]]) -> dict:
+    """An OpenAI tool schema with live enums added (a copy; the tool's own schema is never changed)."""
+    props = ((schema.get("function") or {}).get("parameters") or {}).get("properties") or {}
+    usable = {a: v for a, (v, _) in live.items() if props.get(a, {}).get("type", "string") == "string"}
+    if not usable:
+        return schema
+    out = copy.deepcopy(schema)
+    for arg, values in usable.items():
+        out["function"]["parameters"]["properties"].setdefault(arg, {"type": "string"})["enum"] = values
+    return out
 
 
 def resolver(tool: str, fn: Resolver) -> None:
@@ -64,7 +132,7 @@ def coerce(schema: dict, args: dict) -> tuple[dict, list[str]]:
                 close = difflib.get_close_matches(str(value).lower(), [str(e).lower() for e in enum], n=1, cutoff=0.8)
                 match = next((e for e in enum if close and str(e).lower() == close[0]), None)
             if match is None:
-                problems.append(f"{key} must be one of {', '.join(map(str, enum))}")
+                problems.append(f"{key} must be one of {options(str(value), enum)}")
                 continue
             value = match
         out[key] = value
@@ -83,17 +151,43 @@ def _number(text: str) -> float | None:
     return None
 
 
-def check(tool, args: dict) -> tuple[dict | None, str]:
-    """(fixed arguments or None if unchanged, ERROR message or "")."""
+def check(tool, args: dict, hits: list | None = None,
+          live: dict[str, tuple[list[str], bool]] | None = None) -> tuple[dict | None, str]:
+    """(fixed arguments or None if unchanged, ERROR message or ""). hits: where to count resolver outcomes.
+    live: {arg: (values, strict)} the model was shown as an enum this turn (live_values): a value of another case
+    is fixed; one not among them goes to the resolver, and if that doesn't place it, a strict one is an error."""
     fixed, problems = coerce(tool.parameters or {}, args)
     if problems:
         return None, (f"ERROR: {tool.model_name}: " + "; ".join(problems) + ". Call it again with valid values.")
+    missed = []
+    for arg, (values, strict) in (live or {}).items():
+        value = fixed.get(arg)
+        if not isinstance(value, str) or value in values:
+            continue
+        if (same := next((v for v in values if v.lower() == value.strip().lower()), None)) is not None:
+            fixed[arg] = same
+            if hits is not None:
+                hits += ["live", "live.fixed"]
+            continue
+        missed.append((arg, values, strict, value))
+    placed = False  # a resolver recognised the value (and may have kept it as it was)
     if (fn := RESOLVERS.get(tool.name)) and tool.risk is not Risk.DESTRUCTIVE:
         res = fn(fixed)
+        placed = isinstance(res, dict)
+        if hits is not None:
+            outcome = "error" if isinstance(res, str) else "fixed" if isinstance(res, dict) and res != fixed else "none"
+            hits += ["resolver", f"resolver.{outcome}", f"resolver.{tool.name}"]
         if isinstance(res, str):
             return None, res
         if isinstance(res, dict):
             fixed = res
+    for arg, values, strict, value in missed:
+        if placed or fixed.get(arg) != value or not strict:  # the resolver placed it, or the list may be stale
+            continue
+        if hits is not None:
+            hits += ["live", "live.error"]
+        return None, (f"ERROR: {arg} {value!r} isn't one of the current values. Closest: {options(value, values)}. "
+                      f"Call {tool.model_name} again with one of those, or ask the user which.")
     return (fixed if fixed != args else None), ""
 
 

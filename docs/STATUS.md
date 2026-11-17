@@ -61,3 +61,72 @@ Verified on this machine (CPU only, qwen3.5:4b), not just written:
 | 8 | 3D knowledge graph panel (3d-force-graph) from `/v1/kb/graph`, lighting up `kb_retrieved` pages |
 | 9 | Phone tools (HA Companion notifications, later ADB MCP); R3F/GLSL orb, bloom, tool-call beams, passkey auth, Tailscale |
 | 10 | Proxmox migration guide (LXC vs VM, GPU passthrough, headless Obsidian vault sync) |
+
+## Harness reliability (branch `dgx`, 2026-11-16)
+
+The harness, not the 2B model, carries reliability. Each step below is one commit; model-call cost per turn in brackets.
+
+1. **Telemetry** [0 calls]: every guard, nudge, fast path, selector rule (WANTS/RECALL/NAMED), resolver,
+   escalation and fake-tool detection counts its hits per turn (`hits` in the turn's trace) and in total
+   (`harness_hits` in traces.db, kept even with `TRACE_DAYS=0`: names and counts only).
+   `GET /v1/harness/stats` lists every counter with its last hit; `never_hit` names the candidates to prune.
+2. **Inline tool-call recovery** [saves the nudge call]: a call written as text (`<tool_call>`, bare
+   `{"name", "arguments"}`, `<function=..>` with JSON or `<parameter=..>`, `<function_call>`) is parsed
+   (`agent/inline_calls.py`) and, if every call names a tool offered this turn and passes `_prepare` + `check`,
+   run as a real call through hooks, policy, approval, taint and audit. Marked `recovered` in the trace;
+   otherwise `FAKE_TOOL_NUDGE` as before. A reply starting as bare call JSON is no longer streamed.
+3. **Actionable errors** [0 calls]: every `ERROR` the model can get back (≈85 in 16 modules) states what's wrong
+   and the next step in a sentence starting Call/Ask/Answer/Tell/Use/Say/Give/Don't/Try/…; finite choices list the
+   5 nearest (`guard/validate.py options()`: enums, timers, reminders, skills, pages, checks, tools). Errors whose
+   text comes from elsewhere (exceptions, MCP servers, the bridge) get a plain next step at run time (`actionable()`).
+   `test_every_error_names_the_next_action` scans the source so a new error can't skip it.
+4. **Anti-loop** [0 calls]: a call identical to one already made this turn (`_signature`), or any call to a tool
+   that has failed the same way twice this turn (same first sentence, values masked), gets
+   `ERROR: same call again. Do not repeat it. Do the next step or answer.`; it never runs and is audited as
+   `rejected`. A second such repeat ends the loop as before (escalate, or "going in circles").
+5. **Live enums** [0 model calls; at most one audited GetLiveContext read a minute]: offered tools carry the
+   current valid values of live arguments as a JSON-schema `enum` when there are 1–30 (running timer labels for
+   cancel_timer, page names for read_page, skill names for the skill tools, Home Assistant device names for its
+   Assist tools' `name`, by domain). Above 30, or with Claude (tool list kept stable), nothing is added and the
+   resolvers work as before. The argument check holds the call to what was shown: a case slip is fixed, a value the
+   resolver doesn't place gets the 5 nearest (timers, pages, skills; HA names pass through, as the cache can lag).
+   HA names are read only when the policy lets GetLiveContext run unasked, are audited (`harness:live-enum`), and
+   mark the turn as having read Home Assistant's data, so a change naming a device the user didn't say still asks.
+   **Session refs** [0 calls]: background job ids reach the model as this conversation's refs (`ref_9f3c`,
+   `guard/refs.py`), in tool output after the audit has kept the real text; a ref in a call is mapped back before
+   the checks, the run and the audit. An unknown ref or a raw id gets an error naming the ref to use; a raw id the
+   user said themselves (off the HUD) is accepted. Approval ids never reach the model, so they need no ref.
+6. **Before-done contracts** [0 calls of their own]: what a turn must do is derived by code (`agent/contracts.py`):
+   a web search asked for by name, a save ("remember it", "remember that…", a save part), one part of a
+   request with several by its verb (timer, message, notes, a change), a fast-path action that failed, and a skill's
+   hand-written `mandatory_tools: [{name, min_calls, on_missing: force|undone|ignore}]` (YAML frontmatter; part of the
+   skill's pin, so adding it needs approval). Only calls that ran and succeeded count. A text reply with a contract
+   unmet doesn't end the turn: the tool is forced (the existing constrained pick in this step), and if that doesn't
+   do it, the reply is the truthful `UNDONE` line. A denial, timeout or policy block closes the contract; dry runs
+   and Claude record it without enforcing. Each turn's trace lists its contract and whether it was met.
+   Replaces the old `t.must` (explicit web, save part).
+7. **Forced call** [≤1 call a turn]: an unmet contract no longer runs the two-call constrained pick. Code
+   chooses the owed tool (the only one; remember for a save, routed to the named page/journal; else the closest to
+   the request) and ONE `LLMClient.json()` call fills only its arguments, with live enums (a tool without arguments
+   costs no call). The call goes through hooks, policy, approval, taint and audit; if it doesn't succeed, the reply is
+   the `UNDONE` truth. One forced call a turn (`EXTRA_CALLS`); after that, the truth without a call. The claim check
+   (`claims.py`, its pick and nudges) still covers what no contract does. Traces mark `forced` (`contract:<why>`),
+   and the counters say which mechanism fired (`forced`, `contract.*`, `pick.claim`, `nudge.claim`, `undone`).
+
+### What each mechanism costs in model calls (per turn)
+| Mechanism | Calls |
+|---|---|
+| Telemetry, actionable errors, anti-loop, live enums, session refs, contracts (derivation and accounting) | 0 |
+| Inline tool-call recovery | 0; saves the `FAKE_TOOL_NUDGE` call (4–8 s) when the text call is usable |
+| Forced call for an unmet contract | 1 (0 for a tool without arguments); was 2 with the pick |
+| Live HA names | 0 model calls; one audited GetLiveContext read a minute |
+| Unchanged, already there: plan split (≤1), memory capture (1), claim pick (2), each nudge (1), escalation | as before |
+
+### Pruning candidates (check `GET /v1/harness/stats` after a week of real use)
+- `nudge.fake`: inline recovery should take most of these; if it rarely fires, the nudge and `fake.failed` can go.
+- `pick` (the claim pick, 2 calls): contracts now cover saves, web, parts and skills; if `pick.claim` is rare, make it
+  a forced call or drop it for `UNDONE`.
+- `hook.needless_time` vs `hide.get_time`: the tool is hidden before the hook can fire; the hook is likely dead.
+- `hook.once`, `hook.keep_links`, `route_note`, `plan.restated`, `nudge.part`: narrow fixes for single incidents.
+- `escalate` reasons and `circles`: with the anti-loop guard, "went in circles" should be rarer.
+- `wants.search` vs `wants.web`: the broad `search` rule may be what fires; check whether `wants.web` adds anything.
