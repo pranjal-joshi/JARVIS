@@ -17,7 +17,7 @@ from jarvis_hub.approval.gate import Risk
 from jarvis_hub.automation.notify import Notifier, targets_from
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event, EventBus
-from jarvis_hub.guard.validate import best_name, resolver
+from jarvis_hub.guard.validate import best_name, options, resolver
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
 from jarvis_hub.tools.when import DAYS, spoken, when
 from jarvis_hub.files import write_atomic
@@ -145,16 +145,16 @@ def register_reminder_tools(reg: ToolRegistry, reminders: Reminders) -> None:
     async def set_reminder(args: dict, ctx: ToolCtx) -> str:
         text = str(args.get("text") or "").strip()[:200]
         if not text:
-            return "ERROR: say what to remind the user about (text)"
+            return "ERROR: text is missing. Call set_reminder again with text: what to remind the user about."
         repeat = str(args.get("repeat") or "once").strip().lower()
         repeat = {"every day": "daily", "day": "daily", "weekday": "weekdays", "week": "weekly", "no": "once",
                   "none": "once", "never": "once"}.get(repeat, repeat)
         if repeat not in REPEATS:
-            return f"ERROR: repeat must be one of {', '.join(REPEATS)}"
+            return f"ERROR: repeat must be one of {options(repeat, REPEATS)}. Call set_reminder again with one of those."
         day_text, now = str(args.get("day") or ""), datetime.now()
         at = when(str(args.get("time") or ""), day_text, now)
         if at is None:
-            return "ERROR: give the time as a clock time, e.g. 10:00, 10 am or 6:30 pm"
+            return "ERROR: time must be a clock time. Call set_reminder again with time like 10:00, 10 am or 6:30 pm."
         weekday = None
         if repeat == "weekly":
             weekday = next((i for i, d in enumerate(DAYS) if d in day_text.lower()), at.weekday())
@@ -164,7 +164,8 @@ def register_reminder_tools(reg: ToolRegistry, reminders: Reminders) -> None:
         elif repeat == "weekdays" and at.weekday() >= 5:
             at = next_time({"time": f"{at:%H:%M}", "repeat": repeat}, at - timedelta(minutes=1))
         if at <= now:
-            return "ERROR: that time has already passed; give a later time or a day"
+            return ("ERROR: that time has already passed. Call set_reminder again with a later time or a day, or "
+                    "ask the user when.")
         to = targets_from(args.get("to")) or DEFAULT_TO
         r = reminders.add(text, at, repeat, to, weekday)
         where = " and ".join({"android": "your phone", "hud": "the HUD", "windows": "the laptop",
@@ -184,9 +185,9 @@ def register_reminder_tools(reg: ToolRegistry, reminders: Reminders) -> None:
         if gone:
             return "Cancelled the reminder" + ("s" if len(gone) > 1 else "") + ": " + \
                 "; ".join(f"{r['text']} ({describe(r)})" for r in gone) + "."
-        listed = "; ".join(r["text"] for r in reminders.all())
+        listed = "; ".join(options(str(args.get("match") or ""), [r["text"] for r in reminders.all()]).split(", "))
         return (f"ERROR: no reminder matches that. Set: {listed}. Call cancel_reminder with a few words of one."
-                if listed else "ERROR: no reminders are set, so there is nothing to cancel.")
+                if listed else "ERROR: no reminders are set, so there is nothing to cancel. Tell the user so.")
 
     def known_text(args: dict) -> dict | None:  # "the acrylic reminder" -> the reminder it clearly means
         hit = best_name(str(args.get("match", "")), [r["text"] for r in reminders.all()])

@@ -66,13 +66,14 @@ def register_notify_tool(reg: ToolRegistry, notifier: Notifier) -> None:
     async def notify(args: dict, ctx: ToolCtx) -> str:
         text = str(args.get("text") or "").strip()
         if not text:
-            return "ERROR: text is empty"
+            return "ERROR: text is empty. Call send_notification again with the text to show."
         targets = targets_from(args.get("to")) or ["windows", "hud"]
         done = await notifier.send(str(args.get("title") or "JARVIS"), text, targets, origin="jarvis",
                                    request_id=ctx.request_id)
         failed = {t: r for t, r in done.items() if r != "ok"}
         if failed and len(failed) == len(done):
-            return "ERROR: not shown: " + "; ".join(f"{t}: {r}" for t, r in failed.items())
+            return ("ERROR: not shown: " + "; ".join(f"{t}: {r}" for t, r in failed.items())
+                    + ". Tell the user it couldn't be shown; don't call it again.")
         return "Notified on " + ", ".join(t for t, r in done.items() if r == "ok") + (
             f" (not on {', '.join(failed)}: {'; '.join(failed.values())})" if failed else "") + "."
 

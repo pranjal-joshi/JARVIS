@@ -106,6 +106,14 @@ async def trace_session(session: str, request: Request, _: Source = Depends(requ
     return request.app.state.traces.session(session)
 
 
+@router.get("/harness/stats")
+async def harness_stats(request: Request, _: Source = Depends(require_approver)) -> dict:
+    """How often each guard, nudge, fast path, selector rule, resolver and recovery fired, and when it last
+    did (audit/harness.py): for pruning checks that never fire."""
+    stats = getattr(request.app.state.agent, "stats", None)
+    return stats.snapshot() if stats else {"counters": [], "never_hit": []}
+
+
 @router.get("/tools/rank")
 async def tools_rank(say: str, request: Request, before: str = "",
                      _: Source = Depends(require_approver)) -> dict:

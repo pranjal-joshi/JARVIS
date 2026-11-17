@@ -119,7 +119,7 @@ def test_errors_say_what_to_do_next():
         return asyncio.run(a._run_tool(call(tool, **args)["tool_calls"][0], Source.WEB, "r", EventBus()))
 
     assert "switched off" in result("phone_tap", x="1")
-    assert "Did you mean: send_text" in result("send_txt", to="Mum")
+    assert "Call one of these instead: send_text" in result("send_txt", to="Mum")
     missing = result("send_text", to="Mum")
     assert missing.startswith("ERROR: send_text needs text.") and '{"to": "...", "text": "..."}' in missing
     assert ran == []  # hidden, unknown and incomplete calls never run

@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS turns (
 );
 CREATE INDEX IF NOT EXISTS turns_session ON turns (session, ts);
 CREATE INDEX IF NOT EXISTS turns_ts ON turns (ts);
+CREATE TABLE IF NOT EXISTS harness_hits (  -- audit/harness.py: names and counts only, no message text
+    name        TEXT PRIMARY KEY,
+    count       INTEGER NOT NULL,
+    last        DOUBLE PRECISION NOT NULL
+);
 """
 
 
@@ -65,6 +70,18 @@ class TraceStore:
         for r in rows:
             r["data"] = json.loads(r["data"])
         return rows
+
+    def add_hits(self, counts: dict[str, int], now: float) -> None:
+        """Harness counters (audit/harness.py). Kept whatever TRACE_DAYS says: they hold no personal text."""
+        with self._lock, self._conn:
+            self._conn.executemany(
+                "INSERT INTO harness_hits VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET "
+                "count = count + excluded.count, last = excluded.last", [(k, n, now) for k, n in counts.items()])
+
+    def hit_counts(self) -> dict[str, dict]:
+        with self._lock:
+            cur = self._conn.execute("SELECT name, count, last FROM harness_hits")
+            return {r[0]: {"count": r[1], "last": r[2]} for r in cur.fetchall()}
 
     def prune(self) -> int:
         if self.days <= 0:

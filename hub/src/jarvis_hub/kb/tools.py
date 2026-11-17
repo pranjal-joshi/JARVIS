@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.events.bus import Event
-from jarvis_hub.guard.validate import best_name, resolver
+from jarvis_hub.guard.validate import actionable, best_name, live_enum, resolver
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.mcp.registry import Tool, ToolCtx, ToolRegistry
@@ -127,7 +127,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
     async def kb_remember(args: dict, ctx: ToolCtx) -> str:
         fact = dated(str(args.get("fact", "")).strip())
         if not fact:
-            return "ERROR: empty fact"
+            return "ERROR: fact is empty. Call remember again with the fact in the user's own words."
         topic = memory_topic(str(args.get("topic") or ""), fact)
         stale = ""
         if claim := str(args.get("corrects") or ""):  # a correction: the memory behind the wrong claim goes
@@ -157,11 +157,11 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         wrong, fact = str(args.get("wrong", "")).strip(), str(args.get("fact", "")).strip()
         fact = dated(_NOT_WRONG.sub(lambda m: m[1] or ".", fact)) if fact else fact  # only the right part
         if not fact:
-            return "ERROR: correct_memory needs the corrected fact, as a full sentence."
+            return "ERROR: fact is missing. Call correct_memory again with the corrected fact, as a full sentence."
         try:
             found = graph.memory_items(wrong)
         except ValueError as e:
-            return f"ERROR: {e}"
+            return actionable(f"ERROR: {e}")
         if not found:
             return (f"ERROR: no memory contains {wrong!r}. Call search_notes to find the exact words, then call "
                     "correct_memory with a few of them. To save a new fact instead, call remember.")
@@ -184,7 +184,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
     async def kb_journal(args: dict, ctx: ToolCtx) -> str:
         text = str(args.get("text", "")).strip()
         if not text:
-            return "ERROR: empty text"
+            return "ERROR: text is empty. Call add_to_journal again with what to note, in the user's words."
         title = graph.append_journal(f"{text} #jarvis")
         await index.sync()
         return f'Noted "{text}" in journal {title}.'
@@ -192,7 +192,8 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
     async def kb_append_to_page(args: dict, ctx: ToolCtx) -> str:
         page, text = str(args.get("page", "")), str(args.get("text", ""))
         if page.strip().lower().startswith("skills/"):  # a skill runs as soon as it changes: only its tools write it
-            return "ERROR: skill pages are changed with update_skill (add_steps for a new step), not add_to_page"
+            return ("ERROR: skill pages can't be changed with add_to_page. Call update_skill instead (add_steps for a "
+                    "new step).")
         made = ""
         if page.lower().startswith("jarvis/"):  # JARVIS's memory: one of its fixed pages, never a new one
             page = graph.write_jarvis_page(memory_topic(page, text), text)
@@ -216,7 +217,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         match, to = str(args.get("match", "")).strip(), str(args.get("to_page", "")).strip()
         where = str(args.get("from_page") or "").strip()
         if len(match) < 3 or not to:
-            return "ERROR: move_note needs match (a few words from the notes) and to_page."
+            return "ERROR: match or to_page is missing. Call move_note again with match (a few words from the notes) and to_page."
         names = [p.name for p in graph.pages() if not p.is_journal]
         to = to if to in names else best_name(to, names) or to  # "jarvis project" -> "Jarvis Project"
         if where and graph.page(where) is None:
@@ -261,6 +262,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
         hit = best_name(wanted, [p.name for p in graph.pages()])
         return {**args, "page": hit} if hit else None
     resolver("kb_read_page", page_name)
+    live_enum("kb_read_page", "page", lambda: [p.name for p in graph.pages()])  # only offered with 30 or fewer
 
     def undated(args: dict) -> dict | None:  # the journal entry is dated already: drop today's date copied in
         text = str(args.get("text", ""))
@@ -303,7 +305,7 @@ def register_kb_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBIndex) -
 
 def missing_page(graph: ObsidianVault, name: str, tool: str) -> str:
     """An error a small model can act on: the closest page names, or where to look instead."""
-    near = graph.similar_pages(name)
+    near = graph.similar_pages(name, n=5)
     if near:
         return (f"ERROR: no page named {name!r}. Closest: {', '.join(near)}. "
                 f"Call {tool} again with one of those names.")

@@ -148,7 +148,7 @@ def test_skills_are_made_changed_run_and_deleted_by_tools(tmp_path):
         assert await call("run_skill", name="hello world") == "Hello world, sir. It is 09:00."
 
         # unknown names list the skills there are
-        assert "Skills: Hello world" in await call("run_skill", name="goodbye moon")
+        assert "Closest skills: Hello world" in await call("run_skill", name="goodbye moon")
 
         assert "Deleted" in await call("delete_skill", name="hello world") and eng.skills() == []
         assert "no skills yet" in await call("delete_skill", name="hello world")

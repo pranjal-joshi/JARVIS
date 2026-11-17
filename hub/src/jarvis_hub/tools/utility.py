@@ -26,7 +26,7 @@ import httpx
 from jarvis_hub.approval.gate import Risk
 from jarvis_hub.config import Source
 from jarvis_hub.events.bus import Event
-from jarvis_hub.guard.validate import best_name, resolver
+from jarvis_hub.guard.validate import actionable, best_name, live_enum, options, resolver
 from jarvis_hub.kb.graph import ObsidianVault
 from jarvis_hub.kb.index import KBIndex
 from jarvis_hub.kb.tools import missing_page
@@ -228,7 +228,8 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         try:
             now = datetime.now(ZoneInfo(tz)) if tz else datetime.now().astimezone()
         except (ZoneInfoNotFoundError, ValueError):
-            return f"ERROR: unknown time zone {tz!r}; use a city or an IANA name like Europe/London"
+            return (f"ERROR: unknown time zone {tz!r}. Call get_time again with a city or an IANA name like "
+                    "Europe/London, or with no timezone for here.")
         return f"{now:%A %d %B %Y, %H:%M} ({tz or now.tzname()})"
 
     async def calculate(args: dict, ctx: ToolCtx) -> str:
@@ -236,7 +237,8 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         try:
             value = safe_eval(expr)
         except (ValueError, SyntaxError, ZeroDivisionError, OverflowError, TypeError) as e:
-            return f"ERROR: can't calculate that ({e})"
+            return (f"ERROR: can't calculate that ({e}). Call calculate again with plain arithmetic "
+                    "(numbers, + - * / ** and brackets), or answer without it.")
         if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
             value = int(value)
         # returned as the reply (final_answer): the small model misreports numbers it is handed
@@ -245,7 +247,7 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
     async def weather(args: dict, ctx: ToolCtx) -> str:
         place = str(args.get("place", "")).strip()[:100]
         if not place:
-            return "ERROR: say which place"
+            return "ERROR: place is missing. Ask the user which town or city, then call weather with it."
         key = place.lower()
         if (hit := weather_cache.get(key)) and time.time() - hit[0] < WEATHER_TTL_S:
             show_widget(ctx.bus, ctx.request_id, hit[2])
@@ -263,7 +265,8 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
                                 params={"name": place, "count": 1})
                 hits = g.json().get("results") or []
                 if not hits:
-                    return f"ERROR: couldn't find {place!r}", {}
+                    return (f"ERROR: couldn't find a place called {place!r}. Ask the user for the nearest town or city, "
+                            "then call weather with it."), {}
                 h = hits[0]
                 f = await c.get("https://api.open-meteo.com/v1/forecast", params={
                     "latitude": h["latitude"], "longitude": h["longitude"], "timezone": "auto",
@@ -271,7 +274,8 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
                     "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
                     "forecast_days": 3})
         except httpx.HTTPError as e:
-            return f"ERROR: weather service unreachable ({type(e).__name__})", {}
+            return (f"ERROR: the weather service is unreachable ({type(e).__name__}). Tell the user the weather "
+                    "can't be checked right now; don't call it again."), {}
         d = f.json()
         cur, day = d.get("current") or {}, d.get("daily") or {}
         # Spoken sentences with relative day names: a small model mislabels raw ISO dates ("tomorrow"
@@ -297,20 +301,22 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         url = str(args.get("url", "")).strip()
         u = urlparse(url)
         if u.scheme not in ("http", "https") or not u.hostname:
-            return "ERROR: only http(s) URLs"
+            return "ERROR: only http(s) URLs can be read. Call fetch_page with a link that starts with https://."
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5), follow_redirects=False,
                                          headers={"User-Agent": "JARVIS-hub/0.1"}) as c:
                 for _ in range(4):  # follow redirects by hand so every hop is checked
                     host = urlparse(url).hostname or ""
                     if not await asyncio.to_thread(_public_host, host):
-                        return "ERROR: that address is private or unknown; only public web pages"
+                        return ("ERROR: that address is private or unknown; only public web pages can be read. "
+                                "Tell the user so; don't call it again.")
                     async with c.stream("GET", url) as r:
                         if r.is_redirect:
                             url = str(r.url.join(r.headers.get("location", "")))
                             continue
                         if r.status_code != 200:
-                            return f"ERROR: HTTP {r.status_code}"
+                            return (f"ERROR: the page answered HTTP {r.status_code}. Tell the user it couldn't be read; "
+                                    "try web_search instead if they want the topic.")
                         body = b""
                         async for chunk in r.aiter_bytes():
                             body += chunk
@@ -320,13 +326,14 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
                         text = body.decode(r.encoding or "utf-8", "replace")
                         break
                 else:
-                    return "ERROR: too many redirects"
+                    return "ERROR: the page redirected too many times. Tell the user it couldn't be read; don't call it again."
         except httpx.HTTPError as e:
-            return f"ERROR: couldn't fetch ({type(e).__name__})"
+            return (f"ERROR: couldn't fetch the page ({type(e).__name__}). Tell the user it couldn't be read; "
+                    "try web_search instead if they want the topic.")
         if "html" in kind:
             text = _html_text(text)
         elif not kind.startswith(("text/", "application/json")):
-            return f"ERROR: not a text page ({kind})"
+            return f"ERROR: that link is not a text page ({kind}). Tell the user it can't be read as text."
         return UNTRUSTED + f"URL: {url}\n" + text[:5000]
 
     async def set_timer(args: dict, ctx: ToolCtx) -> str:
@@ -335,7 +342,8 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         if at := str(args.get("at") or "").strip():  # a clock time: the seconds are worked out here
             due = when(at, now=now)
             if due is None:
-                return "ERROR: 'at' must be a clock time like 10:00, 10 am or 6:30 pm (with today or tomorrow)"
+                return ("ERROR: 'at' must be a clock time. Call set_timer again with at like 10:00, 10 am or "
+                        "6:30 pm (with today or tomorrow), or with minutes.")
             seconds = (due - now).total_seconds()
             if seconds > 24 * 3600:
                 return ("ERROR: that is more than 24 hours away. Call set_reminder with the time and day instead; "
@@ -344,9 +352,11 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
             try:
                 seconds = float(args.get("minutes", 0)) * 60 + float(args.get("seconds", 0))
             except (TypeError, ValueError):
-                return "ERROR: give minutes and/or seconds as numbers, or 'at' a clock time"
+                return ("ERROR: no time was given. Call set_timer again with minutes and/or seconds as numbers, "
+                        "or 'at' a clock time.")
         if not 1 <= seconds <= 24 * 3600:
-            return "ERROR: timers run from 1 second to 24 hours"
+            return ("ERROR: timers run from 1 second to 24 hours. Call set_timer again within that, or "
+                    "set_reminder for a later day.")
         t = timers.start(seconds, label, ctx)
         show_widget(ctx.bus, ctx.request_id, {"widget": "countdown", "title": label, "due": t["due"], "seconds": seconds})
         due = datetime.fromtimestamp(t["due"])
@@ -365,9 +375,9 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         t = timers.cancel(str(args.get("label", "")))
         if t:
             return f"Cancelled '{t['label']}'."
-        running = ", ".join(repr(t["label"]) for t in timers.active.values())
+        running = options(str(args.get("label") or ""), [repr(t["label"]) for t in timers.active.values()])
         return (f"ERROR: no timer matches that. Running: {running}. Call cancel_timer with one of those labels."
-                if running else "ERROR: no timers are running, so there is nothing to cancel.")
+                if running else "ERROR: no timers are running, so there is nothing to cancel. Tell the user so.")
 
     async def kb_forget(args: dict, ctx: ToolCtx) -> str:
         name = str(args.get("page", ""))
@@ -378,7 +388,7 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         try:
             moved = graph.trash_jarvis_page(name)
         except ValueError as e:
-            return f"ERROR: {e}"
+            return actionable(f"ERROR: {e}")
         await index.sync()
         return f"Forgot [[{moved}]] (moved to the graph's .trash folder)."
 
@@ -395,7 +405,7 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         try:
             gone = graph.trash_page(name)
         except ValueError as e:
-            return f"ERROR: {e}"
+            return actionable(f"ERROR: {e}")
         await index.sync()
         return f"Deleted [[{gone}]] (moved to .trash)."
 
@@ -408,7 +418,7 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
             else:  # no page, or a guessed one: look through the agent's own memories
                 changed = graph.delete_memory_items(match)
         except ValueError as e:
-            return f"ERROR: {e}"
+            return actionable(f"ERROR: {e}")
         if not changed:
             where = f"on {page!r}" if page and graph.page(page) else "in your memories"
             return (f"ERROR: no item {where} contains {match!r}. Call search_notes to find the exact words, "
@@ -447,6 +457,7 @@ def register_utility_tools(reg: ToolRegistry, graph: ObsidianVault, index: KBInd
         hit = best_name(str(args.get("label", "")), [t["label"] for t in timers.active.values()])
         return {**args, "label": hit} if hit else None
     resolver("cancel_timer", running_label)
+    live_enum("cancel_timer", "label", lambda: [t["label"] for t in timers.active.values()])
     reg.add(Tool("kb_forget", "builtin",
                  "Forget a whole page of your memories. Use for: 'forget your preferences page'. Needs approval.",
                  _obj({"page": {"type": "string", "description": "e.g. jarvis/preferences"}}, ["page"]),

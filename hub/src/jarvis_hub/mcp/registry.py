@@ -16,6 +16,7 @@ from mcp import Client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 
 from jarvis_hub.approval.gate import Risk
+from jarvis_hub.guard.validate import actionable
 from jarvis_hub.tools.cards import card
 from jarvis_hub.tools.names import internal_name, model_name
 
@@ -103,7 +104,7 @@ def _text(result) -> str:
     parts = [getattr(b, "text", None) or f"[{getattr(b, 'type', 'content')}]"
              for b in (result.content or [])]
     out = "\n".join(parts) or str(getattr(result, "structured_content", "") or "")
-    return ("ERROR: " + out) if getattr(result, "is_error", False) else out
+    return actionable("ERROR: " + out) if getattr(result, "is_error", False) else out
 
 
 class ToolRegistry:

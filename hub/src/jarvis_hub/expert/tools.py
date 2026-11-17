@@ -33,16 +33,17 @@ def register_expert_tool(reg: ToolRegistry, s: Settings) -> bool:
         async def ask(args: dict, ctx: ToolCtx) -> str:
             question = str(args.get("question", "")).strip()
             if not question:
-                return "ERROR: question is empty"
+                return "ERROR: question is empty. Call it again with the user's question."
             body = {"question": question, "context": str(args.get("context") or ""), "engine": engine}
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     r = await client.post(url, json=body, headers={"Authorization": f"Bearer {token}"})
             except httpx.HTTPError as e:
-                return f"ERROR: the expert bridge is not reachable ({type(e).__name__}). Is it running on the host?"
+                return (f"ERROR: the expert bridge is not reachable ({type(e).__name__}). Tell the user to start it on the "
+                        "host; don't retry.")
             data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
             if r.status_code != 200:
-                return f"ERROR: {engine} unavailable: {data.get('detail') or r.status_code}"
+                return f"ERROR: {engine} is unavailable: {data.get('detail') or r.status_code}. Tell the user why; don't retry."
             # returned to the user as-is (final_answer): the small local model paraphrases it poorly
             return (str(data.get("answer", "")).strip()
                     + f"\n\n— {data.get('engine')} · {data.get('model')} ({data.get('seconds')} s)")

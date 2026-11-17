@@ -26,7 +26,7 @@ def register_web_search(reg: ToolRegistry, s: Settings) -> bool:
     async def web_search(args: dict, ctx: ToolCtx) -> str:
         query = str(args.get("query", "")).strip()[:400]
         if not query:
-            return "ERROR: query is empty"
+            return "ERROR: query is empty. Call web_search again with what to look for."
         limit = max(1, min(int(args.get("limit") or 5), 8))
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5)) as client:
@@ -35,15 +35,15 @@ def register_web_search(reg: ToolRegistry, s: Settings) -> bool:
                                                  "contents": {"highlights": {"maxCharacters": 400}}},
                                       headers={"x-api-key": key})
         except httpx.HTTPError as e:
-            return f"ERROR: web search unreachable ({type(e).__name__})"
+            return f"ERROR: web search is unreachable ({type(e).__name__}). Tell the user it can't search right now; don't retry."
         if r.status_code == 402:
-            return "ERROR: web search credits are used up"
+            return "ERROR: web search credits are used up. Tell the user web search is out of credits; don't retry."
         if r.status_code == 401:
-            return "ERROR: the web search key was refused; check EXA_API_KEY"
+            return "ERROR: the web search key was refused. Tell the user to check EXA_API_KEY; don't retry."
         if r.status_code == 429:
-            return "ERROR: web search is rate limited; try again in a minute"
+            return "ERROR: web search is rate limited. Tell the user to try again in a minute; don't retry now."
         if r.status_code != 200:
-            return f"ERROR: web search failed (HTTP {r.status_code})"
+            return f"ERROR: web search failed (HTTP {r.status_code}). Tell the user it failed; don't retry."
         hits = r.json().get("results") or []
         if not hits:
             return "No results."
